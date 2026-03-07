@@ -5,18 +5,17 @@
 ### 1.1 Project Scaffold
 - [x] 1.1.1 Create repo, Cargo.toml, config files, submodules
 - [x] 1.1.2 Write CLAUDE.md, TODO.md, docs/DESIGN.md
-- [ ] 1.1.3 Implement error types, lib.rs module structure
-- [ ] 1.1.4 Get project compiling with `cargo check`
+- [x] 1.1.3 Error types, lib.rs module structure
+- [x] 1.1.4 Project compiles with `cargo check`
 
 ### 1.2 Config Engine
-- [ ] 1.2.1 Config schema (loader.rs) — pipeline, source, sink, transforms, health, metrics, scaling
-- [ ] 1.2.2 Config validation (validate.rs)
-- [ ] 1.2.3 Env var cascade (figment + flat overrides, same pattern as transform-vector)
-- [ ] 1.2.4 Config example YAML
-- [ ] 1.2.5 Unit tests for config loading and validation
+- [x] 1.2.1 Config schema (loader.rs) — pipeline, source, sink, transforms, health, metrics, scaling
+- [x] 1.2.2 Config validation (validate.rs) — 9 unit tests
+- [x] 1.2.3 Env var cascade (figment + flat overrides, same pattern as transform-vector)
+- [x] 1.2.4 Config example YAML
 
 ### 1.3 VRL Engine
-- [ ] 1.3.1 VRL program loading — read transform files, concatenate VRL source
+- [x] 1.3.1 VRL program loading — read .vrl files from dir or file list, 6 unit tests
 - [ ] 1.3.2 VRL compilation — parse + compile VRL programs at startup
 - [ ] 1.3.3 VRL execution — run compiled program against a single VRL Value
 - [ ] 1.3.4 Batch execution — process a batch of events through the VRL pipeline
@@ -44,14 +43,14 @@
 - [ ] 1.6.3 Scaling pressure metric — KEDA-compatible weighted signal
 
 ### 1.7 CLI & Main
-- [ ] 1.7.1 DfeApp implementation — standard CLI pattern (run, version, config-check)
-- [ ] 1.7.2 Emit commands — emit-dockerfile, emit-chart, emit-compose, emit-contract
+- [x] 1.7.1 DfeApp implementation — standard CLI pattern (run, version, config-check)
+- [x] 1.7.2 Emit commands — emit-dockerfile, emit-chart, emit-compose, emit-contract
 - [ ] 1.7.3 Main orchestrator — startup, lifecycle, signal handling
 
 ## Phase 2: Deployment
 
 ### 2.1 Docker
-- [ ] 2.1.1 DeploymentContract — container image definition (no Vector binary needed)
+- [x] 2.1.1 DeploymentContract — container image definition (no Vector binary needed)
 - [ ] 2.1.2 Dockerfile generation via emit-dockerfile
 
 ### 2.2 Helm Chart
@@ -67,10 +66,11 @@
 ## Phase 3: Testing & Hardening
 
 ### 3.1 Unit Tests
-- [ ] 3.1.1 Config loading and validation
-- [ ] 3.1.2 VRL compilation and execution
-- [ ] 3.1.3 Format detection and serialisation
-- [ ] 3.1.4 Offset tracking logic
+- [x] 3.1.1 Config loading and validation
+- [x] 3.1.2 VRL file loading
+- [ ] 3.1.3 VRL compilation and execution
+- [ ] 3.1.4 Format detection and serialisation
+- [ ] 3.1.5 Offset tracking logic
 
 ### 3.2 Integration Tests
 - [ ] 3.2.1 VRL transforms against fixture files
