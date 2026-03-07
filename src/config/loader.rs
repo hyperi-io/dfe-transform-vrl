@@ -20,11 +20,11 @@ use tracing::debug;
 use crate::Result;
 
 /// SASL authentication for Kafka.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SaslConfig {
     pub enabled: bool,
-    /// SASL mechanism: plain, scram_sha_256, scram_sha_512.
+    /// SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`.
     pub mechanism: String,
     pub username: String,
     pub password: String,
@@ -42,7 +42,7 @@ impl Default for SaslConfig {
 }
 
 /// TLS configuration for Kafka.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TlsConfig {
     pub enabled: bool,
@@ -67,10 +67,10 @@ pub struct Config {
 }
 
 /// Pipeline identity and processing settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PipelineConfig {
-    /// Pipeline name (used in metrics labels, Kafka group_id, logging).
+    /// Pipeline name (used in metrics labels, Kafka `group_id`, logging).
     pub name: String,
     /// Events per transform batch.
     pub batch_size: usize,
@@ -89,7 +89,7 @@ impl Default for PipelineConfig {
 }
 
 /// Kafka source configuration (wrapper-controlled consumer).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourceConfig {
     pub brokers: Vec<String>,
@@ -127,12 +127,12 @@ impl Default for SourceConfig {
 }
 
 /// Kafka sink configuration (wrapper-controlled producer).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SinkConfig {
     pub brokers: Vec<String>,
     pub topic: String,
-    /// Event field path for Kafka partition key (e.g., ".org_id").
+    /// Event field path for Kafka partition key (e.g., ".`org_id`").
     pub key_field: String,
     /// Compression: none, gzip, lz4, snappy, zstd.
     pub compression: String,
@@ -163,7 +163,7 @@ impl Default for SinkConfig {
 }
 
 /// VRL transform file configuration.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransformConfig {
     /// Directory to load all .vrl transform files from (sorted by filename).
@@ -173,7 +173,7 @@ pub struct TransformConfig {
 }
 
 /// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HealthConfig {
     pub address: String,
@@ -188,7 +188,7 @@ impl Default for HealthConfig {
 }
 
 /// Metrics endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub address: String,
@@ -203,7 +203,7 @@ impl Default for MetricsConfig {
 }
 
 /// Logging configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfig {
     pub level: String,
@@ -344,7 +344,7 @@ impl Config {
     ///   6. Hard-coded defaults
     pub fn load(config_path: Option<&str>) -> Result<Self> {
         let _ = dotenvy::dotenv();
-        let mut config = Config::default();
+        let mut config = Self::default();
 
         if let Some(path) = config_path {
             if Path::new(path).exists() {

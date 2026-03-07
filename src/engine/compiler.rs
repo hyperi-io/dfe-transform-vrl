@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use tracing::{debug, info};
+use vrl::compiler::{CompilationResult, compile};
 
 use crate::Result;
 use crate::config::TransformConfig;
@@ -35,7 +36,7 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
 
         let mut entries: Vec<_> = std::fs::read_dir(dir_path)
             .map_err(|e| crate::Error::Config(format!("failed to read transforms dir: {e}")))?
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "vrl"))
             .collect();
 
@@ -83,7 +84,20 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
     Ok(combined)
 }
 
+/// Compile VRL source code into an executable program.
+///
+/// Uses the full VRL stdlib. The compiled `Program` is reused for every event —
+/// zero per-event compilation cost.
+pub fn compile_vrl(source: &str) -> Result<CompilationResult> {
+    let fns = vrl::stdlib::all();
+    compile(source, &fns).map_err(|diagnostics| {
+        let messages: Vec<String> = diagnostics.into_iter().map(|d| format!("{d:?}")).collect();
+        crate::Error::VrlCompile(messages.join("\n"))
+    })
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;
@@ -173,5 +187,28 @@ mod tests {
         let third_pos = source.find("THIRD").unwrap();
         assert!(first_pos < second_pos);
         assert!(second_pos < third_pos);
+    }
+
+    #[test]
+    fn test_compile_valid_vrl() {
+        let result = compile_vrl(".processed = true\n.timestamp = now()");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_compile_invalid_vrl() {
+        let result = compile_vrl("this is not valid VRL !!!{{{");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compile_with_stdlib_functions() {
+        let source = r#"
+            .parsed = parse_json!("{\"key\": \"value\"}")
+            .upper = upcase!("hello")
+            .ts = now()
+        "#;
+        let result = compile_vrl(source);
+        assert!(result.is_ok());
     }
 }

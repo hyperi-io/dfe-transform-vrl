@@ -16,36 +16,36 @@
 
 ### 1.3 VRL Engine
 - [x] 1.3.1 VRL program loading — read .vrl files from dir or file list, 6 unit tests
-- [ ] 1.3.2 VRL compilation — parse + compile VRL programs at startup
-- [ ] 1.3.3 VRL execution — run compiled program against a single VRL Value
-- [ ] 1.3.4 Batch execution — process a batch of events through the VRL pipeline
-- [ ] 1.3.5 Error handling — VRL runtime errors → DLQ or skip with metrics
-- [ ] 1.3.6 Unit tests for VRL compilation and execution
+- [x] 1.3.2 VRL compilation — parse + compile VRL programs at startup
+- [x] 1.3.3 VRL execution — run compiled program against a single VRL Value
+- [x] 1.3.4 Batch execution — process a batch of events through the VRL pipeline
+- [x] 1.3.5 Error handling — VRL runtime errors → DLQ or skip with metrics
+- [x] 1.3.6 Unit tests for VRL compilation and execution
 
 ### 1.4 Kafka Layer
-- [ ] 1.4.1 Consumer — rdkafka StreamConsumer, configurable buffer/fetch sizes
-- [ ] 1.4.2 Producer — rdkafka FutureProducer, delivery confirmation tracking
-- [ ] 1.4.3 Offset tracking — per-partition watermark, commit on delivery confirmation
-- [ ] 1.4.4 Format detection — auto-sense msgpack vs JSON on first message per partition
-- [ ] 1.4.5 Serialisation — msgpack↔Value and JSON↔Value conversion
-- [ ] 1.4.6 SASL/TLS configuration — same big-dial pattern as transform-vector
-- [ ] 1.4.7 librdkafka profile support — kafka_defaults module (central config, rustlib fallback)
+- [x] 1.4.1 Consumer — via rustlib KafkaTransport, configurable buffer/fetch sizes
+- [x] 1.4.2 Producer — via rustlib KafkaTransport, delivery confirmation tracking
+- [x] 1.4.3 Offset tracking — commit on delivery confirmation via rustlib commit()
+- [x] 1.4.4 Format detection — auto-sense msgpack vs JSON via rustlib PayloadFormat
+- [x] 1.4.5 Serialisation — msgpack↔Value and JSON↔Value conversion
+- [x] 1.4.6 SASL/TLS configuration — same big-dial pattern as transform-vector
+- [x] 1.4.7 librdkafka profile support — KafkaConfig with rustlib KafkaProfile
 
 ### 1.5 Pipeline
-- [ ] 1.5.1 Event loop — consume batch → deserialise → transform → serialise → produce
-- [ ] 1.5.2 Backpressure — bounded channels between consumer and transform, transform and producer
-- [ ] 1.5.3 Graceful shutdown — drain in-flight events, commit final offsets, SIGTERM handling
-- [ ] 1.5.4 Memory budget — configurable limits for consumer prefetch, transform batch, producer queue
+- [x] 1.5.1 Event loop — consume batch → deserialise → transform → serialise → produce
+- [x] 1.5.2 Backpressure — producer backpressure with yield + retry
+- [x] 1.5.3 Graceful shutdown — drain in-flight events, commit final offsets, SIGTERM handling
+- [x] 1.5.4 Memory budget — configurable consumer/producer buffer sizes via big-dial config
 
 ### 1.6 Health & Metrics
-- [ ] 1.6.1 Health server — /health/live, /health/ready HTTP endpoints
-- [ ] 1.6.2 Metrics server — Prometheus metrics (events processed, errors, latency, consumer lag)
-- [ ] 1.6.3 Scaling pressure metric — KEDA-compatible weighted signal
+- [x] 1.6.1 Health server — /health/live, /health/ready via rustlib HttpServer
+- [x] 1.6.2 Metrics server — Prometheus metrics via rustlib MetricsManager
+- [x] 1.6.3 Scaling pressure metric — KEDA-compatible weighted signal
 
 ### 1.7 CLI & Main
 - [x] 1.7.1 DfeApp implementation — standard CLI pattern (run, version, config-check)
 - [x] 1.7.2 Emit commands — emit-dockerfile, emit-chart, emit-compose, emit-contract
-- [ ] 1.7.3 Main orchestrator — startup, lifecycle, signal handling
+- [x] 1.7.3 Main orchestrator — startup, lifecycle, signal handling
 
 ## Phase 2: Deployment
 
@@ -68,8 +68,8 @@
 ### 3.1 Unit Tests
 - [x] 3.1.1 Config loading and validation
 - [x] 3.1.2 VRL file loading
-- [ ] 3.1.3 VRL compilation and execution
-- [ ] 3.1.4 Format detection and serialisation
+- [x] 3.1.3 VRL compilation and execution
+- [x] 3.1.4 Format detection and serialisation
 - [ ] 3.1.5 Offset tracking logic
 
 ### 3.2 Integration Tests

@@ -7,19 +7,19 @@
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! CLI entry point for dfe-transform-vrl.
-//!
-//! Uses hyperi-rustlib CLI module for standard arguments and subcommands.
-//! Implements the [`DfeApp`] trait for the standard DFE service lifecycle.
+
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
-use tracing::info;
+use hyperi_rustlib::metrics::MetricsManager;
+use tracing::{error, info};
 
 use dfe_transform_vrl::config::Config;
-use dfe_transform_vrl::deployment;
+use dfe_transform_vrl::engine::compiler;
+use dfe_transform_vrl::{deployment, health, metrics, pipeline};
 
-/// dfe-transform-vrl: Kafka-to-Kafka transform pipelines with embedded VRL engine.
 #[derive(Parser, Debug)]
 #[command(name = "dfe-transform-vrl")]
 #[command(version, about, long_about = None)]
@@ -31,35 +31,20 @@ struct App {
     command: Option<AppCommand>,
 }
 
-/// Application subcommands.
 #[derive(Subcommand, Clone, Debug)]
 enum AppCommand {
-    /// Start the service (default if no subcommand given).
     Run,
-
-    /// Print version information and exit.
     Version,
-
-    /// Validate configuration and exit.
     #[command(name = "config-check")]
     ConfigCheck,
-
-    /// Generate Dockerfile to stdout.
     #[command(name = "emit-dockerfile")]
     EmitDockerfile,
-
-    /// Generate Helm chart to the given directory.
     #[command(name = "emit-chart")]
     EmitChart {
-        /// Output directory for the chart.
         dir: String,
     },
-
-    /// Generate Docker Compose fragment to stdout.
     #[command(name = "emit-compose")]
     EmitCompose,
-
-    /// Print deployment contract as JSON to stdout.
     #[command(name = "emit-contract")]
     EmitContract,
 }
@@ -155,7 +140,6 @@ async fn main() {
     }
 }
 
-/// Main service loop.
 async fn run_transform_service(config: Config) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
@@ -163,12 +147,57 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
         "starting dfe-transform-vrl"
     );
 
-    // Lifecycle:
-    // 1. Load and compile VRL programs
-    // 2. Start health + metrics servers
-    // 3. Create Kafka consumer + producer
-    // 4. Run event loop (consume → transform → produce → commit)
-    // 5. Handle SIGTERM for graceful shutdown
+    // 1. Load and compile VRL programs (extract program before any .await)
+    let program = {
+        let vrl_source = compiler::load_vrl_source(&config.transforms)
+            .map_err(|e| anyhow::anyhow!("VRL source loading failed: {e}"))?;
+        let compilation = compiler::compile_vrl(&vrl_source)
+            .map_err(|e| anyhow::anyhow!("VRL compilation failed: {e}"))?;
+        Arc::new(compilation.program)
+    };
+    info!("VRL program compiled");
+
+    // 2. Shutdown coordination
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // 3. Start health server (rustlib http-server)
+    let ready_flag = health::start_health_server(&config.health.address, shutdown_rx.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
+
+    // 4. Start metrics server (rustlib MetricsManager)
+    let mut metrics_manager = MetricsManager::new("transform_vrl");
+    let transform_metrics = metrics::TransformMetrics::new(&metrics_manager);
+    metrics::start_metrics_server(&mut metrics_manager, &config.metrics.address)
+        .await
+        .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
+
+    // 5. Run pipeline (consume -> transform -> produce -> commit)
+    let pipeline_shutdown_rx = shutdown_rx.clone();
+    let pipeline_handle = tokio::spawn(async move {
+        pipeline::run(
+            &config,
+            program,
+            &transform_metrics,
+            ready_flag,
+            pipeline_shutdown_rx,
+        )
+        .await
+    });
+
+    // 6. Wait for SIGTERM/SIGINT
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|e| anyhow::anyhow!("signal handler error: {e}"))?;
+    info!("received shutdown signal");
+    let _ = shutdown_tx.send(true);
+
+    // 7. Wait for pipeline to drain
+    match pipeline_handle.await {
+        Ok(Ok(())) => info!("pipeline shutdown complete"),
+        Ok(Err(e)) => error!(error = %e, "pipeline shutdown with error"),
+        Err(e) => error!(error = %e, "pipeline task panicked"),
+    }
 
     info!("shutdown complete");
     Ok(())
