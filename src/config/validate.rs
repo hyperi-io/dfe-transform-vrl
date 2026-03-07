@@ -94,6 +94,7 @@ fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
