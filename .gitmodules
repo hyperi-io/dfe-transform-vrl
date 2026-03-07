@@ -1,0 +1,6 @@
+[submodule "hyperi-ai"]
+	path = hyperi-ai
+	url = https://github.com/hyperi-io/hyperi-ai.git
+[submodule "ci"]
+	path = ci
+	url = https://github.com/hyperi-io/ci.git

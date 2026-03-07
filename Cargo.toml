@@ -1,0 +1,114 @@
+# Project:   dfe-transform-vrl
+# File:      Cargo.toml
+# Purpose:   Rust project manifest
+# Language:  TOML
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+[package]
+name = "dfe-transform-vrl"
+version = "0.1.0"
+edition = "2024"
+authors = ["HyperI <dev@hyperi.com.au>"]
+description = "Embedded VRL transform engine — Kafka-to-Kafka with wrapper-controlled source/sink"
+license = "FSL-1.1-ALv2"
+repository = "https://github.com/hyperi-io/dfe-transform-vrl"
+rust-version = "1.88"
+exclude = [".claude/", ".github/", "hyperi-ai/", "ci/", "chart/", "docs/"]
+
+[lib]
+name = "dfe_transform_vrl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dfe-transform-vrl"
+path = "src/main.rs"
+
+# =============================================================================
+# Dependencies
+# =============================================================================
+
+[dependencies]
+# Async runtime
+tokio = { version = ">=1.48", features = ["full"] }
+
+# Shared library (CLI framework, deployment artefact generation, logging)
+# TODO: restore registry version before publishing:
+# hyperi-rustlib = { version = ">=1.14.0", registry = "hyperi", features = ["cli", "deployment", "logger"] }
+hyperi-rustlib = { path = "/projects/hyperi-rustlib", features = [
+    "cli",
+    "deployment",
+    "logger",
+] }
+
+# VRL — Vector Remap Language (embedded transform engine)
+vrl = ">=0.30"
+
+# Kafka — wrapper-controlled consumer/producer
+rdkafka = { version = "0.39", features = ["cmake-build", "tokio"] }
+
+# MessagePack serialisation
+rmp-serde = ">=1.3"
+
+# Configuration
+figment = { version = ">=0.10", features = ["env"] }
+clap = { version = ">=4.5", features = ["derive", "env"] }
+dotenvy = ">=0.15"
+
+# Serialisation
+serde = { version = ">=1.0", features = ["derive"] }
+serde_json = ">=1.0"
+serde_yaml_ng = ">=0.10"
+
+# Error handling
+thiserror = ">=2.0"
+anyhow = ">=1.0"
+
+# Logging and tracing
+tracing = ">=0.1"
+tracing-subscriber = { version = ">=0.3", features = ["env-filter", "json"] }
+
+# Metrics and HTTP
+prometheus = ">=0.14"
+hyper = { version = ">=1.8", features = ["server", "http1"] }
+hyper-util = { version = ">=0.1", features = ["tokio"] }
+http-body-util = ">=0.1"
+
+[dev-dependencies]
+tempfile = ">=3.10"
+tokio-test = ">=0.4"
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["kafka"] }
+
+# =============================================================================
+# Lints
+# =============================================================================
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "warn"
+unimplemented = "warn"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# =============================================================================
+# Build Profiles
+# =============================================================================
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
