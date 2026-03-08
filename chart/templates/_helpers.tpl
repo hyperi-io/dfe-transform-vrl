@@ -1,0 +1,72 @@
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "dfe-transform-vrl.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+Truncated at 63 chars because some K8s name fields are limited.
+*/}}
+{{- define "dfe-transform-vrl.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "dfe-transform-vrl.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels.
+*/}}
+{{- define "dfe-transform-vrl.labels" -}}
+helm.sh/chart: {{ include "dfe-transform-vrl.chart" . }}
+{{ include "dfe-transform-vrl.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Selector labels.
+*/}}
+{{- define "dfe-transform-vrl.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "dfe-transform-vrl.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Service account name.
+*/}}
+{{- define "dfe-transform-vrl.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "dfe-transform-vrl.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+kafka secret name — use existing or generate from fullname.
+*/}}
+{{- define "dfe-transform-vrl.kafkaSecretName" -}}
+{{- if .Values.kafka.existingSecret }}
+{{- .Values.kafka.existingSecret }}
+{{- else }}
+{{- printf "%s-kafka" (include "dfe-transform-vrl.fullname" .) }}
+{{- end }}
+{{- end }}

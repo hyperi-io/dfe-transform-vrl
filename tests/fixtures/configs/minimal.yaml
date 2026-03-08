@@ -1,0 +1,20 @@
+pipeline:
+  name: test-pipeline
+  batch_size: 100
+  batch_timeout_ms: 50
+
+source:
+  brokers:
+    - localhost:9092
+  topics:
+    - test-input
+  group_id: test-group
+  format: auto
+
+sink:
+  brokers:
+    - localhost:9092
+  topic: test-output
+
+transforms:
+  dir: /tmp/transforms
