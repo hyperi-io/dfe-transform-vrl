@@ -1,0 +1,7 @@
+dfe-transform-vrl deployed.
+
+Health:  http://{{ include "dfe-transform-vrl.fullname" . }}:9000/health/live
+Metrics: http://{{ include "dfe-transform-vrl.fullname" . }}:{{ .Values.service.port }}/metrics
+
+Config mounted at /etc/dfe/config.yaml from ConfigMap.
+VRL transform files at {{ .Values.config.transforms.dir }}.

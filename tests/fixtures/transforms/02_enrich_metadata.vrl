@@ -1,0 +1,4 @@
+# Add processing metadata
+.meta.processed = true
+.meta.pipeline = "test-pipeline"
+.meta.version = 1

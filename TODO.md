@@ -51,12 +51,12 @@
 
 ### 2.1 Docker
 - [x] 2.1.1 DeploymentContract — container image definition (no Vector binary needed)
-- [ ] 2.1.2 Dockerfile generation via emit-dockerfile
+- [x] 2.1.2 Dockerfile generation via emit-dockerfile
 
 ### 2.2 Helm Chart
-- [ ] 2.2.1 Chart generation via emit-chart (Deployment, not StatefulSet)
-- [ ] 2.2.2 KEDA ScaledObject for Kafka consumer lag autoscaling
-- [ ] 2.2.3 ConfigMap and Secret templates
+- [x] 2.2.1 Chart generation via emit-chart (Deployment, not StatefulSet)
+- [x] 2.2.2 KEDA ScaledObject for Kafka consumer lag autoscaling
+- [x] 2.2.3 ConfigMap and Secret templates
 
 ### 2.3 CI/CD
 - [ ] 2.3.1 GitHub Actions workflows (build, test, release)
@@ -70,11 +70,11 @@
 - [x] 3.1.2 VRL file loading
 - [x] 3.1.3 VRL compilation and execution
 - [x] 3.1.4 Format detection and serialisation
-- [ ] 3.1.5 Offset tracking logic
+- [x] 3.1.5 Offset tracking logic (delegated to rustlib KafkaTransport — no custom code to test)
 
 ### 3.2 Integration Tests
-- [ ] 3.2.1 VRL transforms against fixture files
-- [ ] 3.2.2 Config cascade (YAML + env vars)
+- [x] 3.2.1 VRL transforms against fixture files
+- [x] 3.2.2 Config cascade (YAML + env vars)
 
 ### 3.3 E2E Tests
 - [ ] 3.3.1 Kafka testcontainers — produce msgpack → transform → consume transformed

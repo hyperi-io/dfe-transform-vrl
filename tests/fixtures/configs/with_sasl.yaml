@@ -1,0 +1,39 @@
+pipeline:
+  name: prod-pipeline
+  batch_size: 5000
+
+source:
+  brokers:
+    - kafka-1.prod:9092
+    - kafka-2.prod:9092
+  topics:
+    - raw_events
+  group_id: dfe-transform-vrl-prod
+  format: msgpack
+  sasl:
+    enabled: true
+    mechanism: scram_sha_512
+  tls:
+    enabled: true
+
+sink:
+  brokers:
+    - kafka-1.prod:9092
+    - kafka-2.prod:9092
+  topic: enriched_events
+  compression: zstd
+  key_field: .org_id
+  sasl:
+    enabled: true
+    mechanism: scram_sha_512
+  tls:
+    enabled: true
+
+transforms:
+  dir: /etc/dfe/transforms
+
+health:
+  address: 0.0.0.0:9000
+
+metrics:
+  address: 0.0.0.0:9090

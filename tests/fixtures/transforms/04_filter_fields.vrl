@@ -1,0 +1,3 @@
+# Remove internal-only fields before sink
+del(.internal_id)
+del(.debug_info)

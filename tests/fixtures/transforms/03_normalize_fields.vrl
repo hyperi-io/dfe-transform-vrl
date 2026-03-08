@@ -1,0 +1,7 @@
+# Normalise field names and values
+if exists(.message) {
+    .message = strip_whitespace!(string!(.message))
+}
+if exists(.level) {
+    .level = downcase!(string!(.level))
+}
