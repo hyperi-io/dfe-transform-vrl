@@ -134,6 +134,13 @@ serde-compatible, so `rmp-serde` can deserialise msgpack directly to VRL Value.
 registry, same Helm compilation, same KEDA wiring. The only difference is the service
 name and the absence of Vector subprocess config.
 
+### No MSRV Pin (Build to Latest Stable)
+
+**Decision:** No `rust-version` in Cargo.toml. Build against latest stable Rust.
+**Rationale:** Pre-OSS internal project — pinning MSRV adds maintenance burden with no
+benefit when we control the build environment. Pin MSRV only when the project is
+open-sourced and needs to support external consumers on older toolchains.
+
 ### Health Endpoint Paths
 
 **Decision:** `/health/live` and `/health/ready` (matching dfe-engine contract).
@@ -164,6 +171,14 @@ The wasm project needs separate crates because it ships an SDK to external users
 has one consumer (the binary itself), no external API, and is ~2.1k lines. Splitting
 would add Cargo.toml overhead, workspace dependency management, and feature flag
 complexity with no benefit. Revisit if an external-facing VRL function SDK is added.
+
+### No MSRV Pinning (Build Against Latest Stable)
+
+**Decision:** No `rust-version` field in Cargo.toml. Build against latest stable Rust.
+**Rationale:** This is an internal project — not published to crates.io, no downstream
+consumers need MSRV guarantees. Pinning MSRV during active development adds friction
+(cargo resolver downgrades, CI matrix complexity) with no benefit. Pin MSRV only when
+the project is open-sourced or has external consumers that need stability guarantees.
 
 ### hyperi-rustlib First (No Bespoke Duplicates)
 
