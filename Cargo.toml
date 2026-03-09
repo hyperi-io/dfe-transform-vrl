@@ -14,7 +14,6 @@ authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Embedded VRL transform engine — Kafka-to-Kafka with wrapper-controlled source/sink"
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vrl"
-rust-version = "1.88"
 exclude = [***REMOVED*** ".github/", ***REMOVED*** "ci/", "chart/", "docs/"]
 
 [lib]
