@@ -30,8 +30,9 @@ negating the CPU and memory benefits of msgpack.
 │                   dfe-transform-vrl                      │
 │                                                          │
 │  ┌──────────┐   ┌───────────┐   ┌────────────────┐     │
-│  │  rdkafka  │   │    VRL    │   │    rdkafka      │     │
-│  │ Consumer  │──▶│  Engine   │──▶│   Producer      │     │
+│  │  Kafka    │   │    VRL    │   │    Kafka        │     │
+│  │ Transport │──▶│  Engine   │──▶│   Transport     │     │
+│  │ (rustlib) │   │           │   │   (rustlib)     │     │
 │  │          │   │           │   │                │     │
 │  │ msgpack  │   │  Value    │   │   msgpack      │     │
 │  │ or JSON  │   │  in/out   │   │   or JSON      │     │
@@ -66,7 +67,7 @@ Kafka partition message (raw bytes)
   │
   ├─ Serialise: rmp_serde::to_vec(&value) or serde_json::to_vec(&value)
   │
-  └─ rdkafka producer.send() → delivery future
+  └─ KafkaTransport::send() (rustlib) → delivery future
 ```
 
 ### Offset Commit Strategy (At-Least-Once)
@@ -160,6 +161,8 @@ Same big-dial pattern as `dfe-transform-vector`, minus Vector subprocess config:
 ```yaml
 pipeline:
   name: "my-pipeline"
+  batch_size: 1000                  # events per transform batch
+  batch_timeout_ms: 100             # max wait for full batch
 
 source:
   brokers: ["kafka:9092"]
@@ -176,10 +179,6 @@ sink:
   topic: "enriched_events"
   key_field: ".org_id"
   max_buffer_bytes: 67108864        # 64 MiB producer buffer
-
-pipeline:
-  batch_size: 1000                  # events per transform batch
-  batch_timeout_ms: 100             # max wait for full batch
 
 health:
   address: "0.0.0.0:9000"
