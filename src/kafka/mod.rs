@@ -135,3 +135,178 @@ fn apply_sasl_tls(
         kafka_config.ssl_skip_verify = tls.skip_verify;
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::config::{SaslConfig, SinkConfig, SourceConfig, TlsConfig};
+
+    fn default_source() -> SourceConfig {
+        SourceConfig {
+            brokers: vec!["broker-1:9092".into(), "broker-2:9092".into()],
+            topics: vec!["input-topic".into()],
+            group_id: "test-group".into(),
+            ..SourceConfig::default()
+        }
+    }
+
+    fn default_sink() -> SinkConfig {
+        SinkConfig {
+            brokers: vec!["broker-1:9092".into()],
+            topic: "output-topic".into(),
+            compression: "zstd".into(),
+            ..SinkConfig::default()
+        }
+    }
+
+    #[test]
+    fn test_build_consumer_config_basic() {
+        let source = default_source();
+        let config = build_consumer_config(&source);
+        assert_eq!(config.brokers, vec!["broker-1:9092", "broker-2:9092"]);
+        assert_eq!(config.group, "test-group");
+        assert_eq!(config.topics, vec!["input-topic"]);
+        assert_eq!(config.client_id, "dfe-transform-vrl-consumer");
+    }
+
+    #[test]
+    fn test_build_consumer_config_with_sasl() {
+        let mut source = default_source();
+        source.sasl = SaslConfig {
+            enabled: true,
+            mechanism: "scram_sha_512".into(),
+            username: "user".into(),
+            password: "pass".into(),
+        };
+        source.tls = TlsConfig {
+            enabled: true,
+            ..TlsConfig::default()
+        };
+        let config = build_consumer_config(&source);
+        assert_eq!(config.sasl_mechanism, Some("SCRAM-SHA-512".into()));
+        assert_eq!(config.sasl_username, Some("user".into()));
+        assert_eq!(config.sasl_password, Some("pass".into()));
+        assert_eq!(config.security_protocol, "sasl_ssl");
+    }
+
+    #[test]
+    fn test_build_consumer_config_sasl_without_tls() {
+        let mut source = default_source();
+        source.sasl = SaslConfig {
+            enabled: true,
+            mechanism: "plain".into(),
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let config = build_consumer_config(&source);
+        assert_eq!(config.sasl_mechanism, Some("PLAIN".into()));
+        assert_eq!(config.security_protocol, "sasl_plaintext");
+    }
+
+    #[test]
+    fn test_build_consumer_config_tls_only() {
+        let mut source = default_source();
+        source.tls = TlsConfig {
+            enabled: true,
+            ca_cert_file: Some("/ca.pem".into()),
+            cert_file: Some("/cert.pem".into()),
+            key_file: Some("/key.pem".into()),
+            skip_verify: true,
+        };
+        let config = build_consumer_config(&source);
+        assert_eq!(config.security_protocol, "ssl");
+        assert_eq!(config.ssl_ca_location, Some("/ca.pem".into()));
+        assert_eq!(config.ssl_certificate_location, Some("/cert.pem".into()));
+        assert_eq!(config.ssl_key_location, Some("/key.pem".into()));
+        assert!(config.ssl_skip_verify);
+    }
+
+    #[test]
+    fn test_build_consumer_config_librdkafka_overrides() {
+        let mut source = default_source();
+        source
+            .librdkafka_options
+            .insert("fetch.min.bytes".into(), "1024".into());
+        let config = build_consumer_config(&source);
+        assert_eq!(
+            config.librdkafka_overrides.get("fetch.min.bytes"),
+            Some(&"1024".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_producer_config_basic() {
+        let sink = default_sink();
+        let config = build_producer_config(&sink, "test-pipeline");
+        assert_eq!(config.brokers, vec!["broker-1:9092"]);
+        assert_eq!(config.topics, vec!["output-topic"]);
+        assert_eq!(config.client_id, "dfe-transform-vrl-producer-test-pipeline");
+        assert!(config.group.is_empty());
+    }
+
+    #[test]
+    fn test_build_producer_config_overrides() {
+        let sink = default_sink();
+        let config = build_producer_config(&sink, "p");
+        assert_eq!(
+            config.librdkafka_overrides.get("compression.type"),
+            Some(&"zstd".to_string())
+        );
+        assert_eq!(
+            config.librdkafka_overrides.get("message.timeout.ms"),
+            Some(&sink.message_timeout_ms.to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_producer_config_custom_librdkafka() {
+        let mut sink = default_sink();
+        sink.librdkafka_options
+            .insert("linger.ms".into(), "5".into());
+        let config = build_producer_config(&sink, "p");
+        assert_eq!(
+            config.librdkafka_overrides.get("linger.ms"),
+            Some(&"5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_format_json() {
+        assert_eq!(parse_format("json"), PayloadFormat::Json);
+    }
+
+    #[test]
+    fn test_parse_format_msgpack() {
+        assert_eq!(parse_format("msgpack"), PayloadFormat::MsgPack);
+    }
+
+    #[test]
+    fn test_parse_format_auto() {
+        assert_eq!(parse_format("auto"), PayloadFormat::Auto);
+    }
+
+    #[test]
+    fn test_parse_format_unknown_defaults_to_auto() {
+        assert_eq!(parse_format("avro"), PayloadFormat::Auto);
+        assert_eq!(parse_format(""), PayloadFormat::Auto);
+    }
+
+    #[test]
+    fn test_sasl_mechanism_mapping() {
+        let mut source = default_source();
+        source.sasl.enabled = true;
+
+        source.sasl.mechanism = "scram_sha_256".into();
+        let config = build_consumer_config(&source);
+        assert_eq!(config.sasl_mechanism, Some("SCRAM-SHA-256".into()));
+
+        source.sasl.mechanism = "scram_sha_512".into();
+        let config = build_consumer_config(&source);
+        assert_eq!(config.sasl_mechanism, Some("SCRAM-SHA-512".into()));
+
+        source.sasl.mechanism = "plain".into();
+        let config = build_consumer_config(&source);
+        assert_eq!(config.sasl_mechanism, Some("PLAIN".into()));
+    }
+}

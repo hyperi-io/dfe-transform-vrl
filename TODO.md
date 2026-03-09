@@ -84,6 +84,6 @@
 ## Phase 4: dfe-engine Integration
 
 ### 4.1 ServicePlugin
-- [ ] 4.1.1 Python ServicePlugin (ServiceDescriptor, Pydantic config model)
-- [ ] 4.1.2 HelmValuesCompiler integration
+- [x] 4.1.1 Python ServicePlugin (ServiceDescriptor, Pydantic config model)
+- [x] 4.1.2 HelmValuesCompiler integration
 - [ ] 4.1.3 dfe-core ApplicationSet and common values

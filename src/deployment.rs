@@ -96,3 +96,62 @@ pub fn contract() -> DeploymentContract {
         }),
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contract_identity() {
+        let c = contract();
+        assert_eq!(c.app_name, "dfe-transform-vrl");
+        assert_eq!(c.binary_name, "dfe-transform-vrl");
+        assert_eq!(c.env_prefix, "DFE_TRANSFORM");
+        assert_eq!(c.metric_prefix, "transform_vrl");
+    }
+
+    #[test]
+    fn test_contract_health_paths() {
+        let c = contract();
+        assert_eq!(c.health.liveness_path, "/health/live");
+        assert_eq!(c.health.readiness_path, "/health/ready");
+        assert_eq!(c.health.metrics_path, "/metrics");
+    }
+
+    #[test]
+    fn test_contract_ports() {
+        let c = contract();
+        assert_eq!(c.metrics_port, 9090);
+        assert_eq!(c.extra_ports.len(), 1);
+        assert_eq!(c.extra_ports[0].port, 9000);
+        assert_eq!(c.extra_ports[0].name, "health");
+    }
+
+    #[test]
+    fn test_contract_keda_enabled() {
+        let c = contract();
+        let keda = c.keda.as_ref().unwrap();
+        assert_eq!(keda.min_replicas, 1);
+        assert_eq!(keda.max_replicas, 10);
+        assert_eq!(keda.kafka_lag_threshold, 1000);
+        assert!(keda.cpu_enabled);
+    }
+
+    #[test]
+    fn test_contract_secrets() {
+        let c = contract();
+        assert_eq!(c.secrets.len(), 1);
+        assert_eq!(c.secrets[0].group_name, "kafka");
+        assert_eq!(c.secrets[0].env_vars.len(), 2);
+    }
+
+    #[test]
+    fn test_contract_default_config_present() {
+        let c = contract();
+        let cfg = c.default_config.unwrap();
+        assert!(cfg.get("pipeline").is_some());
+        assert!(cfg.get("source").is_some());
+        assert!(cfg.get("sink").is_some());
+    }
+}
