@@ -155,6 +155,16 @@ about independently, and crate-backed implementations get upstream bug fixes for
 - `deployment.rs` — Container/chart generation (`hyperi-rustlib` deployment)
 - `error.rs` — Unified error types (`thiserror`)
 
+### Flat Single-Crate Structure (No Workspace)
+
+**Decision:** Keep dfe-transform-vrl as a single crate, not a Cargo workspace.
+**Rationale:** Reviewed against dfe-transform-wasm's `crates/` workspace pattern.
+The wasm project needs separate crates because it ships an SDK to external users
+(host, sdk, wit, test-harness — each serves a different consumer). dfe-transform-vrl
+has one consumer (the binary itself), no external API, and is ~2.1k lines. Splitting
+would add Cargo.toml overhead, workspace dependency management, and feature flag
+complexity with no benefit. Revisit if an external-facing VRL function SDK is added.
+
 ### hyperi-rustlib First (No Bespoke Duplicates)
 
 **Decision:** Use hyperi-rustlib for everything it provides. No bespoke code that
