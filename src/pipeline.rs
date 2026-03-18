@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
@@ -64,6 +64,7 @@ pub async fn run(
         program,
         &config.sink.key_field,
         config.pipeline.batch_size,
+        config.pipeline.batch_timeout_ms,
         payload_format,
         transform_metrics,
         ready_flag,
@@ -83,11 +84,14 @@ pub async fn run_with_transport<T: Transport>(
     program: Arc<Program>,
     key_field: &str,
     batch_size: usize,
+    batch_timeout_ms: u64,
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
+    let batch_timeout = Duration::from_millis(batch_timeout_ms);
+
     ready_flag.store(true, Ordering::Release);
     info!("pipeline ready — entering event loop");
 
@@ -103,6 +107,7 @@ pub async fn run_with_transport<T: Transport>(
                 &program,
                 key_field,
                 batch_size,
+                batch_timeout,
                 payload_format,
                 transform_metrics,
             ) => {
@@ -122,6 +127,10 @@ pub async fn run_with_transport<T: Transport>(
 }
 
 /// Process a single batch: consume → transform → produce → commit.
+///
+/// Uses `batch_timeout` to bound how long we wait for a full batch. If the
+/// timeout fires before `batch_size` messages arrive, we process what we have.
+/// This prevents latency spikes at low volume.
 #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
 async fn process_batch<T: Transport>(
     consumer: &T,
@@ -129,13 +138,17 @@ async fn process_batch<T: Transport>(
     program: &Program,
     key_field: &str,
     batch_size: usize,
+    batch_timeout: Duration,
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
 ) -> crate::Result<()> {
-    let messages = consumer
-        .recv(batch_size)
-        .await
-        .map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?;
+    let messages = match tokio::time::timeout(batch_timeout, consumer.recv(batch_size)).await {
+        Ok(result) => result.map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?,
+        Err(_elapsed) => {
+            // Timeout — no messages arrived within the batch window
+            return Ok(());
+        }
+    };
 
     if messages.is_empty() {
         return Ok(());
@@ -174,6 +187,12 @@ async fn process_batch<T: Transport>(
 
         match run_vrl(program, &mut value) {
             Ok(_) => {}
+            Err(crate::Error::VrlAbort(ref reason)) => {
+                debug!(reason = %reason, "event dropped by VRL abort");
+                transform_metrics.events_filtered.increment(1);
+                commit_tokens.push(msg.token.clone());
+                continue;
+            }
             Err(e) => {
                 warn!(error = %e, "VRL transform error, skipping event");
                 failed_count += 1;
@@ -260,19 +279,26 @@ fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8
 }
 
 /// Extract a key from the event for Kafka partition routing.
+///
+/// Supports dot-separated paths (e.g., `.org_id`, `.host.name`, `.meta.tenant_id`).
+/// Walks the nested object tree following each path segment.
 fn extract_key(value: &Value, key_field: &str) -> Option<String> {
     if key_field.is_empty() {
         return None;
     }
 
-    let field = key_field.strip_prefix('.').unwrap_or(key_field);
-    value
-        .as_object()
-        .and_then(|obj| obj.get(field))
-        .map(|v| match v {
-            Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
-            other => format!("{other}"),
-        })
+    let path = key_field.strip_prefix('.').unwrap_or(key_field);
+    let segments: Vec<&str> = path.split('.').collect();
+
+    let mut current = value;
+    for segment in &segments {
+        current = current.as_object()?.get(*segment)?;
+    }
+
+    Some(match current {
+        Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+        other => format!("{other}"),
+    })
 }
 
 #[cfg(test)]
@@ -332,6 +358,27 @@ mod tests {
     fn test_extract_key_missing() {
         let value = Value::from(serde_json::json!({"x": 1}));
         assert_eq!(extract_key(&value, ".missing"), None);
+    }
+
+    #[test]
+    fn test_extract_key_nested() {
+        let value = Value::from(serde_json::json!({"host": {"name": "prod-web-01"}}));
+        assert_eq!(
+            extract_key(&value, ".host.name"),
+            Some("prod-web-01".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_key_deeply_nested() {
+        let value = Value::from(serde_json::json!({"a": {"b": {"c": "deep"}}}));
+        assert_eq!(extract_key(&value, ".a.b.c"), Some("deep".to_string()));
+    }
+
+    #[test]
+    fn test_extract_key_nested_missing() {
+        let value = Value::from(serde_json::json!({"host": {"ip": "1.2.3.4"}}));
+        assert_eq!(extract_key(&value, ".host.name"), None);
     }
 
     #[test]

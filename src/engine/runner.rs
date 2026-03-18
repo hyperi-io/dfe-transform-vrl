@@ -11,7 +11,7 @@
 //! Runs compiled VRL programs against event Values in-process.
 //! Each event is wrapped in a `TargetValueRef` and passed to the VRL runtime.
 
-use vrl::compiler::{Context, Program, TargetValueRef, TimeZone};
+use vrl::compiler::{Context, ExpressionError, Program, TargetValueRef, TimeZone};
 use vrl::prelude::state::RuntimeState;
 use vrl::value::{Secrets, Value};
 
@@ -36,9 +36,12 @@ pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
 
     let mut ctx = Context::new(&mut target, &mut state, &timezone);
 
-    program
-        .resolve(&mut ctx)
-        .map_err(|e| crate::Error::VrlRuntime(format!("{e}")))
+    program.resolve(&mut ctx).map_err(|e| match e {
+        ExpressionError::Abort { message, .. } => {
+            crate::Error::VrlAbort(message.unwrap_or_else(|| "aborted".into()))
+        }
+        other => crate::Error::VrlRuntime(format!("{other}")),
+    })
 }
 
 /// Transform a batch of events through a compiled VRL program.
