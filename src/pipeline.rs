@@ -76,6 +76,7 @@ pub async fn run(
 ///
 /// Generic over `T: Transport` so the same pipeline logic works with
 /// `KafkaTransport` (production) and `MemoryTransport` (tests).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with_transport<T: Transport>(
     consumer: &T,
     producer: &T,

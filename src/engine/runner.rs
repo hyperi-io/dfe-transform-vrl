@@ -160,11 +160,11 @@ mod tests {
     #[test]
     fn test_run_null_field_access() {
         let program = compile_test_program(
-            r#"
+            r"
             if .missing == null {
                 .was_null = true
             }
-        "#,
+        ",
         );
         let mut value = Value::from(serde_json::json!({"other": 1}));
         let result = run_vrl(&program, &mut value);
@@ -360,9 +360,9 @@ mod tests {
     #[test]
     fn test_batch_partial_failures() {
         let program = compile_test_program(
-            r#"
+            r"
             .parsed = parse_json!(.raw)
-        "#,
+        ",
         );
         let mut events = vec![
             Value::from(serde_json::json!({"raw": r#"{"valid": true}"#})),
@@ -455,10 +455,10 @@ mod tests {
     #[test]
     fn test_run_del_missing_field_is_noop() {
         let program = compile_test_program(
-            r#"
+            r"
             del(.nonexistent)
             .survived = true
-        "#,
+        ",
         );
         let mut value = Value::from(serde_json::json!({"message": "hello"}));
         let result = run_vrl(&program, &mut value);

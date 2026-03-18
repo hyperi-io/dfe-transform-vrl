@@ -15,7 +15,7 @@ description = "Embedded VRL transform engine — Kafka-to-Kafka with wrapper-con
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vrl"
 rust-version = "1.94"
-exclude = [***REMOVED*** ".github/", ***REMOVED*** "ci/", "chart/", "docs/"]
+exclude = [***REMOVED*** ".github/", ***REMOVED*** "chart/", "docs/", ".tmp/"]
 
 [lib]
 name = "dfe_transform_vrl"
@@ -99,3 +99,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
