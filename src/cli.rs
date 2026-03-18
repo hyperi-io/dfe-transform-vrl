@@ -15,11 +15,13 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
+use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
 use hyperi_rustlib::metrics::MetricsManager;
 use tracing::{error, info};
 
 use crate::config::Config;
+use crate::config::hot::HotConfig;
 use crate::engine::compiler;
 use crate::{deployment, health, metrics, pipeline};
 
@@ -168,12 +170,23 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
 
+    // Hot-reloadable config subset (read by pipeline each batch)
+    let hot_config = SharedConfig::new(HotConfig::from_config(&config));
+    info!(
+        batch_size = config.pipeline.batch_size,
+        batch_timeout_ms = config.pipeline.batch_timeout_ms,
+        key_field = %config.sink.key_field,
+        "hot-reloadable config initialised"
+    );
+
     // Pipeline
     let pipeline_shutdown_rx = shutdown_rx.clone();
+    let pipeline_hot_config = hot_config.clone();
     let pipeline_handle = tokio::spawn(async move {
         pipeline::run(
             &config,
             program,
+            pipeline_hot_config,
             &transform_metrics,
             ready_flag,
             pipeline_shutdown_rx,

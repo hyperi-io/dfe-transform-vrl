@@ -19,17 +19,24 @@
 //! The pipeline is generic over the `Transport` trait, allowing:
 //! - `KafkaTransport` in production
 //! - `MemoryTransport` in unit tests (no Kafka broker needed)
+//!
+//! Hot-reloadable config (`batch_size`, `batch_timeout_ms`, `key_field`,
+//! `scaling_pressure_threshold`) is read from `SharedConfig<HotConfig>`
+//! at the start of each batch. See [`crate::config::hot`] for the full
+//! classification of hot vs restart-required fields.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
 use vrl::compiler::Program;
 use vrl::value::Value;
 
 use crate::config::Config;
+use crate::config::hot::HotConfig;
 use crate::engine::runner::run_vrl;
 use crate::kafka;
 use crate::metrics::TransformMetrics;
@@ -38,6 +45,7 @@ use crate::metrics::TransformMetrics;
 pub async fn run(
     config: &Config,
     program: Arc<Program>,
+    hot_config: SharedConfig<HotConfig>,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -62,9 +70,7 @@ pub async fn run(
         &consumer,
         &producer,
         program,
-        &config.sink.key_field,
-        config.pipeline.batch_size,
-        config.pipeline.batch_timeout_ms,
+        hot_config,
         payload_format,
         transform_metrics,
         ready_flag,
@@ -77,25 +83,28 @@ pub async fn run(
 ///
 /// Generic over `T: Transport` so the same pipeline logic works with
 /// `KafkaTransport` (production) and `MemoryTransport` (tests).
+///
+/// Hot-reloadable fields (`batch_size`, `batch_timeout_ms`, `key_field`)
+/// are read from `SharedConfig<HotConfig>` at the start of each batch.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_with_transport<T: Transport>(
     consumer: &T,
     producer: &T,
     program: Arc<Program>,
-    key_field: &str,
-    batch_size: usize,
-    batch_timeout_ms: u64,
+    hot_config: SharedConfig<HotConfig>,
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
-    let batch_timeout = Duration::from_millis(batch_timeout_ms);
-
     ready_flag.store(true, Ordering::Release);
     info!("pipeline ready — entering event loop");
 
     loop {
+        // Read hot config each iteration — picks up runtime changes
+        let hot = hot_config.get();
+        let batch_timeout = Duration::from_millis(hot.batch_timeout_ms);
+
         tokio::select! {
             _ = shutdown_rx.changed() => {
                 info!("shutdown signal received, draining pipeline");
@@ -105,8 +114,8 @@ pub async fn run_with_transport<T: Transport>(
                 consumer,
                 producer,
                 &program,
-                key_field,
-                batch_size,
+                &hot.key_field,
+                hot.batch_size,
                 batch_timeout,
                 payload_format,
                 transform_metrics,
