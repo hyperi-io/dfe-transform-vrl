@@ -34,6 +34,7 @@ tokio-util = { version = ">=0.7.18", features = ["rt"] }
 # duplicates rustlib functionality (see STATE.md: "rustlib first" decision).
 hyperi-rustlib = { version = ">=1.16.0", features = [
     "cli",
+    "config-reload",
     "deployment",
     "http-server",
     "logger",

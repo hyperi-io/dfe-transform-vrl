@@ -53,6 +53,28 @@ pub struct TlsConfig {
 }
 
 /// Main configuration.
+///
+/// ## Hot-reload classification
+///
+/// **Hot-reloaded** (takes effect on next batch, via `SharedConfig<HotConfig>`):
+/// - `pipeline.batch_size`
+/// - `pipeline.batch_timeout_ms`
+/// - `sink.key_field`
+/// - `scaling.pressure_threshold`
+///
+/// **Requires pod restart** (bound at startup):
+/// - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
+/// - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
+/// - `sink.brokers` — rdkafka producer connection established at startup
+/// - `sink.topic` — output topic (changing mid-stream risks data loss)
+/// - `sink.compression` — rdkafka `compression.type` set at producer creation
+/// - `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation
+/// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
+/// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
+/// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
+/// - `health.address` — HTTP server binds to socket at startup
+/// - `metrics.address` — metrics server binds to socket at startup
+/// - `logging.*` — tracing subscriber configured at startup
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {

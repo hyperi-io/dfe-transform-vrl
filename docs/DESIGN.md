@@ -207,3 +207,41 @@ metrics:
   memory-constrained pods, high-density deployments
 - **dfe-transform-vector**: Pipelines needing Vector-native transforms (`lua`,
   `aggregate`, `dedupe`, `throttle`, `sample`), or complex multi-source/sink routing
+
+## Hot-Reload
+
+Configuration changes are split into two categories:
+
+### Hot-reloaded (takes effect on next batch)
+
+These fields are read from `SharedConfig<HotConfig>` at the start of each batch
+iteration. Changes propagate via rustlib's `ConfigReloader` (file polling + SIGHUP).
+
+| Field | What it controls |
+|-------|-----------------|
+| `pipeline.batch_size` | Events per transform batch |
+| `pipeline.batch_timeout_ms` | Max wait before flushing partial batch |
+| `sink.key_field` | Kafka partition key path (e.g. `.org_id`) |
+| `scaling.pressure_threshold` | KEDA scaling pressure threshold |
+
+### Requires pod restart
+
+These fields are bound to connections, compiled programs, or server sockets
+established at startup. Changing them requires a pod restart (which is the
+standard K8s pattern — ConfigMap changes trigger rolling restart via the
+`checksum/config` annotation in the Deployment template).
+
+| Field | Why |
+|-------|-----|
+| `pipeline.name` | Baked into Kafka group_id, metrics labels, tracing spans |
+| `source.*` | rdkafka consumer: connection, subscription, auth, TLS, buffers |
+| `sink.brokers` | rdkafka producer connection |
+| `sink.topic` | Output topic (changing mid-stream risks data loss) |
+| `sink.compression` | rdkafka `compression.type` |
+| `sink.sasl.*` / `sink.tls.*` | Security protocol |
+| `sink.max_buffer_bytes` | rdkafka `queue.buffering.max.kbytes` |
+| `sink.librdkafka_options` | librdkafka `ClientConfig` |
+| `transforms.*` | VRL programs compiled at startup |
+| `health.address` | HTTP server socket bind |
+| `metrics.address` | Metrics server socket bind |
+| `logging.*` | Tracing subscriber |
