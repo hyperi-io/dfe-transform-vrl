@@ -32,9 +32,7 @@ tokio-util = { version = ">=0.7.18", features = ["rt"] }
 
 # Shared library — use for everything it provides. NO bespoke code that
 # duplicates rustlib functionality (see STATE.md: "rustlib first" decision).
-# Local path for development; switch to registry for CI/release:
-# hyperi-rustlib = { version = ">=1.13.1", registry = "hyperi", features = [...] }
-hyperi-rustlib = { path = "/projects/hyperi-rustlib", features = [
+hyperi-rustlib = { version = ">=1.16.0", features = [
     "cli",
     "deployment",
     "http-server",
@@ -70,6 +68,10 @@ anyhow = ">=1.0.98"
 
 # Logging and tracing
 tracing = ">=0.1.44"
+
+[features]
+default = []
+transport-memory = ["hyperi-rustlib/transport-memory"]
 
 [dev-dependencies]
 tempfile = ">=3.20"
