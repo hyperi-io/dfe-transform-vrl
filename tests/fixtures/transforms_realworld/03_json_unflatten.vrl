@@ -1,0 +1,19 @@
+# Parse embedded JSON string and merge fields into event
+# Common pattern: .message contains a JSON payload that needs to be extracted
+
+if exists(.message) {
+    parsed, err = parse_json(.message)
+    if err == null && is_object(parsed) {
+        .payload = parsed
+        # Promote common fields to top level
+        if exists(.payload.timestamp) {
+            .event_time = del(.payload.timestamp)
+        }
+        if exists(.payload.level) {
+            .level = del(.payload.level)
+        }
+        if exists(.payload.service) {
+            .service = del(.payload.service)
+        }
+    }
+}

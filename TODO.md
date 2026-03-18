@@ -87,3 +87,58 @@
 - [x] 4.1.1 Python ServicePlugin (ServiceDescriptor, Pydantic config model)
 - [x] 4.1.2 HelmValuesCompiler integration
 - [ ] 4.1.3 dfe-core ApplicationSet and common values
+
+## Phase 5: VRL Enrichment Tables
+
+Deliberate subset of Vector.dev enrichment tables — just VRL + enrich, no
+Vector runtime. Fail-fast on startup if enrichment files are missing or malformed.
+
+### 5.1 Enrichment Table Loading
+- [ ] 5.1.1 Config schema — `enrichment_tables` section: name, path, key_columns
+- [ ] 5.1.2 CSV file loader — read CSV to `HashMap<Key, Row>` at startup
+- [ ] 5.1.3 JSON file loader — read JSON array to `HashMap<Key, Row>` at startup
+- [ ] 5.1.4 Fail-fast validation — missing file, malformed data, duplicate keys → abort startup
+- [ ] 5.1.5 Unit tests for CSV/JSON loading, missing file, malformed data
+
+### 5.2 VRL TableRegistry Integration
+- [ ] 5.2.1 Implement `vrl::enrichment::TableRegistry` trait backed by `HashMap`
+- [ ] 5.2.2 Pass populated registry to VRL compiler and runtime context
+- [ ] 5.2.3 VRL programs can use `get_enrichment_table_record("name", {"key": .field})`
+- [ ] 5.2.4 Table name not found at compile time → compilation error (caught at startup)
+- [ ] 5.2.5 Unit tests for registry lookup, missing table, missing key
+
+### 5.3 Integration Tests
+- [ ] 5.3.1 End-to-end: CSV enrichment table + VRL transform using get_enrichment_table_record
+- [ ] 5.3.2 End-to-end: JSON enrichment table + VRL transform
+- [ ] 5.3.3 Startup failure: missing enrichment file
+- [ ] 5.3.4 Startup failure: VRL references non-existent table name
+
+### Design Decisions
+
+**What we implement:**
+- CSV and JSON flat-file enrichment tables loaded at startup
+- `HashMap<Key, Row>` backing — O(1) lookup, no disk I/O at runtime
+- Tables immutable for process lifetime (K8s restarts on ConfigMap change)
+- Standard VRL `get_enrichment_table_record()` / `find_enrichment_table_records()` syntax
+
+**What we deliberately skip:**
+- No hot-reload of enrichment files (restart the pod — K8s way)
+- No `file_regex` / glob patterns (explicit file paths only)
+- No GeoIP `.mmdb` support (just CSV/JSON flat tables)
+- No `type: grok_pattern` tables (use VRL `parse_groks` stdlib instead)
+
+**Fail-on-start behaviour:**
+- File not found → startup error, pod CrashLoopBackOff
+- File not parseable → startup error
+- VRL program references a table name that doesn't exist → compilation error (caught at startup)
+
+**Config example:**
+```yaml
+enrichment_tables:
+  - name: "geo_lookup"
+    path: "/etc/dfe/enrichment/geo.csv"
+    key_columns: ["ip_range"]
+  - name: "service_map"
+    path: "/etc/dfe/enrichment/services.json"
+    key_columns: ["service_id"]
+```

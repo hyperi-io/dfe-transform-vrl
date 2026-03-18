@@ -9,18 +9,21 @@
 //! Event processing pipeline.
 //!
 //! Orchestrates the data flow:
-//! 1. Consume batch from Kafka via rustlib `KafkaTransport`
+//! 1. Consume batch from source transport
 //! 2. Deserialise to VRL Value (auto-sensing format via rustlib)
 //! 3. Run VRL transforms in-process
 //! 4. Serialise back to original format
-//! 5. Produce to sink Kafka topic via rustlib `KafkaTransport`
+//! 5. Produce to sink transport
 //! 6. Commit consumer offsets after delivery confirmation
+//!
+//! The pipeline is generic over the `Transport` trait, allowing:
+//! - `KafkaTransport` in production
+//! - `MemoryTransport` in unit tests (no Kafka broker needed)
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use hyperi_rustlib::transport::kafka::KafkaTransport;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
 use vrl::compiler::Program;
@@ -31,13 +34,13 @@ use crate::engine::runner::run_vrl;
 use crate::kafka;
 use crate::metrics::TransformMetrics;
 
-/// Run the transform pipeline until shutdown is signalled.
+/// Run the transform pipeline with Kafka transports (production entry point).
 pub async fn run(
     config: &Config,
     program: Arc<Program>,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
-    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
     let consumer_config = kafka::build_consumer_config(&config.source);
     let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
@@ -55,6 +58,35 @@ pub async fn run(
     let consumer = kafka::create_consumer(&consumer_config).await?;
     let producer = kafka::create_producer(&producer_config).await?;
 
+    run_with_transport(
+        &consumer,
+        &producer,
+        program,
+        &config.sink.key_field,
+        config.pipeline.batch_size,
+        payload_format,
+        transform_metrics,
+        ready_flag,
+        shutdown_rx,
+    )
+    .await
+}
+
+/// Run the transform pipeline with any `Transport` implementation.
+///
+/// Generic over `T: Transport` so the same pipeline logic works with
+/// `KafkaTransport` (production) and `MemoryTransport` (tests).
+pub async fn run_with_transport<T: Transport>(
+    consumer: &T,
+    producer: &T,
+    program: Arc<Program>,
+    key_field: &str,
+    batch_size: usize,
+    payload_format: PayloadFormat,
+    transform_metrics: &TransformMetrics,
+    ready_flag: Arc<AtomicBool>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
     info!("pipeline ready — entering event loop");
 
@@ -65,11 +97,11 @@ pub async fn run(
                 break;
             }
             result = process_batch(
-                &consumer,
-                &producer,
+                consumer,
+                producer,
                 &program,
-                &config.sink.key_field,
-                config.pipeline.batch_size,
+                key_field,
+                batch_size,
                 payload_format,
                 transform_metrics,
             ) => {
@@ -81,7 +113,7 @@ pub async fn run(
     }
 
     ready_flag.store(false, Ordering::Release);
-    info!("closing Kafka transports");
+    info!("closing transports");
     let _ = consumer.close().await;
     let _ = producer.close().await;
 
@@ -90,9 +122,9 @@ pub async fn run(
 
 /// Process a single batch: consume → transform → produce → commit.
 #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
-async fn process_batch(
-    consumer: &KafkaTransport,
-    producer: &KafkaTransport,
+async fn process_batch<T: Transport>(
+    consumer: &T,
+    producer: &T,
     program: &Program,
     key_field: &str,
     batch_size: usize,

@@ -1,0 +1,47 @@
+# Complex multi-step transform exercising many VRL features
+# Simulates a real pipeline: validate, enrich, normalise, tag
+
+# --- Step 1: Validate required fields ---
+if !exists(.message) {
+    abort "missing required field: message"
+}
+
+# --- Step 2: Type normalisation ---
+# Ensure numeric fields are actually numbers
+if exists(.status_code) {
+    .status_code = to_int(.status_code) ?? 0
+}
+if exists(.response_time_ms) {
+    .response_time_ms = to_float(.response_time_ms) ?? 0.0
+}
+
+# --- Step 3: Enrich ---
+.processed_at = now()
+.pipeline = "realworld-test"
+
+# Categorise by status code
+if is_integer(.status_code) {
+    code = int!(.status_code)
+    if code >= 200 && code < 300 {
+        .status_category = "success"
+    } else if code >= 400 && code < 500 {
+        .status_category = "client_error"
+    } else if code >= 500 {
+        .status_category = "server_error"
+    } else {
+        .status_category = "other"
+    }
+}
+
+# --- Step 4: Truncate long messages ---
+if exists(.message) && is_string(.message) {
+    msg = string!(.message)
+    if length(msg) > 1024 {
+        .message = slice!(msg, 0, 1024)
+        .message_truncated = true
+    }
+}
+
+# --- Step 5: Clean up ---
+del(.internal_trace_id)
+del(._metadata)
