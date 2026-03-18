@@ -541,7 +541,7 @@ mod tests {
         let dir = realworld_dir();
         let entries: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "vrl"))
             .collect();
 
@@ -615,7 +615,7 @@ mod tests {
                 Value::from(serde_json::json!({
                     "message": format!("event {i}"),
                     "status_code": if i % 10 == 0 { 500 } else { 200 },
-                    "response_time_ms": i as f64 * 0.5,
+                    "response_time_ms": f64::from(i) * 0.5,
                     "internal_trace_id": format!("trace-{i}"),
                 }))
             })

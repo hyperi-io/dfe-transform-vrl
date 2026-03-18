@@ -40,14 +40,10 @@ mod tests {
 
     #[test]
     fn test_compile_empty_source_fails() {
-        // Empty string compiles but produces a null program — verify behaviour
         let result = compile_vrl("");
-        // VRL may treat empty as valid (returns null). Either ok or err is acceptable,
-        // but the runner should handle it gracefully.
         if let Ok(cr) = result {
             let mut value = Value::from(serde_json::json!({"a": 1}));
             let _ = run_vrl(&cr.program, &mut value);
-            // Event should be unchanged
             assert_eq!(
                 value.as_object().unwrap().get("a"),
                 Some(&Value::Integer(1))
@@ -61,34 +57,32 @@ mod tests {
 
     #[test]
     fn test_runtime_fail_parse_json_invalid() {
-        let program = compile(r#".parsed = parse_json!(.raw)"#);
+        let program = compile(r".parsed = parse_json!(.raw)");
         let mut value = Value::from(serde_json::json!({"raw": "{{not json}}"}));
         assert!(run_vrl(&program, &mut value).is_err());
     }
 
     #[test]
     fn test_runtime_fail_to_int_non_numeric() {
-        let program = compile(r#".num = int!(.val)"#);
+        let program = compile(r".num = int!(.val)");
         let mut value = Value::from(serde_json::json!({"val": "not_a_number"}));
         assert!(run_vrl(&program, &mut value).is_err());
     }
 
     #[test]
     fn test_runtime_fail_array_bang_on_object() {
-        let program = compile(r#".out = array!(.data)"#);
+        let program = compile(r".out = array!(.data)");
         let mut value = Value::from(serde_json::json!({"data": {"key": "val"}}));
         assert!(run_vrl(&program, &mut value).is_err());
     }
 
     #[test]
     fn test_runtime_divide_by_zero_captured_as_err() {
-        // VRL division by a runtime variable is fallible — must use err assignment.
-        // When divisor is 0, err is populated and result is null.
         let program = compile(
-            r#"
+            r"
             divisor = int!(.divisor)
             .result, .div_err = 10 / divisor
-        "#,
+        ",
         );
 
         // Non-zero: should succeed (VRL division returns float)
@@ -106,7 +100,6 @@ mod tests {
         // Zero: err should be populated
         let mut zero = Value::from(serde_json::json!({"divisor": 0}));
         assert!(run_vrl(&program, &mut zero).is_ok());
-        // Result should be null when division fails
         assert!(
             zero.as_object().unwrap().get("div_err").is_some(),
             "divide by zero should set error value"
@@ -137,10 +130,10 @@ mod tests {
     #[test]
     fn test_missing_field_is_null() {
         let program = compile(
-            r#"
+            r"
             .present = exists(.there)
             .absent = exists(.not_there)
-        "#,
+        ",
         );
         let mut value = Value::from(serde_json::json!({"there": 1}));
         assert!(run_vrl(&program, &mut value).is_ok());
@@ -152,9 +145,9 @@ mod tests {
     #[test]
     fn test_nested_missing_field() {
         let program = compile(
-            r#"
+            r"
             .deep_exists = exists(.a.b.c.d)
-        "#,
+        ",
         );
         let mut value = Value::from(serde_json::json!({"a": {"b": {}}}));
         assert!(run_vrl(&program, &mut value).is_ok());
@@ -211,11 +204,9 @@ mod tests {
         "#,
         );
 
-        // Internal event: aborted
         let mut internal = Value::from(serde_json::json!({"internal": true, "msg": "test"}));
         assert!(run_vrl(&program, &mut internal).is_err());
 
-        // External event: passes through
         let mut external = Value::from(serde_json::json!({"internal": false, "msg": "test"}));
         assert!(run_vrl(&program, &mut external).is_ok());
         assert_eq!(
@@ -240,13 +231,9 @@ mod tests {
         );
 
         let mut events = vec![
-            // 0: success (valid JSON, not dropped)
             Value::from(serde_json::json!({"action": "keep", "data": r#"{"ok":1}"#})),
-            // 1: abort (action=drop)
             Value::from(serde_json::json!({"action": "drop", "data": r#"{"ok":2}"#})),
-            // 2: runtime error (invalid JSON)
             Value::from(serde_json::json!({"action": "keep", "data": "not json"})),
-            // 3: success
             Value::from(serde_json::json!({"action": "keep", "data": r#"{"ok":3}"#})),
         ];
 
@@ -310,7 +297,6 @@ mod tests {
             .unwrap()
             .as_float()
             .unwrap();
-        // IEEE754 float addition: 0.1 + 0.2 is close to but not exactly 0.3
         assert!((result - 0.3).abs() < 1e-10);
     }
 
@@ -367,23 +353,21 @@ mod tests {
     #[test]
     fn test_fallible_function_with_error_handling() {
         let program = compile(
-            r#"
+            r"
             parsed, err = parse_json(.raw)
             if err != null {
                 .parse_failed = true
             } else {
                 .parsed = parsed
             }
-        "#,
+        ",
         );
 
-        // Good JSON
         let mut good = Value::from(serde_json::json!({"raw": r#"{"ok":true}"#}));
         assert!(run_vrl(&program, &mut good).is_ok());
         assert!(good.as_object().unwrap().get("parsed").is_some());
         assert!(good.as_object().unwrap().get("parse_failed").is_none());
 
-        // Bad JSON — error handled gracefully (no abort)
         let mut bad = Value::from(serde_json::json!({"raw": "broken{json"}));
         assert!(run_vrl(&program, &mut bad).is_ok());
         assert_eq!(
@@ -394,8 +378,7 @@ mod tests {
 
     #[test]
     fn test_infallible_function_aborts_on_error() {
-        // parse_json! (with !) aborts on error
-        let program = compile(r#".parsed = parse_json!(.raw)"#);
+        let program = compile(r".parsed = parse_json!(.raw)");
         let mut value = Value::from(serde_json::json!({"raw": "not json"}));
         assert!(
             run_vrl(&program, &mut value).is_err(),
@@ -410,11 +393,11 @@ mod tests {
     #[test]
     fn test_idempotent_transform() {
         let program = compile(
-            r#"
+            r"
             .level = downcase(.level) ?? .level
             .processed = true
             del(.temp)
-        "#,
+        ",
         );
 
         let mut value = Value::from(serde_json::json!({
@@ -422,14 +405,12 @@ mod tests {
             "temp": "remove_me"
         }));
 
-        // First run
         assert!(run_vrl(&program, &mut value).is_ok());
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get("level"), Some(&Value::from("error")));
         assert_eq!(obj.get("processed"), Some(&Value::Boolean(true)));
         assert!(obj.get("temp").is_none());
 
-        // Second run — should produce same result
         assert!(run_vrl(&program, &mut value).is_ok());
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get("level"), Some(&Value::from("error")));
