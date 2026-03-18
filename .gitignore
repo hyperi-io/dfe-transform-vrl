@@ -24,3 +24,8 @@ coverage-html/
 coverage.lcov
 .cargo/
 !.cargo/config.toml
+
+***REMOVED***docs/superpowers/
+
+# Project temp directory
+.tmp/

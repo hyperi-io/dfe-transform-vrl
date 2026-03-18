@@ -1,0 +1,31 @@
+# Project:   dfe-transform-vrl
+# File:      .github/workflows/ci.yml
+# Purpose:   CI pipeline via hyperi-ci reusable workflow
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+***REMOVED******REMOVED******REMOVED******REMOVED***      - "docs/**"
+      - "**.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  packages: write
+
+jobs:
+  ci:
+    uses: hyperi-io/hyperi-ci/.github/workflows/rust-ci.yml@main
+    with:
+      publish-target: internal
+    secrets: inherit
