@@ -1,0 +1,18 @@
+# Route events by severity — add routing tag, drop debug in production
+if exists(.level) {
+    .level = downcase!(string!(.level))
+} else {
+    .level = "unknown"
+}
+
+if .level == "debug" {
+    abort "debug events dropped in production"
+}
+
+if .level == "error" || .level == "critical" {
+    .routing.priority = "high"
+    .routing.alert = true
+} else {
+    .routing.priority = "normal"
+    .routing.alert = false
+}

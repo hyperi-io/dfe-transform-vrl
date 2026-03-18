@@ -1,0 +1,25 @@
+# Rename and sanitise fields for ClickHouse compatibility
+# Strip @ prefix (common in Elastic-origin data), rename known fields
+
+# Rename @timestamp to event_time
+ts = del(."@timestamp")
+if ts != null {
+    .event_time = ts
+}
+
+# Rename @message to message
+msg = del(."@message")
+if msg != null {
+    .message = msg
+}
+
+# Rename host.name to hostname (flatten nested)
+if exists(.host.name) {
+    .hostname = del(.host.name)
+    del(.host)
+}
+
+# Ensure org_id exists (required for ClickHouse partitioning)
+if !exists(.org_id) {
+    .org_id = "unknown"
+}
