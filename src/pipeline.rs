@@ -26,12 +26,20 @@
 //! classification of hot vs restart-required fields.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hyperi_rustlib::config::shared::SharedConfig;
+use hyperi_rustlib::logger::{log_debounced, log_sampled, log_state_change, security};
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
+
+// Per-site log spam guards
+static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
+static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
+static PRODUCE_ERRORS: AtomicU64 = AtomicU64::new(0);
+static BACKPRESSURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static BATCH_ERROR_TS: AtomicU64 = AtomicU64::new(0);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
@@ -120,8 +128,10 @@ pub async fn run_with_transport<T: Transport>(
                 payload_format,
                 transform_metrics,
             ) => {
-                if let Err(e) = result {
-                    error!(error = %e, "batch processing error");
+                if let Err(e) = result
+                    && log_debounced(&BATCH_ERROR_TS, 5000)
+                {
+                    error!(error = %e, "batch processing error (max 1/5s)");
                 }
             }
         }
@@ -167,6 +177,9 @@ async fn process_batch<T: Transport>(
     transform_metrics
         .events_received
         .increment(batch_len as u64);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.records_received(batch_len as u64);
+    }
     transform_metrics.batch_size.record(batch_len as f64);
     debug!(count = batch_len, "consumed batch");
 
@@ -187,7 +200,10 @@ async fn process_batch<T: Transport>(
         let mut value = match deser_result {
             Ok(v) => v,
             Err(e) => {
-                warn!(error = %e, "failed to deserialise event, skipping");
+                if log_sampled(&DESER_ERRORS, 1000) {
+                    warn!(error = %e, total = DESER_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
+                }
+                security::input_validation_failure("deserialise", &e.to_string(), None);
                 failed_count += 1;
                 commit_tokens.push(msg.token.clone());
                 continue;
@@ -199,11 +215,17 @@ async fn process_batch<T: Transport>(
             Err(crate::Error::VrlAbort(ref reason)) => {
                 debug!(reason = %reason, "event dropped by VRL abort");
                 transform_metrics.events_filtered.increment(1);
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.records_filtered(1);
+                }
                 commit_tokens.push(msg.token.clone());
                 continue;
             }
             Err(e) => {
-                warn!(error = %e, "VRL transform error, skipping event");
+                if log_sampled(&VRL_ERRORS, 1000) {
+                    warn!(error = %e, total = VRL_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
+                }
+                security::input_validation_failure("vrl_transform", &e.to_string(), None);
                 failed_count += 1;
                 commit_tokens.push(msg.token.clone());
                 continue;
@@ -218,20 +240,44 @@ async fn process_batch<T: Transport>(
         match producer.send(key_str, &serialized).await {
             SendResult::Ok => {
                 produced_count += 1;
+                if log_state_change(&BACKPRESSURE_ACTIVE, false) {
+                    info!("producer backpressure cleared");
+                }
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_sent("kafka", 1);
+                }
             }
             SendResult::Backpressured => {
-                warn!("producer backpressure, retrying after yield");
+                if log_state_change(&BACKPRESSURE_ACTIVE, true) {
+                    warn!("producer backpressure active");
+                }
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_backpressured("kafka", 1);
+                }
                 tokio::task::yield_now().await;
                 match producer.send(key_str, &serialized).await {
-                    SendResult::Ok => produced_count += 1,
+                    SendResult::Ok => {
+                        produced_count += 1;
+                        if let Some(ref dfe) = transform_metrics.dfe {
+                            dfe.transport_sent("kafka", 1);
+                        }
+                    }
                     other => {
-                        error!(result = ?other, "produce failed after retry");
+                        if log_sampled(&PRODUCE_ERRORS, 1000) {
+                            error!(result = ?other, total = PRODUCE_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "produce failed (sampled 1/1000)");
+                        }
                         failed_count += 1;
+                        if let Some(ref dfe) = transform_metrics.dfe {
+                            dfe.transport_send_errors("kafka", 1);
+                        }
                     }
                 }
             }
             SendResult::Fatal(e) => {
                 error!(error = %e, "fatal produce error");
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_send_errors("kafka", 1);
+                }
                 return Err(crate::Error::Kafka(format!("produce failed: {e}")));
             }
         }
@@ -245,6 +291,10 @@ async fn process_batch<T: Transport>(
         .record(elapsed.as_secs_f64());
     transform_metrics.events_produced.increment(produced_count);
     transform_metrics.events_failed.increment(failed_count);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.records_delivered(produced_count);
+        dfe.transport_send_duration("kafka", elapsed.as_secs_f64());
+    }
 
     if !commit_tokens.is_empty() {
         consumer

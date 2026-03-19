@@ -32,8 +32,9 @@ tokio-util = { version = ">=0.7.18", features = ["rt"] }
 
 # Shared library — use for everything it provides. NO bespoke code that
 # duplicates rustlib functionality (see STATE.md: "rustlib first" decision).
-hyperi-rustlib = { version = ">=1.16.0", features = [
+hyperi-rustlib = { version = ">=1.16.3", features = [
     "cli",
+    "config",
     "config-reload",
     "deployment",
     "http-server",
