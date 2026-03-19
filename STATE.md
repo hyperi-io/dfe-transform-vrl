@@ -68,7 +68,7 @@ This project solves both problems by:
 
 ### Key Components
 
-1. **Config Engine** (`src/config/`) — Big-dial config loading (7-layer cascade via hyperi-rustlib), VRL program compilation, validation
+1. **Config Engine** (`src/config/`) — Big-dial config loading (config cascade via rustlib + ApplyFlatEnv), hot-reload via SharedConfig, validation
 2. **VRL Engine** (`src/engine/`) — VRL program compilation, batch execution against events, custom DFE functions
 3. **Kafka Layer** (`src/kafka/`) — rdkafka consumer with offset tracking, producer with delivery confirmation, watermark-based offset commit
 4. **Pipeline** (`src/pipeline.rs`) — Event loop: consume batch → deserialise → transform → serialise → produce → commit
@@ -85,7 +85,9 @@ This project solves both problems by:
   - `deployment` — DeploymentContract, Dockerfile/Helm/Compose generation
   - `logger` — Structured logging with masking (tracing-based)
   - `http-server` — Axum HTTP server with built-in `/health/live`, `/health/ready`
-  - `metrics` — MetricsManager, Prometheus counters/gauges/histograms + server
+  - `metrics` — MetricsManager, DfeMetrics, Prometheus counters/gauges/histograms + server
+  - `config` — ApplyFlatEnv trait, SharedConfig, ConfigReloader (hot-reload)
+  - `security` — Security event reporting (auth, TLS, config changes)
   - `transport-kafka` — KafkaTransport (rdkafka), KafkaConfig, offset commit
   - `transport` — FormatDetector, PayloadFormat, serialize/parse payload helpers
   - `scaling` — Scaling pressure calculation for KEDA
@@ -155,10 +157,12 @@ rather than hand-rolling functionality.
 **Rationale:** Maintainability, testability, and leverage. Each module can be reasoned
 about independently, and crate-backed implementations get upstream bug fixes for free.
 **Module map:**
-- `config/` — Config schema and loading (`figment`, `serde_yaml_ng`, `dotenvy`)
+- `config/` — Config schema, loading, validation (`figment`, `serde_yaml_ng`, `dotenvy`)
+- `config/hot.rs` — HotConfig struct, SharedConfig wiring for hot-reload
 - `engine/` — VRL compilation and execution (`vrl` crate)
 - `kafka/` — Kafka transport wiring (`hyperi-rustlib` transport-kafka)
 - `pipeline.rs` — Event loop orchestrating consume → transform → produce
+- `cli.rs` — DfeApp trait impl, CLI commands (run, version, config-check, emit-*)
 - `health.rs` — Health endpoints (`hyperi-rustlib` http-server)
 - `metrics.rs` — Prometheus metrics (`hyperi-rustlib` metrics, `metrics` crate)
 - `deployment.rs` — Container/chart generation (`hyperi-rustlib` deployment)
@@ -170,7 +174,7 @@ about independently, and crate-backed implementations get upstream bug fixes for
 **Rationale:** Reviewed against dfe-transform-wasm's `crates/` workspace pattern.
 The wasm project needs separate crates because it ships an SDK to external users
 (host, sdk, wit, test-harness — each serves a different consumer). dfe-transform-vrl
-has one consumer (the binary itself), no external API, and is ~2.1k lines. Splitting
+has one consumer (the binary itself), no external API, and is a single-crate binary. Splitting
 would add Cargo.toml overhead, workspace dependency management, and feature flag
 complexity with no benefit. Revisit if an external-facing VRL function SDK is added.
 
