@@ -59,9 +59,10 @@
 - [x] 2.2.3 ConfigMap and Secret templates
 
 ### 2.3 CI/CD
-- [ ] 2.3.1 GitHub Actions workflows (build, test, release)
-- [ ] 2.3.2 Container image build and push
-- [ ] 2.3.3 Helm chart packaging
+- [x] 2.3.1 Migrate to hyperi-ci (replaces legacy ci submodule)
+- [ ] 2.3.2 GitHub Actions workflows (build, test, release) — blocked on hyperi-ci rewrite
+- [ ] 2.3.3 Container image build and push
+- [ ] 2.3.4 Helm chart packaging
 
 ## Phase 3: Testing & Hardening
 
@@ -75,6 +76,9 @@
 ### 3.2 Integration Tests
 - [x] 3.2.1 VRL transforms against fixture files
 - [x] 3.2.2 Config cascade (YAML + env vars)
+- [x] 3.2.3 VRL edge cases — type coercion, abort, nulls, unicode, nested, arrays
+- [x] 3.2.4 VRL real-world patterns — syslog, JSON manipulation, conditional routing
+- [x] 3.2.5 Known-should-fail transforms — runtime errors, invalid field access
 
 ### 3.3 E2E Tests
 - [ ] 3.3.1 Kafka testcontainers — produce msgpack → transform → consume transformed
@@ -142,3 +146,37 @@ enrichment_tables:
     path: "/etc/dfe/enrichment/services.json"
     key_columns: ["service_id"]
 ```
+
+## Phase 6: Hardening & Observability (Completed)
+
+### 6.1 Code Review Fixes
+- [x] 6.1.1 SIGTERM handling alongside SIGINT
+- [x] 6.1.2 Batch timeout in pipeline recv (batch_timeout_ms)
+- [x] 6.1.3 Separate events_filtered (abort) from events_failed (error) metrics
+- [x] 6.1.4 Nested dot-path support in extract_key
+- [x] 6.1.5 Clippy clean, profiling profile, deny.toml fix
+
+### 6.2 Hot-Reload
+- [x] 6.2.1 SharedConfig<HotConfig> for batch_size, batch_timeout_ms, retry, scaling
+- [x] 6.2.2 Pipeline reads hot fields each batch cycle
+- [x] 6.2.3 Config struct documented with hot-reload vs restart-required classification
+
+### 6.3 Rustlib 1.16.3 Remediation
+- [x] 6.3.1 Migrate apply_env_overrides() to ApplyFlatEnv trait
+- [x] 6.3.2 Add DfeMetrics dual-emit alongside existing metrics
+- [x] 6.3.3 Wire security events into auth/TLS/config reload sites
+- [x] 6.3.4 Fix log spam sites
+
+### 6.4 Infrastructure
+- [x] 6.4.1 Migrate to hyperi-ci (replace legacy ci submodule)
+- [x] 6.4.2 Update hyperi-ai submodule
+- [x] 6.4.3 Add Renovate config
+- [x] 6.4.4 Uniform Transport trait usage for Kafka layer
+
+## Open Items
+
+- [ ] CI workflows — blocked on hyperi-ci rewrite completing
+- [ ] E2E Kafka testcontainers tests (3.3.x)
+- [ ] dfe-core ApplicationSet integration (4.1.3)
+- [ ] VRL enrichment tables (Phase 5)
+- [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`
