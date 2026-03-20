@@ -60,10 +60,11 @@ This project solves both problems by:
 
 1. **Config Engine** (`src/config/`) — Big-dial config loading (config cascade via rustlib + ApplyFlatEnv), hot-reload via SharedConfig, validation
 2. **VRL Engine** (`src/engine/`) — VRL program compilation, batch execution against events, custom DFE functions
-3. **Kafka Layer** (`src/kafka/`) — rdkafka consumer with offset tracking, producer with delivery confirmation, watermark-based offset commit
-4. **Pipeline** (`src/pipeline.rs`) — Event loop: consume batch → deserialise → transform → serialise → produce → commit
-5. **Observability** (`src/health.rs`, `src/metrics.rs`) — HTTP server with health probes and Prometheus metrics
-6. **Deployment** (`src/deployment.rs`) — DeploymentContract for Dockerfile, Helm chart, compose fragment generation
+3. **Enrichment Engine** (`src/enrichment/`) — CSV/JSON enrichment table loading, custom VRL functions (`get_enrichment_table_record`, `find_enrichment_table_records`)
+4. **Kafka Layer** (`src/kafka/`) — rdkafka consumer with offset tracking, producer with delivery confirmation, watermark-based offset commit
+5. **Pipeline** (`src/pipeline.rs`) — Event loop: consume batch → deserialise → transform → serialise → produce → commit
+6. **Observability** (`src/health.rs`, `src/metrics.rs`) — HTTP server with health probes and Prometheus metrics
+7. **Deployment** (`src/deployment.rs`) — DeploymentContract for Dockerfile, Helm chart, compose fragment generation
 
 ### Tech Stack
 
