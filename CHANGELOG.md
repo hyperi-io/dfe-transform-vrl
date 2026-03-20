@@ -1,3 +1,10 @@
+# [1.0.0-dev.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-03-20)
+
+
+### Bug Fixes
+
+* migrate to DFE metrics standard with rustlib 1.18.0 ([3f0c696](https://github.com/hyperi-io/dfe-transform-vrl/commit/3f0c696ec841b3fa02d5e92da184342174202adb))
+
 # 1.0.0-dev.1 (2026-03-20)
 
 
