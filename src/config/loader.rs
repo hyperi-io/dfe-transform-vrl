@@ -82,10 +82,26 @@ pub struct Config {
     pub source: SourceConfig,
     pub sink: SinkConfig,
     pub transforms: TransformConfig,
+    #[serde(default)]
+    pub enrichment_tables: Vec<EnrichmentTableConfig>,
     pub health: HealthConfig,
     pub metrics: MetricsConfig,
     pub logging: LoggingConfig,
     pub scaling: ScalingConfig,
+}
+
+/// Enrichment table file reference.
+///
+/// Tables are loaded at startup into `HashMap<Key, Row>` for O(1) lookups.
+/// Immutable for the process lifetime — restart the pod to update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrichmentTableConfig {
+    /// Table name used in VRL: `get_enrichment_table_record("name", ...)`.
+    pub name: String,
+    /// Path to the enrichment data file (.csv or .json).
+    pub path: String,
+    /// Column(s) used as the lookup key. Multiple columns are concatenated.
+    pub key_columns: Vec<String>,
 }
 
 /// Pipeline identity and processing settings.

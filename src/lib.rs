@@ -15,6 +15,7 @@ pub mod cli;
 pub mod config;
 pub mod deployment;
 pub mod engine;
+pub mod enrichment;
 pub mod error;
 pub mod health;
 pub mod kafka;

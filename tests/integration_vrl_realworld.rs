@@ -27,7 +27,7 @@ mod tests {
             files: Some(vec![format!("{}/{filename}", realworld_dir())]),
         };
         let source = load_vrl_source(&config).unwrap();
-        compile_vrl(&source).unwrap().program
+        compile_vrl(&source, None).unwrap().program
     }
 
     // =========================================================================
@@ -553,7 +553,7 @@ mod tests {
         for entry in entries {
             let path = entry.path();
             let source = std::fs::read_to_string(&path).unwrap();
-            let result = compile_vrl(&source);
+            let result = compile_vrl(&source, None);
             assert!(
                 result.is_ok(),
                 "fixture {} should compile: {}",
@@ -577,6 +577,7 @@ mod tests {
             .level = downcase!(string!(.level))
             if .level == "error" { .is_error = true }
         "#,
+            None,
         )
         .unwrap()
         .program;
@@ -593,6 +594,7 @@ mod tests {
             r#"
             if .level == "error" { .is_error = true }
         "#,
+            None,
         )
         .unwrap()
         .program;

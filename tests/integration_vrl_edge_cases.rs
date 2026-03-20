@@ -16,7 +16,7 @@ mod tests {
     use vrl::value::Value;
 
     fn compile(source: &str) -> vrl::compiler::Program {
-        compile_vrl(source).unwrap().program
+        compile_vrl(source, None).unwrap().program
     }
 
     // =========================================================================
@@ -25,22 +25,22 @@ mod tests {
 
     #[test]
     fn test_compile_fails_on_syntax_error() {
-        assert!(compile_vrl("if { broken").is_err());
+        assert!(compile_vrl("if { broken", None).is_err());
     }
 
     #[test]
     fn test_compile_fails_on_unknown_function() {
-        assert!(compile_vrl(".x = this_function_does_not_exist()").is_err());
+        assert!(compile_vrl(".x = this_function_does_not_exist()", None).is_err());
     }
 
     #[test]
     fn test_compile_fails_on_unclosed_string() {
-        assert!(compile_vrl(r#".x = "unclosed"#).is_err());
+        assert!(compile_vrl(r#".x = "unclosed"#, None).is_err());
     }
 
     #[test]
     fn test_compile_empty_source_fails() {
-        let result = compile_vrl("");
+        let result = compile_vrl("", None);
         if let Ok(cr) = result {
             let mut value = Value::from(serde_json::json!({"a": 1}));
             let _ = run_vrl(&cr.program, &mut value);

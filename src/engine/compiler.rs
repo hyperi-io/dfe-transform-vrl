@@ -11,12 +11,15 @@
 //! Loads VRL source from transform files, compiles into executable programs.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use tracing::{debug, info};
-use vrl::compiler::{CompilationResult, compile};
+use vrl::compiler::{CompilationResult, CompileConfig, compile_with_external, state};
 
 use crate::Result;
 use crate::config::TransformConfig;
+use crate::enrichment::EnrichmentRegistry;
+use crate::enrichment::vrl_functions;
 
 /// Load VRL source code from transform configuration.
 ///
@@ -86,11 +89,26 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
 
 /// Compile VRL source code into an executable program.
 ///
-/// Uses the full VRL stdlib. The compiled `Program` is reused for every event —
-/// zero per-event compilation cost.
-pub fn compile_vrl(source: &str) -> Result<CompilationResult> {
-    let fns = vrl::stdlib::all();
-    compile(source, &fns).map_err(|diagnostics| {
+/// Uses the full VRL stdlib plus custom enrichment functions. If an
+/// `EnrichmentRegistry` is provided, it's injected into the compile config
+/// so enrichment functions can validate table names at compile time.
+///
+/// The compiled `Program` is reused for every event — zero per-event
+/// compilation cost.
+pub fn compile_vrl(
+    source: &str,
+    registry: Option<Arc<EnrichmentRegistry>>,
+) -> Result<CompilationResult> {
+    let mut fns = vrl::stdlib::all();
+    fns.extend(vrl_functions::enrichment_functions());
+
+    let mut config = CompileConfig::default();
+    if let Some(reg) = registry {
+        config.set_custom(reg);
+    }
+
+    let external = state::ExternalEnv::default();
+    compile_with_external(source, &fns, &external, config).map_err(|diagnostics| {
         let messages: Vec<String> = diagnostics.into_iter().map(|d| format!("{d:?}")).collect();
         crate::Error::VrlCompile(messages.join("\n"))
     })
@@ -191,13 +209,13 @@ mod tests {
 
     #[test]
     fn test_compile_valid_vrl() {
-        let result = compile_vrl(".processed = true\n.timestamp = now()");
+        let result = compile_vrl(".processed = true\n.timestamp = now()", None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_compile_invalid_vrl() {
-        let result = compile_vrl("this is not valid VRL !!!{{{");
+        let result = compile_vrl("this is not valid VRL !!!{{{", None);
         assert!(result.is_err());
     }
 
@@ -208,7 +226,7 @@ mod tests {
             .upper = upcase!("hello")
             .ts = now()
         "#;
-        let result = compile_vrl(source);
+        let result = compile_vrl(source, None);
         assert!(result.is_ok());
     }
 }
