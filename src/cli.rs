@@ -150,7 +150,15 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
     let program = {
         let vrl_source = compiler::load_vrl_source(&config.transforms)
             .map_err(|e| anyhow::anyhow!("VRL source loading failed: {e}"))?;
-        let compilation = compiler::compile_vrl(&vrl_source)
+        let enrichment_registry = if config.enrichment_tables.is_empty() {
+            None
+        } else {
+            let registry = crate::enrichment::EnrichmentRegistry::load(&config.enrichment_tables)
+                .map_err(|e| anyhow::anyhow!("enrichment table loading failed: {e}"))?;
+            info!(tables = registry.len(), "enrichment tables loaded");
+            Some(registry.into_arc())
+        };
+        let compilation = compiler::compile_vrl(&vrl_source, enrichment_registry)
             .map_err(|e| anyhow::anyhow!("VRL compilation failed: {e}"))?;
         Arc::new(compilation.program)
     };

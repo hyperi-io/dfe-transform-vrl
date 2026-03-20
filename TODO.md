@@ -173,6 +173,13 @@ enrichment_tables:
 - [x] 6.4.3 Add Renovate config
 - [x] 6.4.4 Uniform Transport trait usage for Kafka layer
 
+### 6.5 Rustlib 1.16.5 — MemoryGuard + DfeSource
+- [x] 6.5.1 Bump rustlib to >=1.16.5, add `memory` feature
+- [x] 6.5.2 Add MemoryGuard (Pattern B — pause consumer under memory pressure)
+- [x] 6.5.3 Wire under_pressure() into readiness probe (ready=false during pressure)
+- [x] 6.5.4 Add memory_used_bytes / memory_limit_bytes Prometheus gauges
+- [x] 6.5.5 Add DfeSource topic naming helpers (derive_dfe_source, derive_consumer_group)
+
 ## Open Items
 
 - [ ] CI workflows — blocked on hyperi-ci rewrite completing

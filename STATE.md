@@ -189,6 +189,27 @@ config cascade, CLI framework, logging, deployment contracts, scaling pressure.
 
 ---
 
+## VRL Source Reference
+
+The VRL crate source is available at `/projects/vrl` (shallow clone of
+`github.com/vectordotdev/vrl`) for browsing APIs, traits, and function patterns.
+This is a reference checkout only — the project depends on VRL via crates.io,
+not a path dependency. If `/projects/vrl` doesn't exist (e.g. fresh clone on
+another machine), clone it:
+
+```bash
+git clone --depth 1 https://github.com/vectordotdev/vrl /projects/vrl
+```
+
+Key paths for enrichment/custom function work:
+- `src/compiler/function.rs` — `Function` trait (custom function interface)
+- `src/compiler/expression/function.rs` — `FunctionExpression` trait (runtime resolve)
+- `src/compiler/compile_config.rs` — `CompileConfig` (inject custom context via `set_custom`)
+- `src/compiler/context.rs` — `Context` (runtime target + state)
+- `src/stdlib/` — Reference implementations of all stdlib functions
+
+---
+
 ## External Dependencies
 
 - **VRL crate** — Transform engine (compiler + runtime + stdlib)

@@ -70,7 +70,7 @@ mod tests {
     use crate::engine::compiler::compile_vrl;
 
     fn compile_test_program(source: &str) -> Program {
-        compile_vrl(source).unwrap().program
+        compile_vrl(source, None).unwrap().program
     }
 
     #[test]
