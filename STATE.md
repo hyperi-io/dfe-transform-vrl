@@ -80,7 +80,7 @@ This project solves both problems by:
 - **Language:** Rust (edition 2024)
 - **Async runtime:** tokio
 - **Transform engine:** VRL crate (embedded, no Vector subprocess)
-- **Shared lib:** hyperi-rustlib (from JFrog `hyperi` registry)
+- **Shared lib:** hyperi-rustlib (from crates.io)
   - `cli` — DfeApp trait, CommonArgs, CLI framework
   - `deployment` — DeploymentContract, Dockerfile/Helm/Compose generation
   - `logger` — Structured logging with masking (tracing-based)
@@ -185,7 +185,9 @@ duplicates rustlib functionality.
 **Rationale:** Consistency across DFE services, reduced maintenance, shared bug fixes.
 **Applies to:** HTTP server, health endpoints, metrics, Kafka transport, format detection,
 config cascade, CLI framework, logging, deployment contracts, scaling pressure.
-**Source:** JFrog `hyperi` Cargo registry (`hypersec.jfrog.io`), not path dependencies.
+**Source:** crates.io (`hyperi-rustlib`). **NEVER use a path dependency to
+`/projects/hyperi-rustlib` in Cargo.toml** — always consume the published crate.
+The local checkout at `/projects/hyperi-rustlib` is for browsing source code only.
 
 ---
 
@@ -213,9 +215,10 @@ Key paths for enrichment/custom function work:
 ## External Dependencies
 
 - **VRL crate** — Transform engine (compiler + runtime + stdlib)
-- **hyperi-rustlib** — Shared Rust library from JFrog `hyperi` registry (CLI, deployment,
+- **hyperi-rustlib** — Shared Rust library from crates.io (CLI, deployment,
   logger, http-server, metrics, transport-kafka, scaling). Kafka/rdkafka access is via
   rustlib's transport-kafka feature — not a direct rdkafka dependency.
+  **Always via crates.io — never a path dependency.**
 - **dfe-engine** — Python orchestrator (ServicePlugin registration, config registry)
 - **Apache Kafka** — Source and sink for all pipelines
 - **KEDA** — Autoscaling based on Kafka consumer lag
