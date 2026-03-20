@@ -15,10 +15,12 @@
 //!   4. Config file specified by `--config`
 //!   5. Hard-coded defaults
 
+pub mod hot;
 pub mod loader;
 pub mod validate;
 
+pub use hot::HotConfig;
 pub use loader::{
-    Config, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig, SaslConfig, ScalingConfig,
-    SinkConfig, SourceConfig, TlsConfig, TransformConfig,
+    Config, EnrichmentTableConfig, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig,
+    SaslConfig, ScalingConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig,
 };

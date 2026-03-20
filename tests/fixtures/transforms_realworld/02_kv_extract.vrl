@@ -1,0 +1,17 @@
+# Extract key=value pairs from a log message line
+# Input: .message = "user=alice action=login status=success duration=42ms"
+# Output: structured fields under .extracted
+
+if exists(.message) {
+    parsed, err = parse_key_value(.message)
+    if err == null {
+        .extracted = parsed
+        # Convert duration to integer if present
+        if exists(.extracted.duration) {
+            duration_str = string!(.extracted.duration)
+            # Strip "ms" suffix if present
+            duration_str = replace(duration_str, "ms", "")
+            .extracted.duration_ms = to_int(duration_str) ?? null
+        }
+    }
+}

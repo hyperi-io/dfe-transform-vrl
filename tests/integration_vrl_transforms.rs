@@ -25,7 +25,7 @@ mod tests {
 
     fn load_and_compile(config: &TransformConfig) -> vrl::compiler::Program {
         let source = load_vrl_source(config).unwrap();
-        compile_vrl(&source).unwrap().program
+        compile_vrl(&source, None).unwrap().program
     }
 
     #[test]
@@ -35,7 +35,7 @@ mod tests {
             files: None,
         };
         let source = load_vrl_source(&config).unwrap();
-        let result = compile_vrl(&source);
+        let result = compile_vrl(&source, None);
         assert!(
             result.is_ok(),
             "fixture transforms should compile: {}",
@@ -177,7 +177,7 @@ mod tests {
         assert!(source.contains("del(.internal_id)"));
         assert!(source.contains(".meta.processed = true"));
 
-        let result = compile_vrl(&source);
+        let result = compile_vrl(&source, None);
         assert!(result.is_ok());
     }
 }

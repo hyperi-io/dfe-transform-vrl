@@ -9,35 +9,57 @@
 //! Event processing pipeline.
 //!
 //! Orchestrates the data flow:
-//! 1. Consume batch from Kafka via rustlib `KafkaTransport`
+//! 1. Consume batch from source transport
 //! 2. Deserialise to VRL Value (auto-sensing format via rustlib)
 //! 3. Run VRL transforms in-process
 //! 4. Serialise back to original format
-//! 5. Produce to sink Kafka topic via rustlib `KafkaTransport`
+//! 5. Produce to sink transport
 //! 6. Commit consumer offsets after delivery confirmation
+//!
+//! The pipeline is generic over the `Transport` trait, allowing:
+//! - `KafkaTransport` in production
+//! - `MemoryTransport` in unit tests (no Kafka broker needed)
+//!
+//! Hot-reloadable config (`batch_size`, `batch_timeout_ms`, `key_field`,
+//! `scaling_pressure_threshold`) is read from `SharedConfig<HotConfig>`
+//! at the start of each batch. See [`crate::config::hot`] for the full
+//! classification of hot vs restart-required fields.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
-use hyperi_rustlib::transport::kafka::KafkaTransport;
+use hyperi_rustlib::config::shared::SharedConfig;
+use hyperi_rustlib::logger::{log_debounced, log_sampled, log_state_change, security};
+use hyperi_rustlib::memory::MemoryGuard;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
+
+// Per-site log spam guards
+static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
+static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
+static PRODUCE_ERRORS: AtomicU64 = AtomicU64::new(0);
+static BACKPRESSURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static BATCH_ERROR_TS: AtomicU64 = AtomicU64::new(0);
+static MEMORY_PRESSURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
 use crate::config::Config;
+use crate::config::hot::HotConfig;
 use crate::engine::runner::run_vrl;
 use crate::kafka;
 use crate::metrics::TransformMetrics;
 
-/// Run the transform pipeline until shutdown is signalled.
+/// Run the transform pipeline with Kafka transports (production entry point).
 pub async fn run(
     config: &Config,
     program: Arc<Program>,
+    hot_config: SharedConfig<HotConfig>,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
-    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    memory_guard: Arc<MemoryGuard>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
     let consumer_config = kafka::build_consumer_config(&config.source);
     let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
@@ -55,33 +77,106 @@ pub async fn run(
     let consumer = kafka::create_consumer(&consumer_config).await?;
     let producer = kafka::create_producer(&producer_config).await?;
 
+    run_with_transport(
+        &consumer,
+        &producer,
+        program,
+        hot_config,
+        payload_format,
+        transform_metrics,
+        ready_flag,
+        memory_guard,
+        shutdown_rx,
+    )
+    .await
+}
+
+/// Run the transform pipeline with any `Transport` implementation.
+///
+/// Generic over `T: Transport` so the same pipeline logic works with
+/// `KafkaTransport` (production) and `MemoryTransport` (tests).
+///
+/// Hot-reloadable fields (`batch_size`, `batch_timeout_ms`, `key_field`)
+/// are read from `SharedConfig<HotConfig>` at the start of each batch.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_with_transport<T: Transport>(
+    consumer: &T,
+    producer: &T,
+    program: Arc<Program>,
+    hot_config: SharedConfig<HotConfig>,
+    payload_format: PayloadFormat,
+    transform_metrics: &TransformMetrics,
+    ready_flag: Arc<AtomicBool>,
+    memory_guard: Arc<MemoryGuard>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.pipeline_ready(true);
+    }
     info!("pipeline ready — entering event loop");
 
     loop {
+        // Memory pressure check — stall consuming until pressure drops
+        if memory_guard.under_pressure() {
+            if log_state_change(&MEMORY_PRESSURE_ACTIVE, true) {
+                warn!(
+                    current_bytes = memory_guard.current_bytes(),
+                    limit_bytes = memory_guard.limit_bytes(),
+                    "memory pressure HIGH — pausing consumer"
+                );
+            }
+            ready_flag.store(false, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.pipeline_ready(false);
+                dfe.scaling_memory_pressure(memory_guard.pressure_ratio());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        if log_state_change(&MEMORY_PRESSURE_ACTIVE, false) {
+            info!("memory pressure recovered — resuming consumer");
+            ready_flag.store(true, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.pipeline_ready(true);
+                dfe.scaling_memory_pressure(memory_guard.pressure_ratio());
+            }
+        }
+
+        // Read hot config each iteration — picks up runtime changes
+        let hot = hot_config.get();
+        let batch_timeout = Duration::from_millis(hot.batch_timeout_ms);
+
         tokio::select! {
             _ = shutdown_rx.changed() => {
                 info!("shutdown signal received, draining pipeline");
                 break;
             }
             result = process_batch(
-                &consumer,
-                &producer,
+                consumer,
+                producer,
                 &program,
-                &config.sink.key_field,
-                config.pipeline.batch_size,
+                &hot.key_field,
+                hot.batch_size,
+                batch_timeout,
                 payload_format,
                 transform_metrics,
+                &memory_guard,
             ) => {
-                if let Err(e) = result {
-                    error!(error = %e, "batch processing error");
+                if let Err(e) = result
+                    && log_debounced(&BATCH_ERROR_TS, 5000)
+                {
+                    error!(error = %e, "batch processing error (max 1/5s)");
                 }
             }
         }
     }
 
     ready_flag.store(false, Ordering::Release);
-    info!("closing Kafka transports");
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.pipeline_ready(false);
+    }
+    info!("closing transports");
     let _ = consumer.close().await;
     let _ = producer.close().await;
 
@@ -89,29 +184,45 @@ pub async fn run(
 }
 
 /// Process a single batch: consume → transform → produce → commit.
+///
+/// Uses `batch_timeout` to bound how long we wait for a full batch. If the
+/// timeout fires before `batch_size` messages arrive, we process what we have.
+/// This prevents latency spikes at low volume.
 #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
-async fn process_batch(
-    consumer: &KafkaTransport,
-    producer: &KafkaTransport,
+async fn process_batch<T: Transport>(
+    consumer: &T,
+    producer: &T,
     program: &Program,
     key_field: &str,
     batch_size: usize,
+    batch_timeout: Duration,
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
+    memory_guard: &MemoryGuard,
 ) -> crate::Result<()> {
-    let messages = consumer
-        .recv(batch_size)
-        .await
-        .map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?;
+    let messages = match tokio::time::timeout(batch_timeout, consumer.recv(batch_size)).await {
+        Ok(result) => result.map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?,
+        Err(_elapsed) => {
+            // Timeout — no messages arrived within the batch window
+            return Ok(());
+        }
+    };
 
     if messages.is_empty() {
         return Ok(());
     }
 
+    // Track batch memory in the guard
+    let batch_bytes: u64 = messages.iter().map(|m| m.payload.len() as u64).sum();
+    memory_guard.add_bytes(batch_bytes);
+
     let batch_len = messages.len();
     transform_metrics
         .events_received
         .increment(batch_len as u64);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.records_received(batch_len as u64);
+    }
     transform_metrics.batch_size.record(batch_len as f64);
     debug!(count = batch_len, "consumed batch");
 
@@ -132,7 +243,10 @@ async fn process_batch(
         let mut value = match deser_result {
             Ok(v) => v,
             Err(e) => {
-                warn!(error = %e, "failed to deserialise event, skipping");
+                if log_sampled(&DESER_ERRORS, 1000) {
+                    warn!(error = %e, total = DESER_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
+                }
+                security::input_validation_failure("deserialise", &e.to_string(), None);
                 failed_count += 1;
                 commit_tokens.push(msg.token.clone());
                 continue;
@@ -141,8 +255,20 @@ async fn process_batch(
 
         match run_vrl(program, &mut value) {
             Ok(_) => {}
+            Err(crate::Error::VrlAbort(ref reason)) => {
+                debug!(reason = %reason, "event dropped by VRL abort");
+                transform_metrics.events_filtered.increment(1);
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.records_filtered(1);
+                }
+                commit_tokens.push(msg.token.clone());
+                continue;
+            }
             Err(e) => {
-                warn!(error = %e, "VRL transform error, skipping event");
+                if log_sampled(&VRL_ERRORS, 1000) {
+                    warn!(error = %e, total = VRL_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
+                }
+                security::input_validation_failure("vrl_transform", &e.to_string(), None);
                 failed_count += 1;
                 commit_tokens.push(msg.token.clone());
                 continue;
@@ -157,20 +283,44 @@ async fn process_batch(
         match producer.send(key_str, &serialized).await {
             SendResult::Ok => {
                 produced_count += 1;
+                if log_state_change(&BACKPRESSURE_ACTIVE, false) {
+                    info!("producer backpressure cleared");
+                }
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_sent("kafka", 1);
+                }
             }
             SendResult::Backpressured => {
-                warn!("producer backpressure, retrying after yield");
+                if log_state_change(&BACKPRESSURE_ACTIVE, true) {
+                    warn!("producer backpressure active");
+                }
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_backpressured("kafka", 1);
+                }
                 tokio::task::yield_now().await;
                 match producer.send(key_str, &serialized).await {
-                    SendResult::Ok => produced_count += 1,
+                    SendResult::Ok => {
+                        produced_count += 1;
+                        if let Some(ref dfe) = transform_metrics.dfe {
+                            dfe.transport_sent("kafka", 1);
+                        }
+                    }
                     other => {
-                        error!(result = ?other, "produce failed after retry");
+                        if log_sampled(&PRODUCE_ERRORS, 1000) {
+                            error!(result = ?other, total = PRODUCE_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "produce failed (sampled 1/1000)");
+                        }
                         failed_count += 1;
+                        if let Some(ref dfe) = transform_metrics.dfe {
+                            dfe.transport_send_errors("kafka", 1);
+                        }
                     }
                 }
             }
             SendResult::Fatal(e) => {
                 error!(error = %e, "fatal produce error");
+                if let Some(ref dfe) = transform_metrics.dfe {
+                    dfe.transport_send_errors("kafka", 1);
+                }
                 return Err(crate::Error::Kafka(format!("produce failed: {e}")));
             }
         }
@@ -184,6 +334,20 @@ async fn process_batch(
         .record(elapsed.as_secs_f64());
     transform_metrics.events_produced.increment(produced_count);
     transform_metrics.events_failed.increment(failed_count);
+    transform_metrics
+        .memory_used_bytes
+        .set(memory_guard.current_bytes() as f64);
+    transform_metrics
+        .memory_limit_bytes
+        .set(memory_guard.limit_bytes() as f64);
+    let pressure = memory_guard.pressure_ratio();
+    transform_metrics.scaling_pressure.set(pressure * 100.0);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.records_delivered(produced_count);
+        dfe.transport_send_duration("kafka", elapsed.as_secs_f64());
+        dfe.scaling_pressure(pressure * 100.0);
+        dfe.scaling_memory_pressure(pressure);
+    }
 
     if !commit_tokens.is_empty() {
         consumer
@@ -191,6 +355,9 @@ async fn process_batch(
             .await
             .map_err(|e| crate::Error::Kafka(format!("offset commit error: {e}")))?;
     }
+
+    // Release tracked memory after batch is fully committed
+    memory_guard.release(batch_bytes);
 
     debug!(
         produced = produced_count,
@@ -227,19 +394,26 @@ fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8
 }
 
 /// Extract a key from the event for Kafka partition routing.
+///
+/// Supports dot-separated paths (e.g., `.org_id`, `.host.name`, `.meta.tenant_id`).
+/// Walks the nested object tree following each path segment.
 fn extract_key(value: &Value, key_field: &str) -> Option<String> {
     if key_field.is_empty() {
         return None;
     }
 
-    let field = key_field.strip_prefix('.').unwrap_or(key_field);
-    value
-        .as_object()
-        .and_then(|obj| obj.get(field))
-        .map(|v| match v {
-            Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
-            other => format!("{other}"),
-        })
+    let path = key_field.strip_prefix('.').unwrap_or(key_field);
+    let segments: Vec<&str> = path.split('.').collect();
+
+    let mut current = value;
+    for segment in &segments {
+        current = current.as_object()?.get(*segment)?;
+    }
+
+    Some(match current {
+        Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+        other => format!("{other}"),
+    })
 }
 
 #[cfg(test)]
@@ -299,6 +473,27 @@ mod tests {
     fn test_extract_key_missing() {
         let value = Value::from(serde_json::json!({"x": 1}));
         assert_eq!(extract_key(&value, ".missing"), None);
+    }
+
+    #[test]
+    fn test_extract_key_nested() {
+        let value = Value::from(serde_json::json!({"host": {"name": "prod-web-01"}}));
+        assert_eq!(
+            extract_key(&value, ".host.name"),
+            Some("prod-web-01".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_key_deeply_nested() {
+        let value = Value::from(serde_json::json!({"a": {"b": {"c": "deep"}}}));
+        assert_eq!(extract_key(&value, ".a.b.c"), Some("deep".to_string()));
+    }
+
+    #[test]
+    fn test_extract_key_nested_missing() {
+        let value = Value::from(serde_json::json!({"host": {"ip": "1.2.3.4"}}));
+        assert_eq!(extract_key(&value, ".host.name"), None);
     }
 
     #[test]

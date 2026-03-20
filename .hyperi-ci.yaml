@@ -1,0 +1,47 @@
+# Project:   dfe-transform-vrl
+# File:      .hyperi-ci.yaml
+# Purpose:   CI configuration for hyperi-ci
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+# Project language (auto-detected if not specified)
+language: rust
+
+# Quality checks
+quality:
+  enabled: true
+  rust:
+    features: default
+
+# Testing
+test:
+  enabled: true
+  coverage: true
+
+# Building
+build:
+  enabled: true
+  type: app
+  strategies:
+    - native
+  rust:
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+
+# Publishing (on release)
+publish:
+  enabled: true
+  target: internal
+  binaries: both
+  container:
+    enabled: true
+    registry: jfrog
+    dockerfile: Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+  helm:
+    enabled: true
+    registry: jfrog

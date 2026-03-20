@@ -25,6 +25,9 @@ pub enum Error {
     #[error("VRL runtime error: {0}")]
     VrlRuntime(String),
 
+    #[error("VRL abort: {0}")]
+    VrlAbort(String),
+
     #[error("Kafka error: {0}")]
     Kafka(String),
 

@@ -59,9 +59,10 @@
 - [x] 2.2.3 ConfigMap and Secret templates
 
 ### 2.3 CI/CD
-- [ ] 2.3.1 GitHub Actions workflows (build, test, release)
-- [ ] 2.3.2 Container image build and push
-- [ ] 2.3.3 Helm chart packaging
+- [x] 2.3.1 Migrate to hyperi-ci (replaces legacy ci submodule)
+- [ ] 2.3.2 GitHub Actions workflows (build, test, release) — blocked on hyperi-ci rewrite
+- [ ] 2.3.3 Container image build and push
+- [ ] 2.3.4 Helm chart packaging
 
 ## Phase 3: Testing & Hardening
 
@@ -75,11 +76,15 @@
 ### 3.2 Integration Tests
 - [x] 3.2.1 VRL transforms against fixture files
 - [x] 3.2.2 Config cascade (YAML + env vars)
+- [x] 3.2.3 VRL edge cases — type coercion, abort, nulls, unicode, nested, arrays
+- [x] 3.2.4 VRL real-world patterns — syslog, JSON manipulation, conditional routing
+- [x] 3.2.5 Known-should-fail transforms — runtime errors, invalid field access
 
 ### 3.3 E2E Tests
-- [ ] 3.3.1 Kafka testcontainers — produce msgpack → transform → consume transformed
-- [ ] 3.3.2 Kafka testcontainers — produce JSON → transform → consume transformed
-- [ ] 3.3.3 At-least-once guarantee — crash recovery, offset commit verification
+- [x] 3.3.1 Kafka produce JSON → VRL transform → consume transformed (integration_kafka.rs)
+- [x] 3.3.2 Kafka produce msgpack → VRL transform → consume transformed (integration_kafka.rs)
+- [x] 3.3.3 VRL abort drops events — only keep=true events forwarded to sink
+- [ ] 3.3.4 At-least-once guarantee — crash recovery, offset commit verification
 
 ## Phase 4: dfe-engine Integration
 
@@ -87,3 +92,99 @@
 - [x] 4.1.1 Python ServicePlugin (ServiceDescriptor, Pydantic config model)
 - [x] 4.1.2 HelmValuesCompiler integration
 - [ ] 4.1.3 dfe-core ApplicationSet and common values
+
+## Phase 5: VRL Enrichment Tables
+
+Deliberate subset of Vector.dev enrichment tables — just VRL + enrich, no
+Vector runtime. Fail-fast on startup if enrichment files are missing or malformed.
+
+### 5.1 Enrichment Table Loading
+- [x] 5.1.1 Config schema — `enrichment_tables` section: name, path, key_columns
+- [x] 5.1.2 CSV file loader — read CSV to `HashMap<Key, Row>` at startup
+- [x] 5.1.3 JSON file loader — read JSON array to `HashMap<Key, Row>` at startup
+- [x] 5.1.4 Fail-fast validation — missing file, malformed data, duplicate keys → abort startup
+- [x] 5.1.5 Unit tests for CSV/JSON loading, missing file, malformed data
+
+### 5.2 VRL TableRegistry Integration
+- [x] 5.2.1 Custom VRL functions (get_enrichment_table_record, find_enrichment_table_records)
+- [x] 5.2.2 Pass populated registry to VRL compiler via Arc<EnrichmentRegistry>
+- [x] 5.2.3 VRL programs can use `get_enrichment_table_record("name", {"key": .field})`
+- [x] 5.2.4 Table name not found at runtime → VRL error (caught at startup via test compile)
+- [x] 5.2.5 Unit tests for registry lookup, missing table, missing key
+
+### 5.3 Integration Tests
+- [x] 5.3.1 End-to-end: CSV enrichment table + VRL transform
+- [x] 5.3.2 End-to-end: JSON enrichment table + VRL transform
+- [x] 5.3.3 Startup failure: missing enrichment file
+- [x] 5.3.4 Startup failure: VRL references non-existent table name
+
+### Design Decisions
+
+**What we implement:**
+- CSV and JSON flat-file enrichment tables loaded at startup
+- `HashMap<Key, Row>` backing — O(1) lookup, no disk I/O at runtime
+- Tables immutable for process lifetime (K8s restarts on ConfigMap change)
+- Standard VRL `get_enrichment_table_record()` / `find_enrichment_table_records()` syntax
+
+**What we deliberately skip:**
+- No hot-reload of enrichment files (restart the pod — K8s way)
+- No `file_regex` / glob patterns (explicit file paths only)
+- No GeoIP `.mmdb` support (just CSV/JSON flat tables)
+- No `type: grok_pattern` tables (use VRL `parse_groks` stdlib instead)
+
+**Fail-on-start behaviour:**
+- File not found → startup error, pod CrashLoopBackOff
+- File not parseable → startup error
+- VRL program references a table name that doesn't exist → compilation error (caught at startup)
+
+**Config example:**
+```yaml
+enrichment_tables:
+  - name: "geo_lookup"
+    path: "/etc/dfe/enrichment/geo.csv"
+    key_columns: ["ip_range"]
+  - name: "service_map"
+    path: "/etc/dfe/enrichment/services.json"
+    key_columns: ["service_id"]
+```
+
+## Phase 6: Hardening & Observability (Completed)
+
+### 6.1 Code Review Fixes
+- [x] 6.1.1 SIGTERM handling alongside SIGINT
+- [x] 6.1.2 Batch timeout in pipeline recv (batch_timeout_ms)
+- [x] 6.1.3 Separate events_filtered (abort) from events_failed (error) metrics
+- [x] 6.1.4 Nested dot-path support in extract_key
+- [x] 6.1.5 Clippy clean, profiling profile, deny.toml fix
+
+### 6.2 Hot-Reload
+- [x] 6.2.1 SharedConfig<HotConfig> for batch_size, batch_timeout_ms, retry, scaling
+- [x] 6.2.2 Pipeline reads hot fields each batch cycle
+- [x] 6.2.3 Config struct documented with hot-reload vs restart-required classification
+
+### 6.3 Rustlib 1.16.3 Remediation
+- [x] 6.3.1 Migrate apply_env_overrides() to ApplyFlatEnv trait
+- [x] 6.3.2 Add DfeMetrics dual-emit alongside existing metrics
+- [x] 6.3.3 Wire security events into auth/TLS/config reload sites
+- [x] 6.3.4 Fix log spam sites
+
+### 6.4 Infrastructure
+- [x] 6.4.1 Migrate to hyperi-ci (replace legacy ci submodule)
+- [x] 6.4.2 Update hyperi-ai submodule
+- [x] 6.4.3 Add Renovate config
+- [x] 6.4.4 Uniform Transport trait usage for Kafka layer
+
+### 6.5 Rustlib 1.16.5 — MemoryGuard + DfeSource
+- [x] 6.5.1 Bump rustlib to >=1.16.5, add `memory` feature
+- [x] 6.5.2 Add MemoryGuard (Pattern B — pause consumer under memory pressure)
+- [x] 6.5.3 Wire under_pressure() into readiness probe (ready=false during pressure)
+- [x] 6.5.4 Add memory_used_bytes / memory_limit_bytes Prometheus gauges
+- [x] 6.5.5 Add DfeSource topic naming helpers (derive_dfe_source, derive_consumer_group)
+
+## Open Items
+
+- [ ] CI workflows — blocked on hyperi-ci rewrite completing
+- [ ] At-least-once guarantee E2E test (3.3.4) — crash recovery, offset commit verification
+- [ ] dfe-core ApplicationSet integration (4.1.3)
+- [ ] Rustlib capability review — audit for bespoke code that duplicates rustlib features (especially kafka/ → rustlib transport-kafka)
+- [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`

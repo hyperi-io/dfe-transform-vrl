@@ -1,13 +1,3 @@
-## CI UNAVAILABLE — Commit with [skip ci]
-
-The CI system is being completely rewritten. Until migration instructions are provided:
-
-- **All commits MUST include `[skip ci]` in the commit message**
-- Do not trigger CI runs or rely on CI for validation
-- Run `./ci/local-build.sh` for local validation if it exists
-
----
-
 # Project Context
 
 **Project:** dfe-transform-vrl
@@ -68,7 +58,7 @@ This project solves both problems by:
 
 ### Key Components
 
-1. **Config Engine** (`src/config/`) — Big-dial config loading (7-layer cascade via hyperi-rustlib), VRL program compilation, validation
+1. **Config Engine** (`src/config/`) — Big-dial config loading (config cascade via rustlib + ApplyFlatEnv), hot-reload via SharedConfig, validation
 2. **VRL Engine** (`src/engine/`) — VRL program compilation, batch execution against events, custom DFE functions
 3. **Kafka Layer** (`src/kafka/`) — rdkafka consumer with offset tracking, producer with delivery confirmation, watermark-based offset commit
 4. **Pipeline** (`src/pipeline.rs`) — Event loop: consume batch → deserialise → transform → serialise → produce → commit
@@ -80,12 +70,14 @@ This project solves both problems by:
 - **Language:** Rust (edition 2024)
 - **Async runtime:** tokio
 - **Transform engine:** VRL crate (embedded, no Vector subprocess)
-- **Shared lib:** hyperi-rustlib (from JFrog `hyperi` registry)
+- **Shared lib:** hyperi-rustlib (from crates.io)
   - `cli` — DfeApp trait, CommonArgs, CLI framework
   - `deployment` — DeploymentContract, Dockerfile/Helm/Compose generation
   - `logger` — Structured logging with masking (tracing-based)
   - `http-server` — Axum HTTP server with built-in `/health/live`, `/health/ready`
-  - `metrics` — MetricsManager, Prometheus counters/gauges/histograms + server
+  - `metrics` — MetricsManager, DfeMetrics, Prometheus counters/gauges/histograms + server
+  - `config` — ApplyFlatEnv trait, SharedConfig, ConfigReloader (hot-reload)
+  - `security` — Security event reporting (auth, TLS, config changes)
   - `transport-kafka` — KafkaTransport (rdkafka), KafkaConfig, offset commit
   - `transport` — FormatDetector, PayloadFormat, serialize/parse payload helpers
   - `scaling` — Scaling pressure calculation for KEDA
@@ -155,10 +147,12 @@ rather than hand-rolling functionality.
 **Rationale:** Maintainability, testability, and leverage. Each module can be reasoned
 about independently, and crate-backed implementations get upstream bug fixes for free.
 **Module map:**
-- `config/` — Config schema and loading (`figment`, `serde_yaml_ng`, `dotenvy`)
+- `config/` — Config schema, loading, validation (`figment`, `serde_yaml_ng`, `dotenvy`)
+- `config/hot.rs` — HotConfig struct, SharedConfig wiring for hot-reload
 - `engine/` — VRL compilation and execution (`vrl` crate)
 - `kafka/` — Kafka transport wiring (`hyperi-rustlib` transport-kafka)
 - `pipeline.rs` — Event loop orchestrating consume → transform → produce
+- `cli.rs` — DfeApp trait impl, CLI commands (run, version, config-check, emit-*)
 - `health.rs` — Health endpoints (`hyperi-rustlib` http-server)
 - `metrics.rs` — Prometheus metrics (`hyperi-rustlib` metrics, `metrics` crate)
 - `deployment.rs` — Container/chart generation (`hyperi-rustlib` deployment)
@@ -170,7 +164,7 @@ about independently, and crate-backed implementations get upstream bug fixes for
 **Rationale:** Reviewed against dfe-transform-wasm's `crates/` workspace pattern.
 The wasm project needs separate crates because it ships an SDK to external users
 (host, sdk, wit, test-harness — each serves a different consumer). dfe-transform-vrl
-has one consumer (the binary itself), no external API, and is ~2.1k lines. Splitting
+has one consumer (the binary itself), no external API, and is a single-crate binary. Splitting
 would add Cargo.toml overhead, workspace dependency management, and feature flag
 complexity with no benefit. Revisit if an external-facing VRL function SDK is added.
 
@@ -181,16 +175,40 @@ duplicates rustlib functionality.
 **Rationale:** Consistency across DFE services, reduced maintenance, shared bug fixes.
 **Applies to:** HTTP server, health endpoints, metrics, Kafka transport, format detection,
 config cascade, CLI framework, logging, deployment contracts, scaling pressure.
-**Source:** JFrog `hyperi` Cargo registry (`hypersec.jfrog.io`), not path dependencies.
+**Source:** crates.io (`hyperi-rustlib`). **NEVER use a path dependency to
+`/projects/hyperi-rustlib` in Cargo.toml** — always consume the published crate.
+The local checkout at `/projects/hyperi-rustlib` is for browsing source code only.
+
+---
+
+## VRL Source Reference
+
+The VRL crate source is available at `/projects/vrl` (shallow clone of
+`github.com/vectordotdev/vrl`) for browsing APIs, traits, and function patterns.
+This is a reference checkout only — the project depends on VRL via crates.io,
+not a path dependency. If `/projects/vrl` doesn't exist (e.g. fresh clone on
+another machine), clone it:
+
+```bash
+git clone --depth 1 https://github.com/vectordotdev/vrl /projects/vrl
+```
+
+Key paths for enrichment/custom function work:
+- `src/compiler/function.rs` — `Function` trait (custom function interface)
+- `src/compiler/expression/function.rs` — `FunctionExpression` trait (runtime resolve)
+- `src/compiler/compile_config.rs` — `CompileConfig` (inject custom context via `set_custom`)
+- `src/compiler/context.rs` — `Context` (runtime target + state)
+- `src/stdlib/` — Reference implementations of all stdlib functions
 
 ---
 
 ## External Dependencies
 
 - **VRL crate** — Transform engine (compiler + runtime + stdlib)
-- **hyperi-rustlib** — Shared Rust library from JFrog `hyperi` registry (CLI, deployment,
+- **hyperi-rustlib** — Shared Rust library from crates.io (CLI, deployment,
   logger, http-server, metrics, transport-kafka, scaling). Kafka/rdkafka access is via
   rustlib's transport-kafka feature — not a direct rdkafka dependency.
+  **Always via crates.io — never a path dependency.**
 - **dfe-engine** — Python orchestrator (ServicePlugin registration, config registry)
 - **Apache Kafka** — Source and sink for all pipelines
 - **KEDA** — Autoscaling based on Kafka consumer lag

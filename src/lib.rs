@@ -11,9 +11,11 @@
 //! Wrapper-controlled Kafka source/sink with in-process VRL transforms,
 //! native msgpack support, and bounded memory.
 
+pub mod cli;
 pub mod config;
 pub mod deployment;
 pub mod engine;
+pub mod enrichment;
 pub mod error;
 pub mod health;
 pub mod kafka;

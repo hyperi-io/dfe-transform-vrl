@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 
+use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
 use hyperi_rustlib::transport::PayloadFormat;
 use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 
@@ -99,6 +100,45 @@ pub fn parse_format(format_str: &str) -> PayloadFormat {
         "msgpack" => PayloadFormat::MsgPack,
         _ => PayloadFormat::Auto,
     }
+}
+
+/// Derive a `DfeSource` from the first configured source topic.
+///
+/// If the topic follows DFE naming convention (`{source}_land`), extracts
+/// the source name. Otherwise returns `None`.
+pub fn derive_dfe_source(source: &config::SourceConfig) -> Option<DfeSource> {
+    source
+        .topics
+        .first()
+        .and_then(|topic| DfeSource::source_from_topic(topic))
+        .map(DfeSource::new)
+}
+
+/// Derive a consumer group ID using DFE naming conventions.
+///
+/// Uses `DfeSource` if a source can be derived from the topic name,
+/// falling back to the explicit `group_id` from config. The explicit
+/// config always takes precedence (it may be set by dfe-engine).
+pub fn derive_consumer_group(source: &config::SourceConfig, pipeline_name: &str) -> String {
+    // Explicit config wins — dfe-engine sets this via env var
+    if !source.group_id.is_empty() {
+        return source.group_id.clone();
+    }
+
+    // Try DfeSource convention
+    if let Some(dfe_source) = derive_dfe_source(source)
+        && let Ok(cg) = dfe_source.consumer_group(
+            "transform-vrl",
+            ServiceRole::Transform,
+            Some(pipeline_name),
+            None,
+        )
+    {
+        return cg;
+    }
+
+    // Ultimate fallback
+    format!("dfe-transform-vrl-{pipeline_name}")
 }
 
 fn apply_sasl_tls(
@@ -290,6 +330,63 @@ mod tests {
     fn test_parse_format_unknown_defaults_to_auto() {
         assert_eq!(parse_format("avro"), PayloadFormat::Auto);
         assert_eq!(parse_format(""), PayloadFormat::Auto);
+    }
+
+    #[test]
+    fn test_derive_dfe_source_from_land_topic() {
+        let source = SourceConfig {
+            topics: vec!["syslog_land".into()],
+            ..SourceConfig::default()
+        };
+        let dfe = derive_dfe_source(&source).unwrap();
+        assert_eq!(dfe.name(), "syslog");
+        assert_eq!(dfe.input_topic(), "syslog_land");
+        assert_eq!(dfe.output_topic(), "syslog_load");
+    }
+
+    #[test]
+    fn test_derive_dfe_source_no_convention() {
+        let source = SourceConfig {
+            topics: vec!["custom-topic".into()],
+            ..SourceConfig::default()
+        };
+        assert!(derive_dfe_source(&source).is_none());
+    }
+
+    #[test]
+    fn test_derive_consumer_group_explicit_wins() {
+        let source = SourceConfig {
+            group_id: "explicit-cg".into(),
+            topics: vec!["syslog_land".into()],
+            ..SourceConfig::default()
+        };
+        assert_eq!(derive_consumer_group(&source, "my-pipeline"), "explicit-cg");
+    }
+
+    #[test]
+    fn test_derive_consumer_group_from_source() {
+        let source = SourceConfig {
+            group_id: String::new(),
+            topics: vec!["syslog_land".into()],
+            ..SourceConfig::default()
+        };
+        assert_eq!(
+            derive_consumer_group(&source, "my-pipeline"),
+            "dfe-transform-vrl-my-pipeline"
+        );
+    }
+
+    #[test]
+    fn test_derive_consumer_group_fallback() {
+        let source = SourceConfig {
+            group_id: String::new(),
+            topics: vec!["custom-topic".into()],
+            ..SourceConfig::default()
+        };
+        assert_eq!(
+            derive_consumer_group(&source, "my-pipeline"),
+            "dfe-transform-vrl-my-pipeline"
+        );
     }
 
     #[test]

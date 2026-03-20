@@ -1,0 +1,19 @@
+# IP address validation and classification
+# Tags private vs public IPs, validates format
+
+if exists(.source_ip) {
+    ip_str = string!(.source_ip)
+
+    if is_ipv4(ip_str) || is_ipv6(ip_str) {
+        .ip_valid = true
+        # Check for RFC1918 private ranges
+        if starts_with(ip_str, "10.") || starts_with(ip_str, "172.") || starts_with(ip_str, "192.168.") || ip_str == "127.0.0.1" {
+            .ip_class = "private"
+        } else {
+            .ip_class = "public"
+        }
+    } else {
+        .ip_valid = false
+        .ip_class = "invalid"
+    }
+}

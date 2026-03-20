@@ -12,8 +12,8 @@
 //! in its container image. The container is just the Rust binary.
 
 use hyperi_rustlib::deployment::{
-    DeploymentContract, HealthContract, KedaContract, PortContract, SecretEnvContract,
-    SecretGroupContract,
+    DeploymentContract, HealthContract, ImageProfile, KedaContract, NativeDepsContract,
+    PortContract, SecretEnvContract, SecretGroupContract,
 };
 
 /// Build the deployment contract for dfe-transform-vrl.
@@ -84,6 +84,8 @@ pub fn contract() -> DeploymentContract {
             "metrics": { "address": "0.0.0.0:9090" }
         })),
         depends_on: vec!["kafka".into()],
+        native_deps: NativeDepsContract::for_rustlib_features(&["transport-kafka"], "ubuntu:24.04"),
+        image_profile: ImageProfile::Production,
         keda: Some(KedaContract {
             min_replicas: 1,
             max_replicas: 10,

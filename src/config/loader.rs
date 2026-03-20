@@ -53,6 +53,28 @@ pub struct TlsConfig {
 }
 
 /// Main configuration.
+///
+/// ## Hot-reload classification
+///
+/// **Hot-reloaded** (takes effect on next batch, via `SharedConfig<HotConfig>`):
+/// - `pipeline.batch_size`
+/// - `pipeline.batch_timeout_ms`
+/// - `sink.key_field`
+/// - `scaling.pressure_threshold`
+///
+/// **Requires pod restart** (bound at startup):
+/// - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
+/// - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
+/// - `sink.brokers` — rdkafka producer connection established at startup
+/// - `sink.topic` — output topic (changing mid-stream risks data loss)
+/// - `sink.compression` — rdkafka `compression.type` set at producer creation
+/// - `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation
+/// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
+/// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
+/// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
+/// - `health.address` — HTTP server binds to socket at startup
+/// - `metrics.address` — metrics server binds to socket at startup
+/// - `logging.*` — tracing subscriber configured at startup
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -60,10 +82,26 @@ pub struct Config {
     pub source: SourceConfig,
     pub sink: SinkConfig,
     pub transforms: TransformConfig,
+    #[serde(default)]
+    pub enrichment_tables: Vec<EnrichmentTableConfig>,
     pub health: HealthConfig,
     pub metrics: MetricsConfig,
     pub logging: LoggingConfig,
     pub scaling: ScalingConfig,
+}
+
+/// Enrichment table file reference.
+///
+/// Tables are loaded at startup into `HashMap<Key, Row>` for O(1) lookups.
+/// Immutable for the process lifetime — restart the pod to update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrichmentTableConfig {
+    /// Table name used in VRL: `get_enrichment_table_record("name", ...)`.
+    pub name: String,
+    /// Path to the enrichment data file (.csv or .json).
+    pub path: String,
+    /// Column(s) used as the lookup key. Multiple columns are concatenated.
+    pub key_columns: Vec<String>,
 }
 
 /// Pipeline identity and processing settings.
@@ -235,100 +273,95 @@ impl Default for ScalingConfig {
 }
 
 // =============================================================================
-// Config loading cascade
+// Config loading cascade — uses rustlib flat_env helpers
 // =============================================================================
+
+use hyperi_rustlib::config::flat_env::{
+    ApplyFlatEnv, Normalize, flat_env_list, flat_env_string, flat_env_string_sensitive,
+};
 
 const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
-fn env_var(name: &str) -> Option<String> {
-    std::env::var(format!("{ENV_PREFIX}_{name}")).ok()
+/// Flat env overrides for K8s-friendly single-underscore env vars.
+///
+/// Env var names are the contract with dfe-engine — do not rename.
+/// Uses rustlib `flat_env_*` helpers for consistent parsing and logging.
+impl ApplyFlatEnv for Config {
+    fn apply_flat_env(&mut self, prefix: &str) {
+        // Pipeline
+        if let Some(v) = flat_env_string(prefix, "PIPELINE_NAME") {
+            self.pipeline.name = v;
+        }
+        // Source
+        if let Some(v) = flat_env_list(prefix, "SOURCE_BROKERS") {
+            self.source.brokers = v;
+        }
+        if let Some(v) = flat_env_list(prefix, "SOURCE_TOPICS") {
+            self.source.topics = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SOURCE_GROUP_ID") {
+            self.source.group_id = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SOURCE_FORMAT") {
+            self.source.format = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SOURCE_SASL_USERNAME") {
+            self.source.sasl.username = v;
+        }
+        if let Some(v) = flat_env_string_sensitive(prefix, "SOURCE_SASL_PASSWORD") {
+            self.source.sasl.password = v;
+        }
+        // Sink
+        if let Some(v) = flat_env_list(prefix, "SINK_BROKERS") {
+            self.sink.brokers = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_TOPIC") {
+            self.sink.topic = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_KEY_FIELD") {
+            self.sink.key_field = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_COMPRESSION") {
+            self.sink.compression = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_SASL_USERNAME") {
+            self.sink.sasl.username = v;
+        }
+        if let Some(v) = flat_env_string_sensitive(prefix, "SINK_SASL_PASSWORD") {
+            self.sink.sasl.password = v;
+        }
+        // Transforms
+        if let Some(v) = flat_env_string(prefix, "TRANSFORMS_DIR") {
+            self.transforms.dir = Some(v);
+        }
+        // Infra
+        if let Some(v) = flat_env_string(prefix, "HEALTH_ADDRESS") {
+            self.health.address = v;
+        }
+        if let Some(v) = flat_env_string(prefix, "METRICS_ADDRESS") {
+            self.metrics.address = v;
+        }
+    }
 }
 
-fn env_var_list(name: &str) -> Option<Vec<String>> {
-    env_var(name).map(|v| v.split(',').map(|s| s.trim().to_string()).collect())
-}
-
-fn apply_figment_env(config: &mut Config) -> Result<()> {
-    use figment::Figment;
-    use figment::providers::{Env, Serialized};
-
-    let figment = Figment::from(Serialized::defaults(&*config))
-        .merge(Env::prefixed(&format!("{ENV_PREFIX}_")).split("__"));
-
-    *config = figment
-        .extract()
-        .map_err(|e| crate::Error::Config(e.to_string()))?;
-    Ok(())
-}
-
-fn apply_env_overrides(config: &mut Config) {
-    if let Some(v) = env_var("PIPELINE_NAME") {
-        config.pipeline.name = v;
-        debug!("override: pipeline.name from env");
-    }
-    if let Some(v) = env_var_list("SOURCE_BROKERS") {
-        config.source.brokers = v;
-        debug!("override: source.brokers from env");
-    }
-    if let Some(v) = env_var_list("SOURCE_TOPICS") {
-        config.source.topics = v;
-        debug!("override: source.topics from env");
-    }
-    if let Some(v) = env_var("SOURCE_GROUP_ID") {
-        config.source.group_id = v;
-        debug!("override: source.group_id from env");
-    }
-    if let Some(v) = env_var("SOURCE_FORMAT") {
-        config.source.format = v;
-        debug!("override: source.format from env");
-    }
-    if let Some(v) = env_var("SOURCE_SASL_USERNAME") {
-        config.source.sasl.enabled = true;
-        config.source.sasl.username = v;
-        debug!("override: source.sasl.username from env");
-    }
-    if let Some(v) = env_var("SOURCE_SASL_PASSWORD") {
-        config.source.sasl.enabled = true;
-        config.source.sasl.password = v;
-        debug!("override: source.sasl.password from env");
-    }
-    if let Some(v) = env_var_list("SINK_BROKERS") {
-        config.sink.brokers = v;
-        debug!("override: sink.brokers from env");
-    }
-    if let Some(v) = env_var("SINK_TOPIC") {
-        config.sink.topic = v;
-        debug!("override: sink.topic from env");
-    }
-    if let Some(v) = env_var("SINK_KEY_FIELD") {
-        config.sink.key_field = v;
-        debug!("override: sink.key_field from env");
-    }
-    if let Some(v) = env_var("SINK_COMPRESSION") {
-        config.sink.compression = v;
-        debug!("override: sink.compression from env");
-    }
-    if let Some(v) = env_var("SINK_SASL_USERNAME") {
-        config.sink.sasl.enabled = true;
-        config.sink.sasl.username = v;
-        debug!("override: sink.sasl.username from env");
-    }
-    if let Some(v) = env_var("SINK_SASL_PASSWORD") {
-        config.sink.sasl.enabled = true;
-        config.sink.sasl.password = v;
-        debug!("override: sink.sasl.password from env");
-    }
-    if let Some(v) = env_var("TRANSFORMS_DIR") {
-        config.transforms.dir = Some(v);
-        debug!("override: transforms.dir from env");
-    }
-    if let Some(v) = env_var("HEALTH_ADDRESS") {
-        config.health.address = v;
-        debug!("override: health.address from env");
-    }
-    if let Some(v) = env_var("METRICS_ADDRESS") {
-        config.metrics.address = v;
-        debug!("override: metrics.address from env");
+/// Normalise config after all sources merge.
+/// Infers implied settings regardless of how values arrived.
+impl Normalize for Config {
+    fn normalize(&mut self) {
+        // Credentials present → enable SASL auth
+        if !self.source.sasl.username.is_empty() {
+            self.source.sasl.enabled = true;
+        }
+        if !self.sink.sasl.username.is_empty() {
+            self.sink.sasl.enabled = true;
+        }
+        // TLS cert present → enable TLS
+        if self.source.tls.ca_cert_file.is_some() {
+            self.source.tls.enabled = true;
+        }
+        if self.sink.tls.ca_cert_file.is_some() {
+            self.sink.tls.enabled = true;
+        }
     }
 }
 
@@ -365,8 +398,24 @@ impl Config {
             }
         }
 
-        apply_figment_env(&mut config)?;
-        apply_env_overrides(&mut config);
+        // Figment env (double-underscore nesting)
+        {
+            use figment::Figment;
+            use figment::providers::{Env, Serialized};
+
+            let figment = Figment::from(Serialized::defaults(&config))
+                .merge(Env::prefixed(&format!("{ENV_PREFIX}_")).split("__"));
+
+            config = figment
+                .extract()
+                .map_err(|e| crate::Error::Config(e.to_string()))?;
+        }
+
+        // Flat env overrides (single-underscore, K8s-friendly)
+        config.apply_flat_env(ENV_PREFIX);
+
+        // Normalise (infer implied settings)
+        config.normalize();
 
         Ok(config)
     }

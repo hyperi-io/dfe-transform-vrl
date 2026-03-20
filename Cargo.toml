@@ -15,7 +15,7 @@ description = "Embedded VRL transform engine — Kafka-to-Kafka with wrapper-con
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vrl"
 rust-version = "1.94"
-exclude = [".claude/", ".github/", "hyperi-ai/", "ci/", "chart/", "docs/"]
+exclude = [".claude/", ".github/", "hyperi-ai/", "chart/", "docs/", ".tmp/"]
 
 [lib]
 name = "dfe_transform_vrl"
@@ -32,13 +32,14 @@ tokio-util = { version = ">=0.7.18", features = ["rt"] }
 
 # Shared library — use for everything it provides. NO bespoke code that
 # duplicates rustlib functionality (see STATE.md: "rustlib first" decision).
-# Local path for development; switch to registry for CI/release:
-# hyperi-rustlib = { version = ">=1.13.1", registry = "hyperi", features = [...] }
-hyperi-rustlib = { path = "/projects/hyperi-rustlib", features = [
+hyperi-rustlib = { version = ">=1.16.6", features = [
     "cli",
+    "config",
+    "config-reload",
     "deployment",
     "http-server",
     "logger",
+    "memory",
     "metrics",
     "scaling",
     "transport",
@@ -71,6 +72,10 @@ anyhow = ">=1.0.98"
 # Logging and tracing
 tracing = ">=0.1.44"
 
+[features]
+default = []
+transport-memory = ["hyperi-rustlib/transport-memory"]
+
 [dev-dependencies]
 tempfile = ">=3.20"
 tokio-test = ">=0.4.4"
@@ -98,3 +103,8 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
