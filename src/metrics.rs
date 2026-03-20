@@ -29,6 +29,8 @@ pub struct TransformMetrics {
     pub transform_duration: metrics::Histogram,
     pub batch_size: metrics::Histogram,
     pub scaling_pressure: metrics::Gauge,
+    pub memory_used_bytes: metrics::Gauge,
+    pub memory_limit_bytes: metrics::Gauge,
 
     // Platform-standard (new — dual-emit alongside existing)
     pub dfe: Option<DfeMetrics>,
@@ -65,6 +67,10 @@ impl TransformMetrics {
                 "scaling_pressure",
                 "KEDA-compatible scaling pressure (0-100)",
             ),
+            memory_used_bytes: manager
+                .gauge("memory_used_bytes", "Current tracked memory usage in bytes"),
+            memory_limit_bytes: manager
+                .gauge("memory_limit_bytes", "Effective memory limit in bytes"),
             dfe: Some(dfe),
         }
     }
@@ -81,6 +87,8 @@ impl Default for TransformMetrics {
             transform_duration: metrics::histogram!("transform_duration_seconds"),
             batch_size: metrics::histogram!("batch_size_events"),
             scaling_pressure: metrics::gauge!("scaling_pressure"),
+            memory_used_bytes: metrics::gauge!("memory_used_bytes"),
+            memory_limit_bytes: metrics::gauge!("memory_limit_bytes"),
             dfe: None,
         }
     }

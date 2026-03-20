@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::logger::{log_debounced, log_sampled, log_state_change, security};
+use hyperi_rustlib::memory::MemoryGuard;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, warn};
 
@@ -40,6 +41,7 @@ static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
 static PRODUCE_ERRORS: AtomicU64 = AtomicU64::new(0);
 static BACKPRESSURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static BATCH_ERROR_TS: AtomicU64 = AtomicU64::new(0);
+static MEMORY_PRESSURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
@@ -56,6 +58,7 @@ pub async fn run(
     hot_config: SharedConfig<HotConfig>,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
+    memory_guard: Arc<MemoryGuard>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
     let consumer_config = kafka::build_consumer_config(&config.source);
@@ -82,6 +85,7 @@ pub async fn run(
         payload_format,
         transform_metrics,
         ready_flag,
+        memory_guard,
         shutdown_rx,
     )
     .await
@@ -103,12 +107,31 @@ pub async fn run_with_transport<T: Transport>(
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
     ready_flag: Arc<AtomicBool>,
+    memory_guard: Arc<MemoryGuard>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
     info!("pipeline ready — entering event loop");
 
     loop {
+        // Memory pressure check — stall consuming until pressure drops
+        if memory_guard.under_pressure() {
+            if log_state_change(&MEMORY_PRESSURE_ACTIVE, true) {
+                warn!(
+                    current_bytes = memory_guard.current_bytes(),
+                    limit_bytes = memory_guard.limit_bytes(),
+                    "memory pressure HIGH — pausing consumer"
+                );
+            }
+            ready_flag.store(false, Ordering::Release);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        if log_state_change(&MEMORY_PRESSURE_ACTIVE, false) {
+            info!("memory pressure recovered — resuming consumer");
+            ready_flag.store(true, Ordering::Release);
+        }
+
         // Read hot config each iteration — picks up runtime changes
         let hot = hot_config.get();
         let batch_timeout = Duration::from_millis(hot.batch_timeout_ms);
@@ -127,6 +150,7 @@ pub async fn run_with_transport<T: Transport>(
                 batch_timeout,
                 payload_format,
                 transform_metrics,
+                &memory_guard,
             ) => {
                 if let Err(e) = result
                     && log_debounced(&BATCH_ERROR_TS, 5000)
@@ -160,6 +184,7 @@ async fn process_batch<T: Transport>(
     batch_timeout: Duration,
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
+    memory_guard: &MemoryGuard,
 ) -> crate::Result<()> {
     let messages = match tokio::time::timeout(batch_timeout, consumer.recv(batch_size)).await {
         Ok(result) => result.map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?,
@@ -172,6 +197,10 @@ async fn process_batch<T: Transport>(
     if messages.is_empty() {
         return Ok(());
     }
+
+    // Track batch memory in the guard
+    let batch_bytes: u64 = messages.iter().map(|m| m.payload.len() as u64).sum();
+    memory_guard.add_bytes(batch_bytes);
 
     let batch_len = messages.len();
     transform_metrics
@@ -291,6 +320,12 @@ async fn process_batch<T: Transport>(
         .record(elapsed.as_secs_f64());
     transform_metrics.events_produced.increment(produced_count);
     transform_metrics.events_failed.increment(failed_count);
+    transform_metrics
+        .memory_used_bytes
+        .set(memory_guard.current_bytes() as f64);
+    transform_metrics
+        .memory_limit_bytes
+        .set(memory_guard.limit_bytes() as f64);
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_delivered(produced_count);
         dfe.transport_send_duration("kafka", elapsed.as_secs_f64());
@@ -302,6 +337,9 @@ async fn process_batch<T: Transport>(
             .await
             .map_err(|e| crate::Error::Kafka(format!("offset commit error: {e}")))?;
     }
+
+    // Release tracked memory after batch is fully committed
+    memory_guard.release(batch_bytes);
 
     debug!(
         produced = produced_count,

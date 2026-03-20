@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
+use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::metrics::MetricsManager;
 use tracing::{error, info};
 
@@ -170,6 +171,15 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
 
+    // Memory guard — cgroup-aware backpressure (Pattern B: pause consumer)
+    let memory_guard = Arc::new(MemoryGuard::new(MemoryGuardConfig::from_env(
+        "DFE_TRANSFORM_VRL",
+    )));
+    info!(
+        limit_bytes = memory_guard.limit_bytes(),
+        "memory guard initialised"
+    );
+
     // Hot-reloadable config subset (read by pipeline each batch)
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
     info!(
@@ -182,6 +192,7 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
     // Pipeline
     let pipeline_shutdown_rx = shutdown_rx.clone();
     let pipeline_hot_config = hot_config.clone();
+    let pipeline_memory_guard = Arc::clone(&memory_guard);
     let pipeline_handle = tokio::spawn(async move {
         pipeline::run(
             &config,
@@ -189,6 +200,7 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
             pipeline_hot_config,
             &transform_metrics,
             ready_flag,
+            pipeline_memory_guard,
             pipeline_shutdown_rx,
         )
         .await
