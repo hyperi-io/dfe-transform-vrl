@@ -74,7 +74,7 @@ pub fn kafka_test_config() -> KafkaTestConfig {
 }
 
 impl KafkaTestConfig {
-    pub fn has_sasl(&self) -> bool {
+    pub const fn has_sasl(&self) -> bool {
         self.sasl_mechanism.is_some() && self.sasl_user.is_some()
     }
 
@@ -86,10 +86,9 @@ impl KafkaTestConfig {
             .to_socket_addrs()
             .ok()
             .and_then(|mut addrs| addrs.next())
-            .map(|a| {
+            .is_some_and(|a| {
                 std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_secs(3)).is_ok()
             })
-            .unwrap_or(false)
     }
 }
 
@@ -180,17 +179,18 @@ pub fn ensure_docker_infra() -> Result<bool, String> {
 // =============================================================================
 
 /// Skip test if Kafka is not available in the current test mode.
-#[macro_export]
 macro_rules! skip_if_no_kafka {
     () => {
-        let kf = $crate::common::kafka_test_config();
+        let kf = crate::common::kafka_test_config();
         if !kf.is_reachable() {
             eprintln!(
                 "Skipping: Kafka not reachable at {} (TEST_MODE={:?})",
                 kf.brokers,
-                $crate::common::TestMode::detect()
+                crate::common::TestMode::detect()
             );
             return;
         }
     };
 }
+
+pub(crate) use skip_if_no_kafka;
