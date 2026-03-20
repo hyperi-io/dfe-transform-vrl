@@ -81,9 +81,10 @@
 - [x] 3.2.5 Known-should-fail transforms — runtime errors, invalid field access
 
 ### 3.3 E2E Tests
-- [ ] 3.3.1 Kafka testcontainers — produce msgpack → transform → consume transformed
-- [ ] 3.3.2 Kafka testcontainers — produce JSON → transform → consume transformed
-- [ ] 3.3.3 At-least-once guarantee — crash recovery, offset commit verification
+- [x] 3.3.1 Kafka produce JSON → VRL transform → consume transformed (integration_kafka.rs)
+- [x] 3.3.2 Kafka produce msgpack → VRL transform → consume transformed (integration_kafka.rs)
+- [x] 3.3.3 VRL abort drops events — only keep=true events forwarded to sink
+- [ ] 3.3.4 At-least-once guarantee — crash recovery, offset commit verification
 
 ## Phase 4: dfe-engine Integration
 
@@ -98,24 +99,24 @@ Deliberate subset of Vector.dev enrichment tables — just VRL + enrich, no
 Vector runtime. Fail-fast on startup if enrichment files are missing or malformed.
 
 ### 5.1 Enrichment Table Loading
-- [ ] 5.1.1 Config schema — `enrichment_tables` section: name, path, key_columns
-- [ ] 5.1.2 CSV file loader — read CSV to `HashMap<Key, Row>` at startup
-- [ ] 5.1.3 JSON file loader — read JSON array to `HashMap<Key, Row>` at startup
-- [ ] 5.1.4 Fail-fast validation — missing file, malformed data, duplicate keys → abort startup
-- [ ] 5.1.5 Unit tests for CSV/JSON loading, missing file, malformed data
+- [x] 5.1.1 Config schema — `enrichment_tables` section: name, path, key_columns
+- [x] 5.1.2 CSV file loader — read CSV to `HashMap<Key, Row>` at startup
+- [x] 5.1.3 JSON file loader — read JSON array to `HashMap<Key, Row>` at startup
+- [x] 5.1.4 Fail-fast validation — missing file, malformed data, duplicate keys → abort startup
+- [x] 5.1.5 Unit tests for CSV/JSON loading, missing file, malformed data
 
 ### 5.2 VRL TableRegistry Integration
-- [ ] 5.2.1 Implement `vrl::enrichment::TableRegistry` trait backed by `HashMap`
-- [ ] 5.2.2 Pass populated registry to VRL compiler and runtime context
-- [ ] 5.2.3 VRL programs can use `get_enrichment_table_record("name", {"key": .field})`
-- [ ] 5.2.4 Table name not found at compile time → compilation error (caught at startup)
-- [ ] 5.2.5 Unit tests for registry lookup, missing table, missing key
+- [x] 5.2.1 Custom VRL functions (get_enrichment_table_record, find_enrichment_table_records)
+- [x] 5.2.2 Pass populated registry to VRL compiler via Arc<EnrichmentRegistry>
+- [x] 5.2.3 VRL programs can use `get_enrichment_table_record("name", {"key": .field})`
+- [x] 5.2.4 Table name not found at runtime → VRL error (caught at startup via test compile)
+- [x] 5.2.5 Unit tests for registry lookup, missing table, missing key
 
 ### 5.3 Integration Tests
-- [ ] 5.3.1 End-to-end: CSV enrichment table + VRL transform using get_enrichment_table_record
-- [ ] 5.3.2 End-to-end: JSON enrichment table + VRL transform
-- [ ] 5.3.3 Startup failure: missing enrichment file
-- [ ] 5.3.4 Startup failure: VRL references non-existent table name
+- [x] 5.3.1 End-to-end: CSV enrichment table + VRL transform
+- [x] 5.3.2 End-to-end: JSON enrichment table + VRL transform
+- [x] 5.3.3 Startup failure: missing enrichment file
+- [x] 5.3.4 Startup failure: VRL references non-existent table name
 
 ### Design Decisions
 
@@ -183,7 +184,7 @@ enrichment_tables:
 ## Open Items
 
 - [ ] CI workflows — blocked on hyperi-ci rewrite completing
-- [ ] E2E Kafka testcontainers tests (3.3.x)
+- [ ] At-least-once guarantee E2E test (3.3.4) — crash recovery, offset commit verification
 - [ ] dfe-core ApplicationSet integration (4.1.3)
-- [ ] VRL enrichment tables (Phase 5)
+- [ ] Rustlib capability review — audit for bespoke code that duplicates rustlib features (especially kafka/ → rustlib transport-kafka)
 - [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`

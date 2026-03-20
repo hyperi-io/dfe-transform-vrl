@@ -167,6 +167,16 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
     // Shutdown coordination
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Memory guard — cgroup-aware backpressure (Pattern B: pause consumer)
+    // Created early so readiness check can reference it.
+    let memory_guard = Arc::new(MemoryGuard::new(MemoryGuardConfig::from_env(
+        "DFE_TRANSFORM_VRL",
+    )));
+    info!(
+        limit_bytes = memory_guard.limit_bytes(),
+        "memory guard initialised"
+    );
+
     // Health server
     let ready_flag = health::start_health_server(&config.health.address, shutdown_rx.clone())
         .await
@@ -175,18 +185,18 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
     // Metrics server
     let mut metrics_manager = MetricsManager::new("transform_vrl");
     let transform_metrics = metrics::TransformMetrics::new(&metrics_manager);
+
+    // Wire readiness check into metrics manager
+    let readiness_flag = Arc::clone(&ready_flag);
+    let readiness_guard = Arc::clone(&memory_guard);
+    metrics_manager.set_readiness_check(move || {
+        readiness_flag.load(std::sync::atomic::Ordering::Acquire)
+            && !readiness_guard.under_pressure()
+    });
+
     metrics::start_metrics_server(&mut metrics_manager, &config.metrics.address)
         .await
         .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
-
-    // Memory guard — cgroup-aware backpressure (Pattern B: pause consumer)
-    let memory_guard = Arc::new(MemoryGuard::new(MemoryGuardConfig::from_env(
-        "DFE_TRANSFORM_VRL",
-    )));
-    info!(
-        limit_bytes = memory_guard.limit_bytes(),
-        "memory guard initialised"
-    );
 
     // Hot-reloadable config subset (read by pipeline each batch)
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));

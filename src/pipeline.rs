@@ -111,6 +111,9 @@ pub async fn run_with_transport<T: Transport>(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.pipeline_ready(true);
+    }
     info!("pipeline ready — entering event loop");
 
     loop {
@@ -124,12 +127,20 @@ pub async fn run_with_transport<T: Transport>(
                 );
             }
             ready_flag.store(false, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.pipeline_ready(false);
+                dfe.scaling_memory_pressure(memory_guard.pressure_ratio());
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         }
         if log_state_change(&MEMORY_PRESSURE_ACTIVE, false) {
             info!("memory pressure recovered — resuming consumer");
             ready_flag.store(true, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.pipeline_ready(true);
+                dfe.scaling_memory_pressure(memory_guard.pressure_ratio());
+            }
         }
 
         // Read hot config each iteration — picks up runtime changes
@@ -162,6 +173,9 @@ pub async fn run_with_transport<T: Transport>(
     }
 
     ready_flag.store(false, Ordering::Release);
+    if let Some(ref dfe) = transform_metrics.dfe {
+        dfe.pipeline_ready(false);
+    }
     info!("closing transports");
     let _ = consumer.close().await;
     let _ = producer.close().await;
@@ -326,9 +340,13 @@ async fn process_batch<T: Transport>(
     transform_metrics
         .memory_limit_bytes
         .set(memory_guard.limit_bytes() as f64);
+    let pressure = memory_guard.pressure_ratio();
+    transform_metrics.scaling_pressure.set(pressure * 100.0);
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_delivered(produced_count);
         dfe.transport_send_duration("kafka", elapsed.as_secs_f64());
+        dfe.scaling_pressure(pressure * 100.0);
+        dfe.scaling_memory_pressure(pressure);
     }
 
     if !commit_tokens.is_empty() {
