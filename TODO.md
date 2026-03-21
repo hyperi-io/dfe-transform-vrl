@@ -181,10 +181,20 @@ enrichment_tables:
 - [x] 6.5.4 Add memory_used_bytes / memory_limit_bytes Prometheus gauges
 - [x] 6.5.5 Add DfeSource topic naming helpers (derive_dfe_source, derive_consumer_group)
 
+### 6.6 Rustlib 1.16.7 — DfeMetrics Wiring + Capability Audit
+- [x] 6.6.1 Bump rustlib to >=1.16.7
+- [x] 6.6.2 Wire DfeMetrics::pipeline_ready() on ready/unready/shutdown transitions
+- [x] 6.6.3 Wire DfeMetrics::scaling_pressure() + scaling_memory_pressure() each batch
+- [x] 6.6.4 Wire MetricsManager::set_readiness_check() with ready_flag + memory_guard
+- [x] 6.6.5 Set scaling_pressure gauge from memory_guard.pressure_ratio()
+- [x] 6.6.6 Full capability audit — no bespoke code duplicating rustlib found
+
+### 6.7 CI + Release
+- [x] 6.7.1 Remove [skip ci] blanket — CI live via hyperi-ci
+- [x] 6.7.2 PR #1 merged main → release — first release cut
+
 ## Open Items
 
-- [ ] CI workflows — blocked on hyperi-ci rewrite completing
 - [ ] At-least-once guarantee E2E test (3.3.4) — crash recovery, offset commit verification
 - [ ] dfe-core ApplicationSet integration (4.1.3)
-- [ ] Rustlib capability review — audit for bespoke code that duplicates rustlib features (especially kafka/ → rustlib transport-kafka)
 - [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`

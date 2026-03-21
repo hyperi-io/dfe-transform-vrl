@@ -188,7 +188,11 @@ pub async fn run_with_transport<T: Transport>(
 /// Uses `batch_timeout` to bound how long we wait for a full batch. If the
 /// timeout fires before `batch_size` messages arrive, we process what we have.
 /// This prevents latency spikes at low volume.
-#[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
+)]
 async fn process_batch<T: Transport>(
     consumer: &T,
     producer: &T,
@@ -216,22 +220,31 @@ async fn process_batch<T: Transport>(
     let batch_bytes: u64 = messages.iter().map(|m| m.payload.len() as u64).sum();
     memory_guard.add_bytes(batch_bytes);
 
+    let batch_start = Instant::now();
     let batch_len = messages.len();
-    transform_metrics
-        .events_received
-        .increment(batch_len as u64);
+
+    // Layer 1: DfeMetrics (platform)
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_received(batch_len as u64);
     }
+    // Layer 2: AppMetrics (common group)
+    if let Some(ref app) = transform_metrics.app {
+        app.record_received(batch_len as u64);
+        app.record_bytes_received(batch_bytes);
+    }
+    // Layer 3: App-specific
     transform_metrics.batch_size.record(batch_len as f64);
     debug!(count = batch_len, "consumed batch");
 
-    let timer = Instant::now();
-
     let mut commit_tokens = Vec::with_capacity(batch_len);
     let mut produced_count: u64 = 0;
-    let mut failed_count: u64 = 0;
+    let mut produced_bytes: u64 = 0;
+    let mut json_count: u64 = 0;
+    let mut msgpack_count: u64 = 0;
 
+    // Phase 1: Deserialise all events
+    let deser_start = Instant::now();
+    let mut events: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(batch_len);
     for msg in &messages {
         let format = if payload_format == PayloadFormat::Auto {
             msg.format
@@ -239,50 +252,78 @@ async fn process_batch<T: Transport>(
             payload_format
         };
 
-        let deser_result = deserialize_event(&msg.payload, format);
-        let mut value = match deser_result {
-            Ok(v) => v,
+        match format {
+            PayloadFormat::Json => json_count += 1,
+            PayloadFormat::MsgPack => msgpack_count += 1,
+            PayloadFormat::Auto => {}
+        }
+
+        match deserialize_event(&msg.payload, format) {
+            Ok(v) => events.push((v, format, events.len())),
             Err(e) => {
                 if log_sampled(&DESER_ERRORS, 1000) {
-                    warn!(error = %e, total = DESER_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
+                    warn!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
                 }
                 security::input_validation_failure("deserialise", &e.to_string(), None);
-                failed_count += 1;
+                transform_metrics.record_deser_error();
                 commit_tokens.push(msg.token.clone());
-                continue;
             }
-        };
+        }
+    }
+    let deser_elapsed = deser_start.elapsed();
+    transform_metrics
+        .deserialise_duration
+        .record(deser_elapsed.as_secs_f64());
 
+    // Record format distribution
+    if json_count > 0 {
+        transform_metrics.record_format("json", json_count);
+    }
+    if msgpack_count > 0 {
+        transform_metrics.record_format("msgpack", msgpack_count);
+    }
+
+    // Phase 2: VRL transform
+    let vrl_start = Instant::now();
+    let mut transformed: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(events.len());
+    for (mut value, format, idx) in events {
         match run_vrl(program, &mut value) {
-            Ok(_) => {}
+            Ok(_) => transformed.push((value, format, idx)),
             Err(crate::Error::VrlAbort(ref reason)) => {
                 debug!(reason = %reason, "event dropped by VRL abort");
-                transform_metrics.events_filtered.increment(1);
+                transform_metrics.abort_total.increment(1);
                 if let Some(ref dfe) = transform_metrics.dfe {
                     dfe.records_filtered(1);
                 }
-                commit_tokens.push(msg.token.clone());
-                continue;
+                commit_tokens.push(messages[idx].token.clone());
             }
             Err(e) => {
                 if log_sampled(&VRL_ERRORS, 1000) {
-                    warn!(error = %e, total = VRL_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
+                    warn!(error = %e, total = VRL_ERRORS.load(Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
                 }
                 security::input_validation_failure("vrl_transform", &e.to_string(), None);
-                failed_count += 1;
-                commit_tokens.push(msg.token.clone());
-                continue;
+                transform_metrics.record_transform_error();
+                commit_tokens.push(messages[idx].token.clone());
             }
         }
+    }
+    let vrl_elapsed = vrl_start.elapsed();
+    transform_metrics
+        .execute_duration
+        .record(vrl_elapsed.as_secs_f64());
 
-        let serialized = serialize_event(&value, format)?;
-
-        let key = extract_key(&value, key_field);
+    // Phase 3: Serialise + Produce
+    let ser_start = Instant::now();
+    for (value, format, idx) in &transformed {
+        let serialized = serialize_event(value, *format)?;
+        let key = extract_key(value, key_field);
         let key_str = key.as_deref().unwrap_or("");
+        let ser_bytes = serialized.len() as u64;
 
         match producer.send(key_str, &serialized).await {
             SendResult::Ok => {
                 produced_count += 1;
+                produced_bytes += ser_bytes;
                 if log_state_change(&BACKPRESSURE_ACTIVE, false) {
                     info!("producer backpressure cleared");
                 }
@@ -297,19 +338,23 @@ async fn process_batch<T: Transport>(
                 if let Some(ref dfe) = transform_metrics.dfe {
                     dfe.transport_backpressured("kafka", 1);
                 }
+                if let Some(ref bp) = transform_metrics.backpressure {
+                    bp.record_event();
+                }
                 tokio::task::yield_now().await;
                 match producer.send(key_str, &serialized).await {
                     SendResult::Ok => {
                         produced_count += 1;
+                        produced_bytes += ser_bytes;
                         if let Some(ref dfe) = transform_metrics.dfe {
                             dfe.transport_sent("kafka", 1);
                         }
                     }
                     other => {
                         if log_sampled(&PRODUCE_ERRORS, 1000) {
-                            error!(result = ?other, total = PRODUCE_ERRORS.load(std::sync::atomic::Ordering::Relaxed), "produce failed (sampled 1/1000)");
+                            error!(result = ?other, total = PRODUCE_ERRORS.load(Ordering::Relaxed), "produce failed (sampled 1/1000)");
                         }
-                        failed_count += 1;
+                        transform_metrics.record_produce_error();
                         if let Some(ref dfe) = transform_metrics.dfe {
                             dfe.transport_send_errors("kafka", 1);
                         }
@@ -318,6 +363,7 @@ async fn process_batch<T: Transport>(
             }
             SendResult::Fatal(e) => {
                 error!(error = %e, "fatal produce error");
+                transform_metrics.record_produce_error();
                 if let Some(ref dfe) = transform_metrics.dfe {
                     dfe.transport_send_errors("kafka", 1);
                 }
@@ -325,44 +371,58 @@ async fn process_batch<T: Transport>(
             }
         }
 
-        commit_tokens.push(msg.token.clone());
+        commit_tokens.push(messages[*idx].token.clone());
     }
+    let ser_elapsed = ser_start.elapsed();
+    transform_metrics
+        .serialise_duration
+        .record(ser_elapsed.as_secs_f64());
 
-    let elapsed = timer.elapsed();
-    transform_metrics
-        .transform_duration
-        .record(elapsed.as_secs_f64());
-    transform_metrics.events_produced.increment(produced_count);
-    transform_metrics.events_failed.increment(failed_count);
-    transform_metrics
-        .memory_used_bytes
-        .set(memory_guard.current_bytes() as f64);
-    transform_metrics
-        .memory_limit_bytes
-        .set(memory_guard.limit_bytes() as f64);
-    let pressure = memory_guard.pressure_ratio();
-    transform_metrics.scaling_pressure.set(pressure * 100.0);
+    // Layer 1: DfeMetrics
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_delivered(produced_count);
-        dfe.transport_send_duration("kafka", elapsed.as_secs_f64());
+        dfe.transport_send_duration("kafka", ser_elapsed.as_secs_f64());
+        let pressure = memory_guard.pressure_ratio();
         dfe.scaling_pressure(pressure * 100.0);
         dfe.scaling_memory_pressure(pressure);
     }
 
+    // Layer 2: AppMetrics + SinkMetrics
+    if let Some(ref app) = transform_metrics.app {
+        app.record_processed(produced_count);
+        app.record_bytes_written(produced_bytes);
+        app.set_memory(memory_guard.current_bytes(), memory_guard.limit_bytes());
+    }
+    if let Some(ref sink) = transform_metrics.sink {
+        sink.record_duration("kafka", ser_elapsed.as_secs_f64());
+    }
+
+    // Commit offsets
     if !commit_tokens.is_empty() {
         consumer
             .commit(&commit_tokens)
             .await
             .map_err(|e| crate::Error::Kafka(format!("offset commit error: {e}")))?;
+        if let Some(ref consumer_metrics) = transform_metrics.consumer {
+            consumer_metrics.record_offsets_committed(1);
+        }
     }
 
     // Release tracked memory after batch is fully committed
     memory_guard.release(batch_bytes);
 
+    // End-to-end batch duration
+    let batch_elapsed = batch_start.elapsed();
+    transform_metrics
+        .batch_duration
+        .record(batch_elapsed.as_secs_f64());
+
     debug!(
         produced = produced_count,
-        failed = failed_count,
-        elapsed_ms = elapsed.as_millis(),
+        elapsed_ms = batch_elapsed.as_millis(),
+        deser_ms = deser_elapsed.as_millis(),
+        vrl_ms = vrl_elapsed.as_millis(),
+        ser_ms = ser_elapsed.as_millis(),
         "batch complete"
     );
 
