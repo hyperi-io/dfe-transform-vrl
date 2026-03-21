@@ -1,95 +1,181 @@
 // Project:   dfe-transform-vrl
 // File:      src/metrics.rs
-// Purpose:   Prometheus metrics via rustlib MetricsManager + DfeMetrics
+// Purpose:   Standardised DFE metrics via rustlib MetricsManager + dfe_groups
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Prometheus metrics using hyperi-rustlib `metrics` module.
+//! Prometheus metrics using the DFE metrics standard.
 //!
-//! Dual-emit: existing `transform_vrl_*` metrics (project-specific) alongside
-//! standard `dfe_*` metrics (platform-wide via `DfeMetrics`). The `dfe_*` names
-//! will eventually replace the project-specific names once all dashboards migrate.
+//! Three layers:
+//! - **Layer 1 (DfeMetrics):** Platform-wide `dfe_*` metrics (records, transport, scaling)
+//! - **Layer 2 (`dfe_groups`):** Common metric groups (`AppMetrics`, `ConsumerMetrics`, etc.)
+//! - **Layer 3 (app-specific):** `dfe_transform_vrl_*` metrics unique to this service
+//!
+//! Namespace: `dfe_transform_vrl` (set on `MetricsManager`).
 
+use hyperi_rustlib::metrics::dfe_groups::{
+    AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
+};
 use hyperi_rustlib::metrics::{DfeMetrics, MetricsManager};
 use tracing::info;
 
-/// Application metrics for the transform pipeline.
-///
-/// Dual-emits both project-specific metrics (`transform_vrl_*` via `MetricsManager`)
-/// and platform-standard metrics (`dfe_*` via `DfeMetrics`). Keep both during
-/// transition — remove project-specific names once dashboards are migrated.
+/// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
-    // Project-specific (existing — do not remove yet)
-    pub events_received: metrics::Counter,
-    pub events_produced: metrics::Counter,
-    pub events_failed: metrics::Counter,
-    pub events_filtered: metrics::Counter,
-    pub transform_duration: metrics::Histogram,
-    pub batch_size: metrics::Histogram,
-    pub scaling_pressure: metrics::Gauge,
-    pub memory_used_bytes: metrics::Gauge,
-    pub memory_limit_bytes: metrics::Gauge,
-
-    // Platform-standard (new — dual-emit alongside existing)
+    // Layer 1: Platform standard (dfe_*)
     pub dfe: Option<DfeMetrics>,
+
+    // Layer 2: Common metric groups (dfe_transform_vrl_*)
+    pub app: Option<AppMetrics>,
+    pub consumer: Option<ConsumerMetrics>,
+    pub sink: Option<SinkMetrics>,
+    pub backpressure: Option<BackpressureMetrics>,
+    pub enrichment: Option<EnrichmentMetrics>,
+
+    // Layer 3: App-specific (dfe_transform_vrl_*)
+    pub execute_duration: metrics::Histogram,
+    pub deserialise_duration: metrics::Histogram,
+    pub serialise_duration: metrics::Histogram,
+    pub batch_duration: metrics::Histogram,
+    pub records_error: metrics::Counter,
+    pub records_format: metrics::Counter,
+    pub programs_loaded: metrics::Gauge,
+    pub abort_total: metrics::Counter,
+    pub batch_size: metrics::Histogram,
+    pub enrichment_table_rows: metrics::Gauge,
 }
 
 impl TransformMetrics {
     /// Create all metrics via the rustlib `MetricsManager`.
     ///
-    /// In production, `DfeMetrics::register()` is called after the `MetricsManager`
-    /// installs the global recorder. In tests, `dfe` is `None`.
-    pub fn new(manager: &MetricsManager) -> Self {
+    /// The `MetricsManager` must be created with namespace `"dfe_transform_vrl"`
+    /// so all registered metrics are prefixed correctly.
+    pub fn new(manager: &MetricsManager, version: &str, commit: &str) -> Self {
         let dfe = DfeMetrics::register();
 
+        let app = AppMetrics::new(manager, version, commit);
+        let consumer = ConsumerMetrics::new(manager);
+        let sink = SinkMetrics::new(manager);
+        let backpressure = BackpressureMetrics::new(manager);
+        let enrichment = EnrichmentMetrics::new(manager);
+
         Self {
-            events_received: manager
-                .counter("events_received_total", "Total events consumed from source"),
-            events_produced: manager
-                .counter("events_produced_total", "Total events produced to sink"),
-            events_failed: manager.counter(
-                "events_failed_total",
-                "Total events that failed VRL transform",
-            ),
-            events_filtered: manager.counter(
-                "events_filtered_total",
-                "Total events filtered (dropped) by VRL transform",
-            ),
-            transform_duration: manager.histogram(
-                "transform_duration_seconds",
-                "Time spent executing VRL transforms per batch",
-            ),
-            batch_size: manager
-                .histogram("batch_size_events", "Number of events per transform batch"),
-            scaling_pressure: manager.gauge(
-                "scaling_pressure",
-                "KEDA-compatible scaling pressure (0-100)",
-            ),
-            memory_used_bytes: manager
-                .gauge("memory_used_bytes", "Current tracked memory usage in bytes"),
-            memory_limit_bytes: manager
-                .gauge("memory_limit_bytes", "Effective memory limit in bytes"),
             dfe: Some(dfe),
+            app: Some(app),
+            consumer: Some(consumer),
+            sink: Some(sink),
+            backpressure: Some(backpressure),
+            enrichment: Some(enrichment),
+
+            execute_duration: manager.histogram(
+                "execute_duration_seconds",
+                "VRL execution time per batch (excluding deser/ser)",
+            ),
+            deserialise_duration: manager.histogram(
+                "deserialise_duration_seconds",
+                "Deserialisation time per batch",
+            ),
+            serialise_duration: manager
+                .histogram("serialise_duration_seconds", "Serialisation time per batch"),
+            batch_duration: manager.histogram(
+                "batch_duration_seconds",
+                "End-to-end batch latency (consume to commit)",
+            ),
+            records_error: manager.counter(
+                "records_error_total",
+                "Records that failed processing, by stage",
+            ),
+            records_format: manager.counter(
+                "records_format_total",
+                "Records received by detected format",
+            ),
+            programs_loaded: manager.gauge("programs_loaded", "Active VRL program count"),
+            abort_total: manager.counter("abort_total", "Events dropped by VRL abort"),
+            batch_size: manager.histogram("batch_size", "Events per transform batch"),
+            enrichment_table_rows: manager
+                .gauge("enrichment_table_rows", "Rows loaded per enrichment table"),
         }
+    }
+
+    /// Record a deserialise error.
+    #[inline]
+    pub fn record_deser_error(&self) {
+        self.records_error.increment(1);
+        // Labelled counter for stage breakdown
+        metrics::counter!(
+            "dfe_transform_vrl_records_error_total",
+            "stage" => "deserialise"
+        )
+        .increment(1);
+    }
+
+    /// Record a VRL transform error.
+    #[inline]
+    pub fn record_transform_error(&self) {
+        self.records_error.increment(1);
+        metrics::counter!(
+            "dfe_transform_vrl_records_error_total",
+            "stage" => "transform"
+        )
+        .increment(1);
+    }
+
+    /// Record a produce error.
+    #[inline]
+    pub fn record_produce_error(&self) {
+        self.records_error.increment(1);
+        metrics::counter!(
+            "dfe_transform_vrl_records_error_total",
+            "stage" => "produce"
+        )
+        .increment(1);
+    }
+
+    /// Record the detected format for a batch of records.
+    #[inline]
+    pub fn record_format(&self, format: &str, count: u64) {
+        metrics::counter!(
+            "dfe_transform_vrl_records_format_total",
+            "format" => format.to_string()
+        )
+        .increment(count);
+    }
+
+    /// Set enrichment table row count for a specific table.
+    #[inline]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn set_enrichment_rows(&self, table: &str, rows: usize) {
+        metrics::gauge!(
+            "dfe_transform_vrl_enrichment_table_rows",
+            "table" => table.to_string()
+        )
+        .set(rows as f64);
     }
 }
 
 impl Default for TransformMetrics {
-    /// Default for tests — no `DfeMetrics` (no global recorder installed).
+    /// Default for tests — no `DfeMetrics` or groups (no global recorder installed).
     fn default() -> Self {
         Self {
-            events_received: metrics::counter!("events_received_total"),
-            events_produced: metrics::counter!("events_produced_total"),
-            events_failed: metrics::counter!("events_failed_total"),
-            events_filtered: metrics::counter!("events_filtered_total"),
-            transform_duration: metrics::histogram!("transform_duration_seconds"),
-            batch_size: metrics::histogram!("batch_size_events"),
-            scaling_pressure: metrics::gauge!("scaling_pressure"),
-            memory_used_bytes: metrics::gauge!("memory_used_bytes"),
-            memory_limit_bytes: metrics::gauge!("memory_limit_bytes"),
             dfe: None,
+            app: None,
+            consumer: None,
+            sink: None,
+            backpressure: None,
+            enrichment: None,
+            execute_duration: metrics::histogram!("dfe_transform_vrl_execute_duration_seconds"),
+            deserialise_duration: metrics::histogram!(
+                "dfe_transform_vrl_deserialise_duration_seconds"
+            ),
+            serialise_duration: metrics::histogram!("dfe_transform_vrl_serialise_duration_seconds"),
+            batch_duration: metrics::histogram!("dfe_transform_vrl_batch_duration_seconds"),
+            records_error: metrics::counter!("dfe_transform_vrl_records_error_total"),
+            records_format: metrics::counter!("dfe_transform_vrl_records_format_total"),
+            programs_loaded: metrics::gauge!("dfe_transform_vrl_programs_loaded"),
+            abort_total: metrics::counter!("dfe_transform_vrl_abort_total"),
+            batch_size: metrics::histogram!("dfe_transform_vrl_batch_size"),
+            enrichment_table_rows: metrics::gauge!("dfe_transform_vrl_enrichment_table_rows"),
         }
     }
 }

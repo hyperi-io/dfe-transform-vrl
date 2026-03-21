@@ -183,8 +183,10 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
 
     // Metrics server
-    let mut metrics_manager = MetricsManager::new("transform_vrl");
-    let transform_metrics = metrics::TransformMetrics::new(&metrics_manager);
+    let mut metrics_manager = MetricsManager::new("dfe_transform_vrl");
+    let commit_hash = option_env!("GIT_COMMIT").unwrap_or("unknown");
+    let transform_metrics =
+        metrics::TransformMetrics::new(&metrics_manager, env!("CARGO_PKG_VERSION"), commit_hash);
 
     // Wire readiness check into metrics manager
     let readiness_flag = Arc::clone(&ready_flag);
