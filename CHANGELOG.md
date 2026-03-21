@@ -1,3 +1,13 @@
+## [1.0.1](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0...v1.0.1) (2026-03-21)
+
+
+### Bug Fixes
+
+* bump hyperi-rustlib to >=1.16.7 ([42d9ffa](https://github.com/hyperi-io/dfe-transform-vrl/commit/42d9ffa1ae3d5327d2e63faa2833ef85e3876c7a))
+* migrate to DFE metrics standard with rustlib 1.18.0 ([3f0c696](https://github.com/hyperi-io/dfe-transform-vrl/commit/3f0c696ec841b3fa02d5e92da184342174202adb))
+* patch 3 security vulnerabilities in transitive deps ([ef3b81a](https://github.com/hyperi-io/dfe-transform-vrl/commit/ef3b81ae256cac6f6f01b1ccc52a809c3c25eb05))
+* restore metrics-dfe feature and rustlib >=1.18.0 on merge branch ([c81135c](https://github.com/hyperi-io/dfe-transform-vrl/commit/c81135c0769866a9a32dbd5d451483169e078bae))
+
 # 1.0.0 (2026-03-20)
 
 
