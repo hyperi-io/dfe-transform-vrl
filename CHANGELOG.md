@@ -1,3 +1,10 @@
+# [1.0.0-dev.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-03-21)
+
+
+### Bug Fixes
+
+* patch 3 security vulnerabilities in transitive deps ([ef3b81a](https://github.com/hyperi-io/dfe-transform-vrl/commit/ef3b81ae256cac6f6f01b1ccc52a809c3c25eb05))
+
 # [1.0.0-dev.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.1...v1.0.0-dev.2) (2026-03-20)
 
 
