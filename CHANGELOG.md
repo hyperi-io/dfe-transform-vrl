@@ -1,3 +1,10 @@
+# [1.0.0-dev.4](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-03-22)
+
+
+### Bug Fixes
+
+* inline Renovate config (preset resolution broken) ([caeea51](https://github.com/hyperi-io/dfe-transform-vrl/commit/caeea51913d60cc26ef103426ec636e23d25d530))
+
 # [1.0.0-dev.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.2...v1.0.0-dev.3) (2026-03-21)
 
 
