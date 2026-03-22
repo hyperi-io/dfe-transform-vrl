@@ -193,8 +193,22 @@ enrichment_tables:
 - [x] 6.7.1 Remove [skip ci] blanket — CI live via hyperi-ci
 - [x] 6.7.2 PR #1 merged main → release — first release cut
 
+### 6.8 Metrics Standard Migration (v1.0.1)
+- [x] 6.8.1 Bump rustlib to >=1.18.0, add `metrics-dfe` feature
+- [x] 6.8.2 Fix MetricsManager namespace: `transform_vrl` → `dfe_transform_vrl`
+- [x] 6.8.3 Wire Layer 2 groups: AppMetrics, ConsumerMetrics, SinkMetrics, BackpressureMetrics, EnrichmentMetrics
+- [x] 6.8.4 Split batch timing: deser/VRL/ser/end-to-end histograms
+- [x] 6.8.5 Per-stage error counter (stage label: deserialise/transform/produce)
+- [x] 6.8.6 Format detection counter (format label: json/msgpack)
+- [x] 6.8.7 VRL-specific metrics: programs_loaded, abort_total, enrichment_table_rows
+- [x] 6.8.8 Remove legacy unprefixed metrics
+- [x] 6.8.9 Patch 3 security vulnerabilities (aws-lc-sys, rustls-webpki)
+
 ## Open Items
 
+- [ ] Update hyperi-ai submodule (new standards/rules landed)
+- [ ] Documentation review using /doco skill — verify docs match code post-metrics migration
+- [ ] Re-build and re-test with updated hyperi-ci (prod/test change separation)
 - [ ] At-least-once guarantee E2E test (3.3.4) — crash recovery, offset commit verification
 - [ ] dfe-core ApplicationSet integration (4.1.3)
 - [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`
