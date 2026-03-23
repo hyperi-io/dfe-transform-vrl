@@ -75,3 +75,68 @@ impl Default for HotConfig {
         Self::from_config(&config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_config_extracts_correct_fields() {
+        let mut config = Config::default();
+        config.pipeline.batch_size = 5000;
+        config.pipeline.batch_timeout_ms = 250;
+        config.sink.key_field = ".tenant_id".to_string();
+        config.scaling.pressure_threshold = 0.6;
+
+        let hot = HotConfig::from_config(&config);
+        assert_eq!(hot.batch_size, 5000);
+        assert_eq!(hot.batch_timeout_ms, 250);
+        assert_eq!(hot.key_field, ".tenant_id");
+        assert!((hot.scaling_pressure_threshold - 0.6).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn default_matches_config_defaults() {
+        let hot_default = HotConfig::default();
+        let config_default = Config::default();
+
+        assert_eq!(hot_default.batch_size, config_default.pipeline.batch_size);
+        assert_eq!(
+            hot_default.batch_timeout_ms,
+            config_default.pipeline.batch_timeout_ms
+        );
+        assert_eq!(hot_default.key_field, config_default.sink.key_field);
+    }
+
+    #[test]
+    fn partial_eq_works() {
+        let a = HotConfig::default();
+        let b = HotConfig::default();
+        assert_eq!(a, b);
+
+        let mut c = HotConfig::default();
+        c.batch_size = 999;
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn clone_produces_independent_copy() {
+        let mut a = HotConfig::default();
+        let b = a.clone();
+        a.batch_size = 42;
+        assert_ne!(a.batch_size, b.batch_size);
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        let hot = HotConfig {
+            batch_size: 2000,
+            batch_timeout_ms: 500,
+            key_field: ".org_id".to_string(),
+            scaling_pressure_threshold: 0.9,
+        };
+        let yaml = serde_yaml_ng::to_string(&hot).unwrap();
+        let deserialized: HotConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(hot, deserialized);
+    }
+}
