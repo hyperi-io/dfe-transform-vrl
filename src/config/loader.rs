@@ -420,3 +420,121 @@ impl Config {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_has_sensible_defaults() {
+        let config = Config::default();
+        assert_eq!(config.pipeline.name, "default");
+        assert_eq!(config.pipeline.batch_size, 1000);
+        assert_eq!(config.pipeline.batch_timeout_ms, 100);
+        assert_eq!(config.source.format, "auto");
+        assert_eq!(config.sink.compression, "zstd");
+        assert_eq!(config.health.address, "0.0.0.0:9000");
+        assert_eq!(config.metrics.address, "0.0.0.0:9090");
+        assert!((config.scaling.pressure_threshold - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn load_from_yaml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.yaml");
+
+        std::fs::write(
+            &path,
+            r#"
+pipeline:
+  name: "test-pipeline"
+  batch_size: 5000
+source:
+  brokers: ["kafka-1:9092", "kafka-2:9092"]
+  topics: ["events"]
+  group_id: "test-group"
+sink:
+  brokers: ["kafka-1:9092"]
+  topic: "output"
+  key_field: ".tenant_id"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(config.pipeline.name, "test-pipeline");
+        assert_eq!(config.pipeline.batch_size, 5000);
+        assert_eq!(config.source.brokers, vec!["kafka-1:9092", "kafka-2:9092"]);
+        assert_eq!(config.source.topics, vec!["events"]);
+        assert_eq!(config.sink.topic, "output");
+        assert_eq!(config.sink.key_field, ".tenant_id");
+    }
+
+    #[test]
+    fn load_missing_file_returns_defaults() {
+        let config = Config::load(Some("/nonexistent/path.yaml")).unwrap();
+        assert_eq!(config.pipeline.name, "default");
+    }
+
+    #[test]
+    fn normalize_enables_sasl_when_username_set() {
+        let mut config = Config::default();
+        assert!(!config.source.sasl.enabled);
+
+        config.source.sasl.username = "alice".to_string();
+        config.normalize();
+
+        assert!(config.source.sasl.enabled);
+    }
+
+    #[test]
+    fn normalize_enables_tls_when_ca_cert_set() {
+        let mut config = Config::default();
+        assert!(!config.source.tls.enabled);
+
+        config.source.tls.ca_cert_file = Some("/etc/ssl/ca.crt".to_string());
+        config.normalize();
+
+        assert!(config.source.tls.enabled);
+    }
+
+    #[test]
+    fn normalize_does_not_enable_sasl_without_username() {
+        let mut config = Config::default();
+        config.normalize();
+        assert!(!config.source.sasl.enabled);
+        assert!(!config.sink.sasl.enabled);
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        let config = Config::default();
+        let yaml = serde_yaml_ng::to_string(&config).unwrap();
+        let deserialized: Config = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(config.pipeline.name, deserialized.pipeline.name);
+        assert_eq!(config.pipeline.batch_size, deserialized.pipeline.batch_size);
+        assert_eq!(config.source.format, deserialized.source.format);
+    }
+
+    #[test]
+    fn sasl_config_defaults() {
+        let sasl = SaslConfig::default();
+        assert!(!sasl.enabled);
+        assert_eq!(sasl.mechanism, "scram_sha_512");
+        assert!(sasl.username.is_empty());
+        assert!(sasl.password.is_empty());
+    }
+
+    #[test]
+    fn tls_config_defaults() {
+        let tls = TlsConfig::default();
+        assert!(!tls.enabled);
+        assert!(tls.ca_cert_file.is_none());
+    }
+
+    #[test]
+    fn enrichment_table_config_empty_by_default() {
+        let config = Config::default();
+        assert!(config.enrichment_tables.is_empty());
+    }
+}

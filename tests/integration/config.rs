@@ -1,0 +1,79 @@
+// Project:   dfe-transform-vrl
+// File:      tests/integration/config.rs
+// Purpose:   Integration tests — config loading and cascade
+// Language:  Rust
+//
+// License:   FSL-1.1-ALv2
+// Copyright: (c) 2026 HYPERI PTY LIMITED
+
+//! Integration tests for configuration loading, YAML fixtures, and validation.
+
+use dfe_transform_vrl::config::Config;
+
+fn fixture_path(name: &str) -> String {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    format!("{manifest}/tests/fixtures/configs/{name}")
+}
+
+#[test]
+fn test_load_minimal_config() {
+    let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
+    assert_eq!(config.pipeline.name, "test-pipeline");
+    assert_eq!(config.pipeline.batch_size, 100);
+    assert_eq!(config.pipeline.batch_timeout_ms, 50);
+    assert_eq!(config.source.brokers, vec!["localhost:9092"]);
+    assert_eq!(config.source.topics, vec!["test-input"]);
+    assert_eq!(config.source.group_id, "test-group");
+    assert_eq!(config.source.format, "auto");
+    assert_eq!(config.sink.topic, "test-output");
+}
+
+#[test]
+fn test_load_sasl_config() {
+    let config = Config::load(Some(&fixture_path("with_sasl.yaml"))).unwrap();
+    assert_eq!(config.pipeline.name, "prod-pipeline");
+    assert_eq!(config.pipeline.batch_size, 5000);
+    assert!(config.source.sasl.enabled);
+    assert_eq!(config.source.sasl.mechanism, "scram_sha_512");
+    assert!(config.source.tls.enabled);
+    assert!(config.sink.sasl.enabled);
+    assert!(config.sink.tls.enabled);
+    assert_eq!(config.sink.compression, "zstd");
+    assert_eq!(config.sink.key_field, ".org_id");
+}
+
+#[test]
+fn test_minimal_config_validates() {
+    let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_sasl_config_validates() {
+    let config = Config::load(Some(&fixture_path("with_sasl.yaml"))).unwrap();
+    assert!(config.validate().is_ok());
+}
+
+#[test]
+fn test_default_config_fields() {
+    let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
+    assert_eq!(config.health.address, "0.0.0.0:9000");
+    assert_eq!(config.metrics.address, "0.0.0.0:9090");
+    assert_eq!(config.logging.level, "info");
+    assert_eq!(config.logging.format, "json");
+    assert!(!config.source.sasl.enabled);
+    assert!(!config.source.tls.enabled);
+}
+
+#[test]
+fn test_nonexistent_config_uses_defaults() {
+    let config = Config::load(Some("/nonexistent/config.yaml")).unwrap();
+    assert_eq!(config.pipeline.name, "default");
+    assert_eq!(config.pipeline.batch_size, 1000);
+}
+
+#[test]
+fn test_env_override_pipeline_name() {
+    let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
+    assert_eq!(config.pipeline.name, "test-pipeline");
+}
