@@ -19,7 +19,6 @@ use hyperi_rustlib::metrics::dfe_groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
 };
 use hyperi_rustlib::metrics::{DfeMetrics, MetricsManager};
-use tracing::info;
 
 /// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
@@ -180,14 +179,64 @@ impl Default for TransformMetrics {
     }
 }
 
-/// Start the metrics server on the given address.
-pub async fn start_metrics_server(
-    manager: &mut MetricsManager,
-    address: &str,
-) -> crate::Result<()> {
-    info!(address, "starting metrics server");
-    manager
-        .start_server(address)
-        .await
-        .map_err(|e| crate::Error::Health(format!("metrics server failed: {e}")))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_does_not_panic() {
+        // Verifies TransformMetrics::default() works without a global recorder.
+        // This is the test code path — no MetricsManager installed.
+        let m = TransformMetrics::default();
+        assert!(m.dfe.is_none());
+        assert!(m.app.is_none());
+        assert!(m.consumer.is_none());
+        assert!(m.sink.is_none());
+        assert!(m.backpressure.is_none());
+        assert!(m.enrichment.is_none());
+    }
+
+    #[test]
+    fn record_deser_error_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.record_deser_error();
+    }
+
+    #[test]
+    fn record_transform_error_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.record_transform_error();
+    }
+
+    #[test]
+    fn record_produce_error_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.record_produce_error();
+    }
+
+    #[test]
+    fn record_format_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.record_format("json", 10);
+        m.record_format("msgpack", 5);
+    }
+
+    #[test]
+    fn set_enrichment_rows_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.set_enrichment_rows("geo", 1000);
+        m.set_enrichment_rows("services", 0);
+    }
+
+    #[test]
+    fn histogram_and_gauge_recording_does_not_panic() {
+        let m = TransformMetrics::default();
+        m.execute_duration.record(0.001);
+        m.deserialise_duration.record(0.0005);
+        m.serialise_duration.record(0.0003);
+        m.batch_duration.record(0.05);
+        m.batch_size.record(500.0);
+        m.programs_loaded.set(3.0);
+        m.abort_total.increment(1);
+    }
 }
