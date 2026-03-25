@@ -212,3 +212,5 @@ enrichment_tables:
 - [ ] At-least-once guarantee E2E test (3.3.4) — crash recovery, offset commit verification
 - [ ] dfe-core ApplicationSet integration (4.1.3)
 - [ ] FlatEnvOverrides derive macro — spec written at `/projects/dfe-receiver/docs/superpowers/specs/2026-03-19-flat-env-overrides-derive.md`
+- [ ] `diff_restart_required()` warnings — warn when hot-reload detects changes to cold fields that require pod restart (pattern from dfe-transform-wasm)
+- [ ] DfeSource topology logging — log derived topic naming convention on startup (pattern from dfe-transform-wasm)
