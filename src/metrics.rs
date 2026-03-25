@@ -19,7 +19,6 @@ use hyperi_rustlib::metrics::dfe_groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
 };
 use hyperi_rustlib::metrics::{DfeMetrics, MetricsManager};
-use tracing::info;
 
 /// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
@@ -240,16 +239,4 @@ mod tests {
         m.programs_loaded.set(3.0);
         m.abort_total.increment(1);
     }
-}
-
-/// Start the metrics server on the given address.
-pub async fn start_metrics_server(
-    manager: &mut MetricsManager,
-    address: &str,
-) -> crate::Result<()> {
-    info!(address, "starting metrics server");
-    manager
-        .start_server(address)
-        .await
-        .map_err(|e| crate::Error::Health(format!("metrics server failed: {e}")))
 }
