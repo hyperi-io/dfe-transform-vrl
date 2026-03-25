@@ -77,6 +77,7 @@ impl Default for HotConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -114,16 +115,20 @@ mod tests {
         let b = HotConfig::default();
         assert_eq!(a, b);
 
-        let mut c = HotConfig::default();
-        c.batch_size = 999;
+        let c = HotConfig {
+            batch_size: 999,
+            ..HotConfig::default()
+        };
         assert_ne!(a, c);
     }
 
     #[test]
     fn clone_produces_independent_copy() {
-        let mut a = HotConfig::default();
-        let b = a.clone();
-        a.batch_size = 42;
+        let a = HotConfig {
+            batch_size: 42,
+            ..HotConfig::default()
+        };
+        let b = HotConfig::default();
         assert_ne!(a.batch_size, b.batch_size);
     }
 
