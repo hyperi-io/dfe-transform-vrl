@@ -1,3 +1,13 @@
+# [1.0.0-dev.5](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.4...v1.0.0-dev.5) (2026-03-25)
+
+
+### Bug Fixes
+
+* add config registry registration and reload security logging ([abf2ecc](https://github.com/hyperi-io/dfe-transform-vrl/commit/abf2ecc21393e438c1c350bb889e2e2433262246))
+* allow unwrap in test modules, fix clippy lints ([995270f](https://github.com/hyperi-io/dfe-transform-vrl/commit/995270fb06f9cf9596044cabbdf419d4aca059da))
+* restructure tests per HyperI testing standards ([a492a02](https://github.com/hyperi-io/dfe-transform-vrl/commit/a492a0237b26fc5553d226888942cd4e36e6ea5a))
+* wire ConfigReloader and bump rustlib to 1.19.6 ([9ad9104](https://github.com/hyperi-io/dfe-transform-vrl/commit/9ad9104e6681889c5f6445e9b59770c1a0f077ce))
+
 # [1.0.0-dev.4](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0-dev.3...v1.0.0-dev.4) (2026-03-22)
 
 
