@@ -31,7 +31,7 @@ tokio = { version = ">=1.50", features = ["full"] }
 tokio-util = { version = ">=0.7.18", features = ["rt"] }
 
 # Shared library — use for everything it provides. NO bespoke code that
-***REMOVED***hyperi-rustlib = { version = ">=1.18.0", features = [
+***REMOVED***hyperi-rustlib = { version = ">=1.19.6", features = [
     "cli",
     "config",
     "config-reload",

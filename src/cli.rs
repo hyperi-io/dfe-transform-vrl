@@ -11,10 +11,13 @@
 //! Implements the `DfeApp` trait from rustlib, wiring together config loading,
 //! VRL compilation, health/metrics servers, pipeline, and graceful shutdown.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
+use hyperi_rustlib::config::reloader::{ConfigReloader, ReloaderConfig};
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
 use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
@@ -100,7 +103,7 @@ impl DfeApp for App {
     }
 
     async fn run_service(&self, config: Config) -> Result<(), CliError> {
-        run_transform_service(config)
+        run_transform_service(config, self.common.config.clone())
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
@@ -139,7 +142,7 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
     }
 }
 
-async fn run_transform_service(config: Config) -> anyhow::Result<()> {
+async fn run_transform_service(config: Config, config_path: Option<String>) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
         version = env!("CARGO_PKG_VERSION"),
@@ -196,7 +199,9 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
             && !readiness_guard.under_pressure()
     });
 
-    metrics::start_metrics_server(&mut metrics_manager, &config.metrics.address)
+    info!(address = %config.metrics.address, "starting metrics server");
+    metrics_manager
+        .start_server(&config.metrics.address)
         .await
         .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
 
@@ -208,6 +213,42 @@ async fn run_transform_service(config: Config) -> anyhow::Result<()> {
         key_field = %config.sink.key_field,
         "hot-reloadable config initialised"
     );
+
+    // Config reloader: file polling + SIGHUP → reload hot-config subset
+    let resolved_config_path = config_path.map(PathBuf::from).or_else(|| {
+        ["config.yaml", "config.yml"]
+            .iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists())
+    });
+
+    let _reloader_handle = {
+        let reload_path = resolved_config_path.clone();
+        let reloader = ConfigReloader::new(
+            ReloaderConfig {
+                config_path: resolved_config_path,
+                poll_interval: Duration::from_secs(5),
+                debounce: Duration::from_millis(500),
+                enable_sighup: true,
+                ..Default::default()
+            },
+            hot_config.clone(),
+            move || {
+                let full = Config::load(reload_path.as_ref().and_then(|p| p.to_str()))
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+                full.validate()
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+                Ok(HotConfig::from_config(&full))
+            },
+            |hot| {
+                if hot.batch_size == 0 {
+                    return Err("batch_size must be > 0".into());
+                }
+                Ok(())
+            },
+        );
+        reloader.start()
+    };
 
     // Pipeline
     let pipeline_shutdown_rx = shutdown_rx.clone();
