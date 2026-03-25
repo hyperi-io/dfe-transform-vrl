@@ -6,6 +6,8 @@
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Smoke tests that exercise the compiled binary.
 //!
 //! These catch:
@@ -171,8 +173,7 @@ fn emit_contract_outputs_json() {
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
     assert!(
         parsed.is_ok(),
-        "emit-contract should produce valid JSON: {}",
-        stdout
+        "emit-contract should produce valid JSON: {stdout}",
     );
 }
 

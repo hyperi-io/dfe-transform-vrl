@@ -51,6 +51,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

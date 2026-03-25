@@ -6,6 +6,8 @@
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! End-to-end tests requiring real infrastructure (Kafka, etc.).
 //!
 //! All tests are `#[ignore]` by default. Run with:

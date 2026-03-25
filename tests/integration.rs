@@ -6,6 +6,8 @@
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Integration tests — single binary with submodules.
 //!
 //! Consolidates all integration tests into one compilation unit for ~3x
