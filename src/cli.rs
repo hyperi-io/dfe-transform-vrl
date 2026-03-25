@@ -246,7 +246,14 @@ async fn run_transform_service(config: Config, config_path: Option<String>) -> a
                 }
                 Ok(())
             },
-        );
+        )
+        .with_post_reload_hook(|_hot| {
+            hyperi_rustlib::logger::security::config_changed(
+                "config_reload",
+                "system",
+                "pipeline config reloaded",
+            );
+        });
         reloader.start()
     };
 

@@ -417,7 +417,27 @@ impl Config {
         // Normalise (infer implied settings)
         config.normalize();
 
+        // Register in global config registry (enables /config endpoint dump with redaction)
+        config.register_sections();
+
         Ok(config)
+    }
+
+    /// Register all config sections in the global config registry.
+    ///
+    /// Enables redacted config dump via `registry::dump_effective()` and
+    /// change notifications via `registry::on_change()`. Called after load
+    /// and after each hot-reload.
+    pub fn register_sections(&self) {
+        use hyperi_rustlib::config::registry;
+        registry::register("pipeline", &self.pipeline);
+        registry::register("source", &self.source);
+        registry::register("sink", &self.sink);
+        registry::register("transforms", &self.transforms);
+        registry::register("health", &self.health);
+        registry::register("metrics", &self.metrics);
+        registry::register("logging", &self.logging);
+        registry::register("scaling", &self.scaling);
     }
 }
 
