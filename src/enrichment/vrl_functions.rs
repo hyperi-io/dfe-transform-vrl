@@ -132,7 +132,7 @@ impl FunctionExpression for GetRecordFn {
 
         table
             .get_record(condition_obj)
-            .map_or_else(|| Ok(Value::Null), |row| Ok(Value::Object(row.clone())))
+            .map_or_else(|| Ok(Value::Null), |row| Ok(Value::Object((*row).clone())))
     }
 
     fn type_def(&self, _state: &TypeState) -> TypeDef {
@@ -227,7 +227,7 @@ impl FunctionExpression for FindRecordsFn {
         let matches: Vec<Value> = table
             .find_records(condition_obj)
             .into_iter()
-            .map(|row| Value::Object(row.clone()))
+            .map(|row| Value::Object((*row).clone()))
             .collect();
 
         Ok(Value::Array(matches))

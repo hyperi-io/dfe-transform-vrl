@@ -35,6 +35,13 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
 
     apply_sasl_tls(&mut kafka_config, &source.sasl, &source.tls);
 
+    if source.statistics_interval_ms > 0 {
+        kafka_config.librdkafka_overrides.insert(
+            "statistics.interval.ms".to_string(),
+            source.statistics_interval_ms.to_string(),
+        );
+    }
+
     for (k, v) in &source.librdkafka_options {
         kafka_config
             .librdkafka_overrides

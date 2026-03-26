@@ -1,102 +1,58 @@
 // Project:   dfe-transform-vrl
 // File:      src/enrichment/registry.rs
-// Purpose:   Enrichment table loading from CSV/JSON files
+// Purpose:   Enrichment table registry — multi-source loading and dispatch
 // Language:  Rust
 //
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Enrichment table registry — loads CSV/JSON files into HashMap-backed tables.
+//! Enrichment table registry — loads tables from multiple source types into
+//! `FxHashMap`-backed `EnrichmentTable` instances for O(1) lookups.
 
-use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use tracing::info;
-use vrl::value::{KeyString, ObjectMap, Value};
 
-use crate::config::EnrichmentTableConfig;
-
-/// A single enrichment table backed by a `HashMap<String, ObjectMap>`.
-///
-/// Key is the concatenation of key column values (joined with `\x00`).
-/// Value is the full row as a VRL-compatible `ObjectMap`.
-#[derive(Debug, Clone)]
-pub struct EnrichmentTable {
-    name: String,
-    rows: HashMap<String, ObjectMap>,
-    key_columns: Vec<String>,
-}
-
-impl EnrichmentTable {
-    /// Look up a single record by key values.
-    ///
-    /// `condition` is an object mapping key column names to expected values.
-    /// All key columns must match for a hit.
-    pub fn get_record(&self, condition: &ObjectMap) -> Option<&ObjectMap> {
-        let key = self.build_key(condition)?;
-        self.rows.get(&key)
-    }
-
-    /// Find all records matching partial conditions.
-    ///
-    /// Unlike `get_record` which requires all key columns, this scans
-    /// for rows where all provided condition fields match.
-    pub fn find_records(&self, condition: &ObjectMap) -> Vec<&ObjectMap> {
-        if condition.is_empty() {
-            return Vec::new();
-        }
-
-        self.rows
-            .values()
-            .filter(|row| {
-                condition
-                    .iter()
-                    .all(|(k, v)| row.get(k.as_str()).is_some_and(|row_v| row_v == v))
-            })
-            .collect()
-    }
-
-    /// Table name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Number of rows.
-    pub fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// Whether the table is empty.
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
-
-    fn build_key(&self, condition: &ObjectMap) -> Option<String> {
-        let mut parts = Vec::with_capacity(self.key_columns.len());
-        for col in &self.key_columns {
-            let val = condition.get(col.as_str())?;
-            parts.push(value_to_key_string(val));
-        }
-        Some(parts.join("\x00"))
-    }
-}
+use crate::config::{EnrichmentSourceConfig, EnrichmentTableConfig};
+use crate::enrichment::loader;
+use crate::enrichment::table::EnrichmentTable;
 
 /// Collection of named enrichment tables.
-#[derive(Debug, Clone, Default)]
+///
+/// Created at startup via `load()`. Individual tables support atomic refresh
+/// via `ArcSwap` (see `EnrichmentTable::swap_hashmap`).
+#[derive(Debug)]
 pub struct EnrichmentRegistry {
-    tables: HashMap<String, EnrichmentTable>,
+    tables: FxHashMap<String, EnrichmentTable>,
 }
 
 impl EnrichmentRegistry {
     /// Load all enrichment tables from config. Fails fast on any error.
+    ///
+    /// Dispatches on `resolved_source()` to call the appropriate loader.
+    /// STIX HTTP sources are not supported here (require async context).
+    /// STIX file sources and all other types are loaded synchronously.
     pub fn load(configs: &[EnrichmentTableConfig]) -> crate::Result<Self> {
-        let mut tables = HashMap::with_capacity(configs.len());
+        let mut tables = FxHashMap::default();
 
         for config in configs {
-            let table = load_table(config)?;
+            let source = config.resolved_source()?;
+            let table = load_table_from_source(config, &source)?;
+
+            // Enforce max_bytes if configured
+            if let Some(max_bytes) = config.max_bytes {
+                let estimated = table.estimated_bytes();
+                if estimated > max_bytes {
+                    return Err(crate::Error::Enrichment(format!(
+                        "table '{}': materialised size ({estimated} bytes) exceeds max_bytes ({max_bytes})",
+                        config.name
+                    )));
+                }
+            }
+
             info!(
-                table = %table.name,
+                table = %table.name(),
                 rows = table.len(),
                 key_columns = ?config.key_columns,
                 "loaded enrichment table"
@@ -112,7 +68,7 @@ impl EnrichmentRegistry {
         self.tables.get(name)
     }
 
-    /// Check if a table exists (used at compile time for validation).
+    /// Check if a table exists (used at VRL compile time for validation).
     pub fn has_table(&self, name: &str) -> bool {
         self.tables.contains_key(name)
     }
@@ -132,180 +88,85 @@ impl EnrichmentRegistry {
         self.tables.is_empty()
     }
 
-    /// Wrap in Arc for sharing between compiler and runtime.
+    /// Iterator over all tables (for refresh task to find refreshable tables).
+    pub fn tables(&self) -> impl Iterator<Item = &EnrichmentTable> {
+        self.tables.values()
+    }
+
+    /// Wrap in Arc for sharing between VRL compiler and runtime.
     pub fn into_arc(self) -> Arc<Self> {
         Arc::new(self)
     }
 }
 
-/// Load a single enrichment table from file.
-fn load_table(config: &EnrichmentTableConfig) -> crate::Result<EnrichmentTable> {
-    let path = Path::new(&config.path);
-    if !path.is_file() {
-        return Err(crate::Error::Config(format!(
-            "enrichment table '{}': file not found: {}",
-            config.name, config.path
-        )));
-    }
-
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let rows = match ext.as_str() {
-        "csv" => load_csv(path, &config.name, &config.key_columns)?,
-        "json" => load_json(path, &config.name, &config.key_columns)?,
-        other => {
-            return Err(crate::Error::Config(format!(
-                "enrichment table '{}': unsupported format '.{other}' (supported: .csv, .json)",
-                config.name
-            )));
-        }
-    };
-
-    Ok(EnrichmentTable {
-        name: config.name.clone(),
-        rows,
-        key_columns: config.key_columns.clone(),
-    })
-}
-
-/// Load a CSV file into a `HashMap` keyed by the key columns.
-fn load_csv(
-    path: &Path,
-    table_name: &str,
-    key_columns: &[String],
-) -> crate::Result<HashMap<String, ObjectMap>> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        crate::Error::Config(format!(
-            "enrichment table '{table_name}': failed to read {}: {e}",
-            path.display()
-        ))
-    })?;
-
-    let mut rows = HashMap::new();
-    let mut lines = content.lines();
-
-    let header_line = lines.next().ok_or_else(|| {
-        crate::Error::Config(format!(
-            "enrichment table '{table_name}': CSV file is empty"
-        ))
-    })?;
-
-    let headers: Vec<&str> = header_line.split(',').map(str::trim).collect();
-
-    // Validate key columns exist in headers
-    for kc in key_columns {
-        if !headers.contains(&kc.as_str()) {
-            return Err(crate::Error::Config(format!(
-                "enrichment table '{table_name}': key column '{kc}' not found in CSV headers: {headers:?}"
-            )));
-        }
-    }
-
-    for (line_num, line) in lines.enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let values: Vec<&str> = line.split(',').map(str::trim).collect();
-        if values.len() != headers.len() {
-            return Err(crate::Error::Config(format!(
-                "enrichment table '{table_name}': row {} has {} columns, expected {} (header count)",
-                line_num + 2,
-                values.len(),
-                headers.len()
-            )));
-        }
-
-        let mut row = ObjectMap::new();
-        for (header, value) in headers.iter().zip(values.iter()) {
-            row.insert(KeyString::from(*header), Value::from(*value));
-        }
-
-        let key = build_row_key(&row, key_columns);
-        rows.insert(key, row);
-    }
-
-    Ok(rows)
-}
-
-/// Load a JSON array file into a `HashMap` keyed by the key columns.
-fn load_json(
-    path: &Path,
-    table_name: &str,
-    key_columns: &[String],
-) -> crate::Result<HashMap<String, ObjectMap>> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        crate::Error::Config(format!(
-            "enrichment table '{table_name}': failed to read {}: {e}",
-            path.display()
-        ))
-    })?;
-
-    let json_array: Vec<serde_json::Value> = serde_json::from_str(&content).map_err(|e| {
-        crate::Error::Config(format!(
-            "enrichment table '{table_name}': invalid JSON: {e}"
-        ))
-    })?;
-
-    let mut rows = HashMap::with_capacity(json_array.len());
-
-    for (idx, item) in json_array.iter().enumerate() {
-        let obj = item.as_object().ok_or_else(|| {
-            crate::Error::Config(format!(
-                "enrichment table '{table_name}': element {idx} is not a JSON object"
-            ))
-        })?;
-
-        // Validate key columns exist
-        for kc in key_columns {
-            if !obj.contains_key(kc) {
-                return Err(crate::Error::Config(format!(
-                    "enrichment table '{table_name}': element {idx} missing key column '{kc}'"
-                )));
+/// Load a single enrichment table from a resolved source config.
+fn load_table_from_source(
+    config: &EnrichmentTableConfig,
+    source: &EnrichmentSourceConfig,
+) -> crate::Result<EnrichmentTable> {
+    match source {
+        EnrichmentSourceConfig::Mmdb { path: mmdb_path } => {
+            #[cfg(feature = "enrichment-mmdb")]
+            {
+                let reader = loader::load_mmdb(std::path::Path::new(mmdb_path), &config.name)?;
+                Ok(EnrichmentTable::new_mmdb(
+                    &config.name,
+                    reader,
+                    config.source.clone(),
+                    config.refresh.clone(),
+                ))
+            }
+            #[cfg(not(feature = "enrichment-mmdb"))]
+            {
+                let _ = mmdb_path;
+                Err(crate::Error::Enrichment(
+                    "MMDB enrichment support not compiled (enable 'enrichment-mmdb' feature)"
+                        .into(),
+                ))
             }
         }
-
-        let row: ObjectMap = obj
-            .iter()
-            .map(|(k, v)| (KeyString::from(k.as_str()), json_to_vrl_value(v)))
-            .collect();
-
-        let key = build_row_key(&row, key_columns);
-        rows.insert(key, row);
+        EnrichmentSourceConfig::Stix {
+            path,
+            url: _,
+            collection: _,
+            auth: _,
+        } => {
+            // File-based STIX: load synchronously
+            if let Some(file_path) = path {
+                let map = crate::enrichment::stix::load_stix(
+                    Some(file_path.as_str()),
+                    None,
+                    None,
+                    &config.name,
+                    &config.key_columns,
+                )?;
+                Ok(EnrichmentTable::new_hashmap(
+                    &config.name,
+                    map,
+                    config.key_columns.clone(),
+                    config.source.clone(),
+                    config.refresh.clone(),
+                ))
+            } else {
+                // URL-based STIX requires async — cannot load here
+                Err(crate::Error::Enrichment(format!(
+                    "table '{}': STIX HTTP sources require async loading (wire via refresh task or provide a file path)",
+                    config.name
+                )))
+            }
+        }
+        _ => {
+            // File, SQLite — all dispatched through load_from_source
+            let map = loader::load_from_source(source, &config.name, &config.key_columns)?;
+            Ok(EnrichmentTable::new_hashmap(
+                &config.name,
+                map,
+                config.key_columns.clone(),
+                config.source.clone(),
+                config.refresh.clone(),
+            ))
+        }
     }
-
-    Ok(rows)
-}
-
-/// Build a lookup key from row values for the given key columns.
-fn build_row_key(row: &ObjectMap, key_columns: &[String]) -> String {
-    key_columns
-        .iter()
-        .map(|col| {
-            row.get(col.as_str())
-                .map(value_to_key_string)
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join("\x00")
-}
-
-/// Convert a VRL Value to a string for key building.
-fn value_to_key_string(v: &Value) -> String {
-    match v {
-        Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
-        other => format!("{other}"),
-    }
-}
-
-/// Convert a `serde_json::Value` to a VRL `Value`.
-fn json_to_vrl_value(v: &serde_json::Value) -> Value {
-    Value::from(v.clone())
 }
 
 #[cfg(test)]
@@ -313,211 +174,159 @@ fn json_to_vrl_value(v: &serde_json::Value) -> Value {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
+    use vrl::value::{ObjectMap, Value};
 
-    fn write_csv(dir: &Path, name: &str, content: &str) -> String {
-        let path = dir.join(name);
-        fs::write(&path, content).unwrap();
-        path.to_string_lossy().to_string()
-    }
-
-    fn write_json(dir: &Path, name: &str, content: &str) -> String {
+    fn write_file(dir: &Path, name: &str, content: &str) -> String {
         let path = dir.join(name);
         fs::write(&path, content).unwrap();
         path.to_string_lossy().to_string()
     }
 
     #[test]
-    fn test_load_csv_basic() {
+    fn registry_load_csv_legacy_format() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_csv(
+        let path = write_file(
             dir.path(),
             "services.csv",
             "service_id,name,tier\nsvc-001,auth,critical\nsvc-002,web,standard\n",
         );
 
-        let config = EnrichmentTableConfig {
+        let configs = vec![EnrichmentTableConfig {
             name: "services".into(),
             path,
             key_columns: vec!["service_id".into()],
-        };
+            ..Default::default()
+        }];
 
-        let table = load_table(&config).unwrap();
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        assert_eq!(registry.len(), 1);
+        assert!(registry.has_table("services"));
+
+        let table = registry.get_table("services").unwrap();
         assert_eq!(table.len(), 2);
 
         let mut cond = ObjectMap::new();
         cond.insert("service_id".into(), Value::from("svc-001"));
         let row = table.get_record(&cond).unwrap();
         assert_eq!(row.get("name"), Some(&Value::from("auth")));
-        assert_eq!(row.get("tier"), Some(&Value::from("critical")));
     }
 
     #[test]
-    fn test_load_csv_multi_key() {
+    fn registry_load_json_legacy_format() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_csv(
+        let path = write_file(
             dir.path(),
-            "geo.csv",
-            "country,city,timezone\nAU,Sydney,AEST\nAU,Melbourne,AEST\nUS,NYC,EST\n",
+            "geo.json",
+            r#"[{"cc": "AU", "name": "Australia"}, {"cc": "NZ", "name": "New Zealand"}]"#,
         );
 
-        let config = EnrichmentTableConfig {
+        let configs = vec![EnrichmentTableConfig {
             name: "geo".into(),
             path,
-            key_columns: vec!["country".into(), "city".into()],
-        };
+            key_columns: vec!["cc".into()],
+            ..Default::default()
+        }];
 
-        let table = load_table(&config).unwrap();
-        assert_eq!(table.len(), 3);
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        assert_eq!(registry.len(), 1);
 
+        let table = registry.get_table("geo").unwrap();
         let mut cond = ObjectMap::new();
-        cond.insert("country".into(), Value::from("AU"));
-        cond.insert("city".into(), Value::from("Sydney"));
+        cond.insert("cc".into(), Value::from("AU"));
         let row = table.get_record(&cond).unwrap();
-        assert_eq!(row.get("timezone"), Some(&Value::from("AEST")));
+        assert_eq!(row.get("name"), Some(&Value::from("Australia")));
     }
 
     #[test]
-    fn test_load_csv_missing_key_column() {
+    fn registry_load_new_format_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_csv(dir.path(), "bad.csv", "a,b\n1,2\n");
+        let _path = write_file(dir.path(), "svc.csv", "id,name\n1,auth\n");
 
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path,
-            key_columns: vec!["missing_col".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_load_csv_empty_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_csv(dir.path(), "empty.csv", "");
-
-        let config = EnrichmentTableConfig {
-            name: "empty".into(),
-            path,
+        let configs = vec![EnrichmentTableConfig {
+            name: "svc".into(),
+            path: String::new(),
             key_columns: vec!["id".into()],
-        };
+            source: Some(EnrichmentSourceConfig::File {
+                path: dir.path().join("svc.csv").to_string_lossy().to_string(),
+                format: Some(crate::config::FileFormat::Csv),
+            }),
+            ..Default::default()
+        }];
 
-        assert!(load_table(&config).is_err());
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
-    fn test_load_csv_mismatched_columns() {
+    fn registry_load_yaml() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_csv(dir.path(), "bad.csv", "a,b,c\n1,2\n");
-
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path,
-            key_columns: vec!["a".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_load_json_basic() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_json(
+        let _path = write_file(
             dir.path(),
-            "services.json",
-            r#"[
-                {"service_id": "svc-001", "name": "auth", "tier": "critical"},
-                {"service_id": "svc-002", "name": "web", "tier": "standard"}
-            ]"#,
+            "routes.yaml",
+            "- route_id: SYD-MEL\n  origin: YSSY\n- route_id: SYD-BNE\n  origin: YSSY\n",
         );
 
-        let config = EnrichmentTableConfig {
-            name: "services".into(),
-            path,
-            key_columns: vec!["service_id".into()],
-        };
+        let configs = vec![EnrichmentTableConfig {
+            name: "routes".into(),
+            path: String::new(),
+            key_columns: vec!["route_id".into()],
+            source: Some(EnrichmentSourceConfig::File {
+                path: dir.path().join("routes.yaml").to_string_lossy().to_string(),
+                format: Some(crate::config::FileFormat::Yaml),
+            }),
+            ..Default::default()
+        }];
 
-        let table = load_table(&config).unwrap();
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let table = registry.get_table("routes").unwrap();
         assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn registry_load_stix_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let stix = r#"{
+            "type": "bundle",
+            "objects": [
+                {
+                    "type": "indicator",
+                    "pattern": "[ipv4-addr:value = '10.0.0.1']",
+                    "confidence": 90,
+                    "name": "Test IOC"
+                }
+            ]
+        }"#;
+        let _path = write_file(dir.path(), "stix.json", stix);
+
+        let configs = vec![EnrichmentTableConfig {
+            name: "threats".into(),
+            path: String::new(),
+            key_columns: vec!["indicator".into()],
+            source: Some(EnrichmentSourceConfig::Stix {
+                path: Some(dir.path().join("stix.json").to_string_lossy().to_string()),
+                url: None,
+                collection: None,
+                auth: None,
+            }),
+            ..Default::default()
+        }];
+
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let table = registry.get_table("threats").unwrap();
+        assert_eq!(table.len(), 1);
 
         let mut cond = ObjectMap::new();
-        cond.insert("service_id".into(), Value::from("svc-002"));
+        cond.insert("indicator".into(), Value::from("10.0.0.1"));
         let row = table.get_record(&cond).unwrap();
-        assert_eq!(row.get("name"), Some(&Value::from("web")));
+        assert_eq!(row.get("name"), Some(&Value::from("Test IOC")));
     }
 
     #[test]
-    fn test_load_json_missing_key_column() {
+    fn registry_load_multiple_tables() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_json(dir.path(), "bad.json", r#"[{"a": 1, "b": 2}]"#);
-
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path,
-            key_columns: vec!["missing".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_load_json_not_array() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_json(dir.path(), "bad.json", r#"{"not": "array"}"#);
-
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path,
-            key_columns: vec!["id".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_load_json_element_not_object() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_json(dir.path(), "bad.json", "[1, 2, 3]");
-
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path,
-            key_columns: vec!["id".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_missing_file() {
-        let config = EnrichmentTableConfig {
-            name: "missing".into(),
-            path: "/nonexistent/file.csv".into(),
-            key_columns: vec!["id".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_unsupported_format() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("data.toml");
-        fs::write(&path, "key = 'value'\n").unwrap();
-
-        let config = EnrichmentTableConfig {
-            name: "bad".into(),
-            path: path.to_string_lossy().to_string(),
-            key_columns: vec!["id".into()],
-        };
-
-        assert!(load_table(&config).is_err());
-    }
-
-    #[test]
-    fn test_registry_load() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv_path = write_csv(dir.path(), "svc.csv", "id,name\n1,auth\n");
-        let json_path = write_json(
+        let csv_path = write_file(dir.path(), "svc.csv", "id,name\n1,auth\n");
+        let json_path = write_file(
             dir.path(),
             "geo.json",
             r#"[{"cc": "AU", "name": "Australia"}]"#,
@@ -528,11 +337,13 @@ mod tests {
                 name: "services".into(),
                 path: csv_path,
                 key_columns: vec!["id".into()],
+                ..Default::default()
             },
             EnrichmentTableConfig {
                 name: "geo".into(),
                 path: json_path,
                 key_columns: vec!["cc".into()],
+                ..Default::default()
             },
         ];
 
@@ -544,25 +355,85 @@ mod tests {
     }
 
     #[test]
-    fn test_find_records() {
+    fn registry_table_names() {
         let dir = tempfile::tempdir().unwrap();
-        let path = write_json(
+        let path = write_file(dir.path(), "t.csv", "id\n1\n");
+
+        let configs = vec![EnrichmentTableConfig {
+            name: "test".into(),
+            path,
+            key_columns: vec!["id".into()],
+            ..Default::default()
+        }];
+
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let names = registry.table_names();
+        assert!(names.contains(&"test"));
+    }
+
+    #[test]
+    fn registry_missing_file_fails() {
+        let configs = vec![EnrichmentTableConfig {
+            name: "missing".into(),
+            path: "/nonexistent.csv".into(),
+            key_columns: vec!["id".into()],
+            ..Default::default()
+        }];
+
+        assert!(EnrichmentRegistry::load(&configs).is_err());
+    }
+
+    #[test]
+    fn registry_no_source_configured_fails() {
+        let configs = vec![EnrichmentTableConfig {
+            name: "empty".into(),
+            ..Default::default()
+        }];
+
+        assert!(EnrichmentRegistry::load(&configs).is_err());
+    }
+
+    #[test]
+    fn registry_max_bytes_enforced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_file(dir.path(), "big.csv", "id,data\n1,aaaa\n2,bbbb\n");
+
+        let configs = vec![EnrichmentTableConfig {
+            name: "big".into(),
+            path,
+            key_columns: vec!["id".into()],
+            max_bytes: Some(1), // 1 byte — will always exceed
+            ..Default::default()
+        }];
+
+        let result = EnrichmentRegistry::load(&configs);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("exceeds max_bytes"));
+    }
+
+    #[test]
+    fn registry_find_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_file(
             dir.path(),
             "data.json",
             r#"[
-                {"country": "AU", "city": "Sydney", "pop": 5000000},
-                {"country": "AU", "city": "Melbourne", "pop": 4500000},
-                {"country": "US", "city": "NYC", "pop": 8000000}
+                {"country": "AU", "city": "Sydney"},
+                {"country": "AU", "city": "Melbourne"},
+                {"country": "US", "city": "NYC"}
             ]"#,
         );
 
-        let config = EnrichmentTableConfig {
+        let configs = vec![EnrichmentTableConfig {
             name: "cities".into(),
             path,
             key_columns: vec!["country".into(), "city".into()],
-        };
+            ..Default::default()
+        }];
 
-        let table = load_table(&config).unwrap();
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let table = registry.get_table("cities").unwrap();
 
         let mut cond = ObjectMap::new();
         cond.insert("country".into(), Value::from("AU"));
@@ -571,18 +442,9 @@ mod tests {
     }
 
     #[test]
-    fn test_find_records_empty_condition() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_json(dir.path(), "data.json", r#"[{"id": "1", "name": "a"}]"#);
-
-        let config = EnrichmentTableConfig {
-            name: "t".into(),
-            path,
-            key_columns: vec!["id".into()],
-        };
-
-        let table = load_table(&config).unwrap();
-        let empty = ObjectMap::new();
-        assert!(table.find_records(&empty).is_empty());
+    fn registry_into_arc() {
+        let registry = EnrichmentRegistry::load(&[]).unwrap();
+        let arc = registry.into_arc();
+        assert!(arc.is_empty());
     }
 }

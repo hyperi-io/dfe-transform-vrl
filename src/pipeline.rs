@@ -411,11 +411,18 @@ async fn process_batch<T: Transport>(
     // Release tracked memory after batch is fully committed
     memory_guard.release(batch_bytes);
 
-    // End-to-end batch duration
+    // End-to-end batch duration + EPS
     let batch_elapsed = batch_start.elapsed();
     transform_metrics
         .batch_duration
         .record(batch_elapsed.as_secs_f64());
+
+    let batch_secs = batch_elapsed.as_secs_f64();
+    if batch_secs > 0.0 {
+        transform_metrics
+            .events_per_second
+            .set(produced_count as f64 / batch_secs);
+    }
 
     debug!(
         produced = produced_count,

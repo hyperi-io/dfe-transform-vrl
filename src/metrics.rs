@@ -43,6 +43,10 @@ pub struct TransformMetrics {
     pub abort_total: metrics::Counter,
     pub batch_size: metrics::Histogram,
     pub enrichment_table_rows: metrics::Gauge,
+    pub events_per_second: metrics::Gauge,
+    pub enrichment_reload_total: metrics::Counter,
+    pub enrichment_reload_duration: metrics::Histogram,
+    pub enrichment_last_reload_timestamp: metrics::Gauge,
 }
 
 impl TransformMetrics {
@@ -94,6 +98,22 @@ impl TransformMetrics {
             batch_size: manager.histogram("batch_size", "Events per transform batch"),
             enrichment_table_rows: manager
                 .gauge("enrichment_table_rows", "Rows loaded per enrichment table"),
+            events_per_second: manager.gauge(
+                "events_per_second",
+                "Instantaneous throughput (produced events / batch duration)",
+            ),
+            enrichment_reload_total: manager.counter(
+                "enrichment_reload_total",
+                "Enrichment table reload attempts",
+            ),
+            enrichment_reload_duration: manager.histogram(
+                "enrichment_reload_duration_seconds",
+                "Enrichment table reload latency",
+            ),
+            enrichment_last_reload_timestamp: manager.gauge(
+                "enrichment_table_last_reload_timestamp",
+                "Unix timestamp of last successful enrichment table reload",
+            ),
         }
     }
 
@@ -151,6 +171,35 @@ impl TransformMetrics {
         )
         .set(rows as f64);
     }
+
+    /// Record an enrichment table reload attempt (success or failure).
+    #[inline]
+    pub fn record_enrichment_reload(&self, table: &str, duration_secs: f64, success: bool) {
+        let result = if success { "success" } else { "error" };
+        metrics::counter!(
+            "dfe_transform_vrl_enrichment_reload_total",
+            "table" => table.to_string(),
+            "result" => result
+        )
+        .increment(1);
+        metrics::histogram!(
+            "dfe_transform_vrl_enrichment_reload_duration_seconds",
+            "table" => table.to_string()
+        )
+        .record(duration_secs);
+        if success {
+            metrics::gauge!(
+                "dfe_transform_vrl_enrichment_table_last_reload_timestamp",
+                "table" => table.to_string()
+            )
+            .set(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64(),
+            );
+        }
+    }
 }
 
 impl Default for TransformMetrics {
@@ -175,6 +224,14 @@ impl Default for TransformMetrics {
             abort_total: metrics::counter!("dfe_transform_vrl_abort_total"),
             batch_size: metrics::histogram!("dfe_transform_vrl_batch_size"),
             enrichment_table_rows: metrics::gauge!("dfe_transform_vrl_enrichment_table_rows"),
+            events_per_second: metrics::gauge!("dfe_transform_vrl_events_per_second"),
+            enrichment_reload_total: metrics::counter!("dfe_transform_vrl_enrichment_reload_total"),
+            enrichment_reload_duration: metrics::histogram!(
+                "dfe_transform_vrl_enrichment_reload_duration_seconds"
+            ),
+            enrichment_last_reload_timestamp: metrics::gauge!(
+                "dfe_transform_vrl_enrichment_table_last_reload_timestamp"
+            ),
         }
     }
 }
@@ -238,5 +295,6 @@ mod tests {
         m.batch_size.record(500.0);
         m.programs_loaded.set(3.0);
         m.abort_total.increment(1);
+        m.events_per_second.set(12345.0);
     }
 }

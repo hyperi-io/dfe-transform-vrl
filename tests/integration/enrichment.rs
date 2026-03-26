@@ -48,6 +48,7 @@ fn test_csv_lookup_hit() {
         name: "services".into(),
         path: csv_path,
         key_columns: vec!["service_id".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -81,6 +82,7 @@ fn test_csv_lookup_miss_returns_null() {
         name: "services".into(),
         path: csv_path,
         key_columns: vec!["service_id".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -116,6 +118,7 @@ fn test_json_lookup_hit() {
         name: "geo".into(),
         path: json_path,
         key_columns: vec!["country_code".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -159,6 +162,7 @@ fn test_find_records_multiple_matches() {
         name: "cities".into(),
         path: json_path,
         key_columns: vec!["country".into(), "city".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -193,6 +197,7 @@ fn test_find_records_no_matches() {
         name: "data".into(),
         path: json_path,
         key_columns: vec!["country".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -231,6 +236,7 @@ fn test_multi_key_csv_lookup() {
         name: "geo".into(),
         path: csv_path,
         key_columns: vec!["country".into(), "city".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -278,11 +284,13 @@ fn test_multiple_tables_in_single_vrl() {
             name: "services".into(),
             path: svc_path,
             key_columns: vec!["service_id".into()],
+            ..Default::default()
         },
         EnrichmentTableConfig {
             name: "geo".into(),
             path: geo_path,
             key_columns: vec!["cc".into()],
+            ..Default::default()
         },
     ])
     .unwrap()
@@ -330,6 +338,7 @@ fn test_missing_enrichment_file_fails_load() {
         name: "missing".into(),
         path: "/nonexistent/file.csv".into(),
         key_columns: vec!["id".into()],
+        ..Default::default()
     }]);
     assert!(result.is_err());
 }
@@ -347,6 +356,7 @@ fn test_lookup_with_null_field_returns_null() {
         name: "svc".into(),
         path: csv_path,
         key_columns: vec!["service_id".into()],
+        ..Default::default()
     }])
     .unwrap()
     .into_arc();
@@ -362,4 +372,130 @@ fn test_lookup_with_null_field_returns_null() {
 
     let obj = result.as_object().unwrap();
     assert_eq!(obj.get("result"), Some(&Value::Null));
+}
+
+// =========================================================================
+// YAML enrichment
+// =========================================================================
+
+#[test]
+fn test_yaml_lookup_hit() {
+    let dir = tempfile::tempdir().unwrap();
+    let _path = write_file(
+        dir.path(),
+        "routes.yaml",
+        "- route_id: SYD-MEL\n  origin: YSSY\n  destination: YMML\n- route_id: SYD-BNE\n  origin: YSSY\n  destination: YBBN\n",
+    );
+
+    let registry = EnrichmentRegistry::load(&[EnrichmentTableConfig {
+        name: "routes".into(),
+        path: String::new(),
+        key_columns: vec!["route_id".into()],
+        source: Some(dfe_transform_vrl::config::EnrichmentSourceConfig::File {
+            path: dir.path().join("routes.yaml").to_string_lossy().to_string(),
+            format: Some(dfe_transform_vrl::config::FileFormat::Yaml),
+        }),
+        ..Default::default()
+    }])
+    .unwrap()
+    .into_arc();
+
+    let program = compile_with_registry(
+        r#".route = get_enrichment_table_record!("routes", {"route_id": .route_id})"#,
+        registry,
+    );
+
+    let result = run_transform(&program, serde_json::json!({"route_id": "SYD-MEL"}));
+
+    let route = result
+        .as_object()
+        .unwrap()
+        .get("route")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert_eq!(route.get("origin"), Some(&Value::from("YSSY")));
+    assert_eq!(route.get("destination"), Some(&Value::from("YMML")));
+}
+
+// =========================================================================
+// STIX enrichment (file-based)
+// =========================================================================
+
+#[test]
+fn test_stix_file_lookup() {
+    let dir = tempfile::tempdir().unwrap();
+    let stix_content = r#"{
+        "type": "bundle",
+        "objects": [
+            {
+                "type": "indicator",
+                "pattern": "[ipv4-addr:value = '203.0.113.50']",
+                "confidence": 85,
+                "name": "Known C2 server"
+            },
+            {
+                "type": "indicator",
+                "pattern": "[domain-name:value = 'evil.example.com']",
+                "confidence": 70,
+                "name": "Phishing domain"
+            }
+        ]
+    }"#;
+    let _path = write_file(dir.path(), "stix.json", stix_content);
+
+    let registry = EnrichmentRegistry::load(&[EnrichmentTableConfig {
+        name: "threats".into(),
+        path: String::new(),
+        key_columns: vec!["indicator".into()],
+        source: Some(dfe_transform_vrl::config::EnrichmentSourceConfig::Stix {
+            path: Some(dir.path().join("stix.json").to_string_lossy().to_string()),
+            url: None,
+            collection: None,
+            auth: None,
+        }),
+        ..Default::default()
+    }])
+    .unwrap()
+    .into_arc();
+
+    let program = compile_with_registry(
+        r#".threat = get_enrichment_table_record!("threats", {"indicator": .src_ip})"#,
+        registry,
+    );
+
+    let result = run_transform(&program, serde_json::json!({"src_ip": "203.0.113.50"}));
+
+    let threat = result
+        .as_object()
+        .unwrap()
+        .get("threat")
+        .unwrap()
+        .as_object()
+        .unwrap();
+    assert_eq!(threat.get("name"), Some(&Value::from("Known C2 server")));
+    assert_eq!(threat.get("confidence"), Some(&Value::Integer(85)));
+    assert_eq!(threat.get("indicator_type"), Some(&Value::from("ipv4")));
+}
+
+// =========================================================================
+// max_bytes enforcement
+// =========================================================================
+
+#[test]
+fn test_max_bytes_enforcement() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv_path = write_file(dir.path(), "big.csv", "id,data\n1,aaaa\n2,bbbb\n3,cccc\n");
+
+    let result = EnrichmentRegistry::load(&[EnrichmentTableConfig {
+        name: "big".into(),
+        path: csv_path,
+        key_columns: vec!["id".into()],
+        max_bytes: Some(1), // 1 byte — will always exceed
+        ..Default::default()
+    }]);
+
+    assert!(result.is_err());
+    let err = format!("{}", result.unwrap_err());
+    assert!(err.contains("exceeds max_bytes"));
 }

@@ -40,6 +40,9 @@ pub enum Error {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("enrichment error: {0}")]
+    Enrichment(String),
+
     #[error("health check error: {0}")]
     Health(String),
 
@@ -83,6 +86,12 @@ mod tests {
     fn display_kafka_error() {
         let e = Error::Kafka("broker unreachable".to_string());
         assert_eq!(e.to_string(), "Kafka error: broker unreachable");
+    }
+
+    #[test]
+    fn display_enrichment_error() {
+        let e = Error::Enrichment("table not found".to_string());
+        assert_eq!(e.to_string(), "enrichment error: table not found");
     }
 
     #[test]

@@ -21,6 +21,7 @@ pub mod validate;
 
 pub use hot::HotConfig;
 pub use loader::{
-    Config, EnrichmentTableConfig, HealthConfig, LoggingConfig, MetricsConfig, PipelineConfig,
-    SaslConfig, ScalingConfig, SinkConfig, SourceConfig, TlsConfig, TransformConfig,
+    Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, HealthConfig, LoggingConfig,
+    MetricsConfig, PipelineConfig, RefreshConfig, SaslConfig, ScalingConfig, SinkConfig,
+    SourceConfig, StixAuthConfig, TlsConfig, TransformConfig,
 };

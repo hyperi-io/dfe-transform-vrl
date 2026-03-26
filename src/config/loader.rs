@@ -90,18 +90,114 @@ pub struct Config {
     pub scaling: ScalingConfig,
 }
 
-/// Enrichment table file reference.
+/// Enrichment table configuration.
 ///
-/// Tables are loaded at startup into `HashMap<Key, Row>` for O(1) lookups.
-/// Immutable for the process lifetime — restart the pod to update.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Supports two config formats:
+/// - **New (tagged):** `source` field with type-tagged enum (`file`, `mmdb`, `stix`, `sqlite`)
+/// - **Legacy (flat):** `path` + `key_columns` only (treated as `File` with auto format detection)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct EnrichmentTableConfig {
     /// Table name used in VRL: `get_enrichment_table_record("name", ...)`.
     pub name: String,
-    /// Path to the enrichment data file (.csv or .json).
+    /// Path to enrichment data file (legacy flat format — kept for backwards compat).
+    #[serde(default)]
     pub path: String,
-    /// Column(s) used as the lookup key. Multiple columns are concatenated.
+    /// Lookup key column(s). Multiple columns are concatenated with `\x00`.
+    #[serde(default)]
     pub key_columns: Vec<String>,
+    /// Source definition (new tagged format). Takes precedence over `path`.
+    #[serde(default)]
+    pub source: Option<EnrichmentSourceConfig>,
+    /// Optional periodic refresh.
+    #[serde(default)]
+    pub refresh: Option<RefreshConfig>,
+    /// Maximum materialised table size in bytes. Fail-fast at load if exceeded.
+    /// When set, the loaded table's memory is also registered with `MemoryGuard`
+    /// so enrichment memory counts against the pod memory budget.
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+}
+
+impl EnrichmentTableConfig {
+    /// Resolve the effective source config.
+    ///
+    /// If `source` is set (new format), use it directly.
+    /// If only `path` is set (legacy format), treat as `File` with auto format detection.
+    pub fn resolved_source(&self) -> crate::Result<EnrichmentSourceConfig> {
+        if let Some(ref source) = self.source {
+            return Ok(source.clone());
+        }
+        if !self.path.is_empty() {
+            return Ok(EnrichmentSourceConfig::File {
+                path: self.path.clone(),
+                format: None,
+            });
+        }
+        Err(crate::Error::Enrichment(format!(
+            "enrichment table '{}': no source configured (set 'source' or 'path')",
+            self.name
+        )))
+    }
+}
+
+/// Source definition for an enrichment table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum EnrichmentSourceConfig {
+    File {
+        path: String,
+        #[serde(default)]
+        format: Option<FileFormat>,
+    },
+    Mmdb {
+        path: String,
+    },
+    Stix {
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        collection: Option<String>,
+        #[serde(default)]
+        auth: Option<StixAuthConfig>,
+    },
+    Sqlite {
+        path: String,
+        query: String,
+    },
+}
+
+/// File format for enrichment table loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileFormat {
+    Csv,
+    Json,
+    Yaml,
+    Auto,
+}
+
+/// Authentication for STIX/TAXII sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StixAuthConfig {
+    /// Auth type: `bearer`, `basic`, or `api_key`.
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    #[serde(default)]
+    pub token_env: Option<String>,
+    #[serde(default)]
+    pub username_env: Option<String>,
+    #[serde(default)]
+    pub password_env: Option<String>,
+}
+
+/// Periodic refresh configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshConfig {
+    /// Refresh interval in seconds. Minimum enforced: 60.
+    pub interval_secs: u64,
 }
 
 /// Pipeline identity and processing settings.
@@ -142,6 +238,11 @@ pub struct SourceConfig {
     pub auto_offset_reset: String,
     pub session_timeout_ms: u32,
     pub commit_interval_ms: u32,
+    /// librdkafka statistics emission interval (ms). 0 = disabled.
+    /// When enabled (and rustlib supports `StatsContext` in `KafkaTransport`),
+    /// rdkafka broker RTT, consumer lag, and queue depth metrics auto-emit
+    /// to the Prometheus `/metrics` endpoint.
+    pub statistics_interval_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,
 }
@@ -159,6 +260,7 @@ impl Default for SourceConfig {
             auto_offset_reset: "latest".to_string(),
             session_timeout_ms: 30_000,
             commit_interval_ms: 5_000,
+            statistics_interval_ms: 5_000,
             librdkafka_options: BTreeMap::new(),
         }
     }
@@ -557,5 +659,111 @@ sink:
     fn enrichment_table_config_empty_by_default() {
         let config = Config::default();
         assert!(config.enrichment_tables.is_empty());
+    }
+
+    #[test]
+    fn enrichment_config_legacy_flat_format() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "services"
+    path: "/data/services.csv"
+    key_columns: ["service_id"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(config.enrichment_tables.len(), 1);
+        let table = &config.enrichment_tables[0];
+        assert_eq!(table.name, "services");
+        assert_eq!(table.path, "/data/services.csv");
+        let source = table.resolved_source().unwrap();
+        assert!(matches!(source, EnrichmentSourceConfig::File { .. }));
+    }
+
+    #[test]
+    fn enrichment_config_new_tagged_mmdb() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "geoip"
+    source:
+      type: mmdb
+      path: "/data/GeoLite2-City.mmdb"
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let source = config.enrichment_tables[0].resolved_source().unwrap();
+        assert!(matches!(source, EnrichmentSourceConfig::Mmdb { .. }));
+    }
+
+    #[test]
+    fn enrichment_config_stix_with_url() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "threats"
+    source:
+      type: stix
+      url: "https://taxii.example.com/objects"
+    key_columns: ["indicator"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let source = config.enrichment_tables[0].resolved_source().unwrap();
+        let EnrichmentSourceConfig::Stix { url, .. } = source else {
+            unreachable!("expected Stix");
+        };
+        assert_eq!(url.as_deref(), Some("https://taxii.example.com/objects"));
+    }
+
+    #[test]
+    fn enrichment_config_stix_with_file() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "threats"
+    source:
+      type: stix
+      path: "/data/stix-bundle.json"
+    key_columns: ["indicator"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let source = config.enrichment_tables[0].resolved_source().unwrap();
+        let EnrichmentSourceConfig::Stix { path, .. } = source else {
+            unreachable!("expected Stix");
+        };
+        assert_eq!(path.as_deref(), Some("/data/stix-bundle.json"));
+    }
+
+    #[test]
+    fn enrichment_config_sqlite() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "subscribers"
+    source:
+      type: sqlite
+      path: "/data/subs.db"
+      query: "SELECT msisdn, plan FROM subscribers"
+    key_columns: ["msisdn"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let source = config.enrichment_tables[0].resolved_source().unwrap();
+        assert!(matches!(source, EnrichmentSourceConfig::Sqlite { .. }));
+    }
+
+    #[test]
+    fn enrichment_config_resolved_source_error_when_empty() {
+        let config = EnrichmentTableConfig::default();
+        assert!(config.resolved_source().is_err());
+    }
+
+    #[test]
+    fn enrichment_config_with_refresh() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "threats"
+    source:
+      type: stix
+      url: "https://example.com/stix"
+    key_columns: ["indicator"]
+    refresh:
+      interval_secs: 3600
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let refresh = config.enrichment_tables[0].refresh.as_ref().unwrap();
+        assert_eq!(refresh.interval_secs, 3600);
     }
 }
