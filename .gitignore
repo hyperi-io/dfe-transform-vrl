@@ -8,6 +8,13 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.yaml
+secrets.yml
 *.log
 dist/
 dist-bin/

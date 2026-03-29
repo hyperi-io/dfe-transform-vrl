@@ -93,6 +93,9 @@ pub fn detect_format(path: &str) -> FileFormat {
 // ---------------------------------------------------------------------------
 
 /// Load a CSV file into an `FxHashMap` keyed by the key columns.
+///
+/// Uses the `csv` crate for RFC 4180 compliant parsing (handles quoted fields,
+/// embedded commas, and escaped quotes).
 pub fn load_csv(
     path: &Path,
     table_name: &str,
@@ -105,47 +108,47 @@ pub fn load_csv(
         )));
     }
 
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        crate::Error::Enrichment(format!(
-            "table '{table_name}': read {}: {e}",
-            path.display()
-        ))
-    })?;
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .trim(csv::Trim::All)
+        .from_path(path)
+        .map_err(|e| {
+            crate::Error::Enrichment(format!(
+                "table '{table_name}': read {}: {e}",
+                path.display()
+            ))
+        })?;
 
-    let mut lines = content.lines();
-
-    let header_line = lines.next().ok_or_else(|| {
-        crate::Error::Enrichment(format!("table '{table_name}': CSV file is empty"))
-    })?;
-
-    let headers: Vec<String> = header_line
-        .split(',')
-        .map(|s| s.trim().to_string())
+    let headers: Vec<String> = reader
+        .headers()
+        .map_err(|e| {
+            crate::Error::Enrichment(format!("table '{table_name}': read CSV headers: {e}"))
+        })?
+        .iter()
+        .map(std::string::ToString::to_string)
         .collect();
 
     validate_key_columns(&headers, key_columns, table_name)?;
 
     let mut rows = FxHashMap::default();
 
-    for (line_num, line) in lines.enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    for (row_idx, result) in reader.records().enumerate() {
+        let record = result.map_err(|e| {
+            crate::Error::Enrichment(format!("table '{table_name}': row {}: {e}", row_idx + 2))
+        })?;
 
-        let values: Vec<&str> = line.split(',').map(str::trim).collect();
-        if values.len() != headers.len() {
+        if record.len() != headers.len() {
             return Err(crate::Error::Enrichment(format!(
                 "table '{table_name}': row {} has {} columns, expected {}",
-                line_num + 2,
-                values.len(),
+                row_idx + 2,
+                record.len(),
                 headers.len()
             )));
         }
 
         let mut row = ObjectMap::new();
-        for (header, value) in headers.iter().zip(values.iter()) {
-            row.insert(KeyString::from(header.as_str()), Value::from(*value));
+        for (header, value) in headers.iter().zip(record.iter()) {
+            row.insert(KeyString::from(header.as_str()), Value::from(value));
         }
 
         let key = CompactKey::from_row(&row, key_columns);

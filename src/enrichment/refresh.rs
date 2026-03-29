@@ -62,7 +62,14 @@ pub fn start_refresh_tasks(
                         break;
                     }
                     _ = timer.tick() => {
-                        reload_table(&reg, &table_name, &source, &key_columns, &m);
+                        let reg = Arc::clone(&reg);
+                        let name = table_name.clone();
+                        let src = source.clone();
+                        let cols = key_columns.clone();
+                        let metrics = Arc::clone(&m);
+                        let _ = tokio::task::spawn_blocking(move || {
+                            reload_table(&reg, &name, &src, &cols, &metrics);
+                        }).await;
                     }
                 }
             }

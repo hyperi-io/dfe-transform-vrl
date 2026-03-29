@@ -21,7 +21,7 @@ use dfe_transform_vrl::pipeline;
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
-use hyperi_rustlib::transport::{PayloadFormat, Transport};
+use hyperi_rustlib::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
 
 use super::common::{self, KafkaTestConfig, skip_if_no_kafka};
 

@@ -115,11 +115,7 @@ impl TableData {
             }
 
             #[cfg(feature = "enrichment-mmdb")]
-            Self::Mmdb(_reader) => {
-                // MMDB lookup requires validated maxminddb API integration.
-                // Tracked in TODO — will be implemented with proper API research.
-                None
-            }
+            Self::Mmdb(_reader) => None,
         }
     }
 
@@ -315,9 +311,6 @@ fn record_matches_condition(row: &ObjectMap, condition: &ObjectMap) -> bool {
     condition.iter().all(|(k, v)| row.get(k) == Some(v))
 }
 
-// MMDB helper functions (mmdb_ip_from_condition, mmdb_to_object_map) are
-// deferred until maxminddb API is properly researched and a test .mmdb
-***REMOVED***
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

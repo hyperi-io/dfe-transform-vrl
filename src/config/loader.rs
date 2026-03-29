@@ -20,7 +20,7 @@ use tracing::debug;
 use crate::Result;
 
 /// SASL authentication for Kafka.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SaslConfig {
     pub enabled: bool,
@@ -28,6 +28,17 @@ pub struct SaslConfig {
     pub mechanism: String,
     pub username: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for SaslConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SaslConfig")
+            .field("enabled", &self.enabled)
+            .field("mechanism", &self.mechanism)
+            .field("username", &self.username)
+            .field("password", &"***")
+            .finish()
+    }
 }
 
 impl Default for SaslConfig {
