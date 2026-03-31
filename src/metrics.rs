@@ -55,7 +55,7 @@ impl TransformMetrics {
     /// The `MetricsManager` must be created with namespace `"dfe_transform_vrl"`
     /// so all registered metrics are prefixed correctly.
     pub fn new(manager: &MetricsManager, version: &str, commit: &str) -> Self {
-        let dfe = DfeMetrics::register();
+        let dfe = DfeMetrics::register(manager);
 
         let app = AppMetrics::new(manager, version, commit);
         let consumer = ConsumerMetrics::new(manager);
