@@ -60,6 +60,7 @@ pub async fn run(
     ready_flag: Arc<AtomicBool>,
     memory_guard: Arc<MemoryGuard>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    worker_pool: Option<Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
 ) -> crate::Result<()> {
     let consumer_config = kafka::build_consumer_config(&config.source);
     let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
@@ -87,6 +88,7 @@ pub async fn run(
         ready_flag,
         memory_guard,
         shutdown_rx,
+        worker_pool,
     )
     .await
 }
@@ -109,6 +111,7 @@ pub async fn run_with_transport<T: Transport>(
     ready_flag: Arc<AtomicBool>,
     memory_guard: Arc<MemoryGuard>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    worker_pool: Option<Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
 ) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
     if let Some(ref dfe) = transform_metrics.dfe {
@@ -162,6 +165,7 @@ pub async fn run_with_transport<T: Transport>(
                 payload_format,
                 transform_metrics,
                 &memory_guard,
+                &worker_pool,
             ) => {
                 if let Err(e) = result
                     && log_debounced(&BATCH_ERROR_TS, 5000)
@@ -203,6 +207,7 @@ async fn process_batch<T: Transport>(
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
     memory_guard: &MemoryGuard,
+    worker_pool: &Option<Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
 ) -> crate::Result<()> {
     let messages = match tokio::time::timeout(batch_timeout, consumer.recv(batch_size)).await {
         Ok(result) => result.map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?,
@@ -283,13 +288,38 @@ async fn process_batch<T: Transport>(
         transform_metrics.record_format("msgpack", msgpack_count);
     }
 
-    // Phase 2: VRL transform
+    // Phase 2: VRL transform — parallel via rayon when worker pool available
     let vrl_start = Instant::now();
-    let mut transformed: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(events.len());
-    for (mut value, format, idx) in events {
-        match run_vrl(program, &mut value) {
-            Ok(_) => transformed.push((value, format, idx)),
-            Err(crate::Error::VrlAbort(ref reason)) => {
+
+    // Run VRL evaluation in parallel (CPU-bound, program is Sync)
+    let vrl_results: Vec<Result<(Value, PayloadFormat, usize), (usize, crate::Error)>> =
+        if let Some(pool) = worker_pool {
+            pool.process_batch(&events, |(value, format, idx)| {
+                let mut value = value.clone();
+                match run_vrl(program, &mut value) {
+                    Ok(_) => Ok((value, *format, *idx)),
+                    Err(e) => Err((*idx, e)),
+                }
+            })
+        } else {
+            // Sequential fallback
+            events
+                .into_iter()
+                .map(
+                    |(mut value, format, idx)| match run_vrl(program, &mut value) {
+                        Ok(_) => Ok((value, format, idx)),
+                        Err(e) => Err((idx, e)),
+                    },
+                )
+                .collect()
+        };
+
+    // Separate successes from failures (sequential — metrics + commit tokens)
+    let mut transformed: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(vrl_results.len());
+    for result in vrl_results {
+        match result {
+            Ok(item) => transformed.push(item),
+            Err((idx, crate::Error::VrlAbort(ref reason))) => {
                 debug!(reason = %reason, "event dropped by VRL abort");
                 transform_metrics.abort_total.increment(1);
                 if let Some(ref dfe) = transform_metrics.dfe {
@@ -297,7 +327,7 @@ async fn process_batch<T: Transport>(
                 }
                 commit_tokens.push(messages[idx].token.clone());
             }
-            Err(e) => {
+            Err((idx, e)) => {
                 if log_sampled(&VRL_ERRORS, 1000) {
                     warn!(error = %e, total = VRL_ERRORS.load(Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
                 }

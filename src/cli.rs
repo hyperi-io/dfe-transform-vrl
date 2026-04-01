@@ -105,9 +105,9 @@ impl DfeApp for App {
     async fn run_service(
         &self,
         config: Config,
-        _runtime: hyperi_rustlib::cli::ServiceRuntime,
+        runtime: hyperi_rustlib::cli::ServiceRuntime,
     ) -> Result<(), CliError> {
-        run_transform_service(config, self.common.config.clone())
+        run_transform_service(config, self.common.config.clone(), runtime)
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
@@ -146,7 +146,11 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
     }
 }
 
-async fn run_transform_service(config: Config, config_path: Option<String>) -> anyhow::Result<()> {
+async fn run_transform_service(
+    config: Config,
+    config_path: Option<String>,
+    runtime: hyperi_rustlib::cli::ServiceRuntime,
+) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
         version = env!("CARGO_PKG_VERSION"),
@@ -274,6 +278,7 @@ async fn run_transform_service(config: Config, config_path: Option<String>) -> a
     let pipeline_shutdown_rx = shutdown_rx.clone();
     let pipeline_hot_config = hot_config.clone();
     let pipeline_memory_guard = Arc::clone(&memory_guard);
+    let pipeline_worker_pool = runtime.worker_pool.clone();
     let pipeline_handle = tokio::spawn(async move {
         pipeline::run(
             &config,
@@ -283,6 +288,7 @@ async fn run_transform_service(config: Config, config_path: Option<String>) -> a
             ready_flag,
             pipeline_memory_guard,
             pipeline_shutdown_rx,
+            pipeline_worker_pool,
         )
         .await
     });

@@ -46,6 +46,7 @@ tokio-util = { version = ">=0.7.18", features = ["rt"] }
     "transport-kafka",
     "transport-grpc",
     "http",
+    "worker",
 ] }
 
 # VRL — Vector Remap Language (embedded transform engine)
