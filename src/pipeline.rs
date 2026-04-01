@@ -606,4 +606,110 @@ mod tests {
         let value = deserialize_event(&data, PayloadFormat::Auto).unwrap();
         assert!(value.as_object().is_some());
     }
+
+    /// Prove VRL evaluation runs on multiple threads via the worker pool.
+    #[test]
+    fn test_parallel_vrl_uses_multiple_threads() {
+        use std::sync::Arc;
+
+        let pool_config = hyperi_rustlib::worker::WorkerPoolConfig {
+            min_threads: 4,
+            max_threads: 4,
+            ..Default::default()
+        };
+        let pool = Arc::new(hyperi_rustlib::worker::AdaptiveWorkerPool::new(pool_config));
+
+        // Compile a simple VRL program
+        let fns = vrl::stdlib::all();
+        let program = vrl::compiler::compile(r#".processed = true"#, &fns)
+            .expect("VRL compile failed")
+            .program;
+
+        // Create 40 events
+        let events: Vec<(Value, PayloadFormat, usize)> = (0..40)
+            .map(|i| {
+                let v = Value::from(serde_json::json!({"id": i, "data": "test"}));
+                (v, PayloadFormat::Json, i)
+            })
+            .collect();
+
+        let thread_ids = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let tids = thread_ids.clone();
+
+        let results: Vec<Result<(Value, PayloadFormat, usize), (usize, crate::Error)>> = pool
+            .process_batch(&events, |(value, format, idx)| {
+                tids.lock().unwrap().insert(std::thread::current().id());
+                let mut value = value.clone();
+                // Simulate CPU work
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                match crate::engine::runner::run_vrl(&program, &mut value) {
+                    Ok(_) => Ok((value, *format, *idx)),
+                    Err(e) => Err((*idx, e)),
+                }
+            });
+
+        assert_eq!(results.len(), 40);
+        assert!(
+            results.iter().all(Result::is_ok),
+            "all VRL evaluations should succeed"
+        );
+
+        let unique_threads = thread_ids.lock().unwrap().len();
+        assert!(
+            unique_threads > 1,
+            "Expected multiple threads for VRL eval, got {unique_threads}"
+        );
+    }
+
+    /// Prove mixed VRL success/failure (abort + error) are handled correctly in parallel.
+    #[test]
+    fn test_parallel_vrl_mixed_success_abort_error() {
+        use std::sync::Arc;
+
+        let pool_config = hyperi_rustlib::worker::WorkerPoolConfig {
+            min_threads: 2,
+            max_threads: 2,
+            ..Default::default()
+        };
+        let pool = Arc::new(hyperi_rustlib::worker::AdaptiveWorkerPool::new(pool_config));
+
+        // VRL program that aborts when .drop == true
+        let fns = vrl::stdlib::all();
+        let program = vrl::compiler::compile(
+            r#"if .drop == true { abort } else { .processed = true }"#,
+            &fns,
+        )
+        .expect("VRL compile failed")
+        .program;
+
+        let events: Vec<(Value, PayloadFormat, usize)> = (0..10)
+            .map(|i| {
+                let should_drop = i % 3 == 0; // items 0, 3, 6, 9 abort
+                let v = Value::from(serde_json::json!({"id": i, "drop": should_drop}));
+                (v, PayloadFormat::Json, i)
+            })
+            .collect();
+
+        let results: Vec<Result<(Value, PayloadFormat, usize), (usize, crate::Error)>> = pool
+            .process_batch(&events, |(value, format, idx)| {
+                let mut value = value.clone();
+                match crate::engine::runner::run_vrl(&program, &mut value) {
+                    Ok(_) => Ok((value, *format, *idx)),
+                    Err(e) => Err((*idx, e)),
+                }
+            });
+
+        assert_eq!(results.len(), 10);
+
+        let successes: Vec<_> = results.iter().filter(|r| r.is_ok()).collect();
+        let aborts: Vec<_> = results
+            .iter()
+            .filter(|r| matches!(r, Err((_, crate::Error::VrlAbort(_)))))
+            .collect();
+
+        // Items 1,2,4,5,7,8 succeed (6 items)
+        assert_eq!(successes.len(), 6, "expected 6 successes");
+        // Items 0,3,6,9 abort (4 items)
+        assert_eq!(aborts.len(), 4, "expected 4 aborts");
+    }
 }
