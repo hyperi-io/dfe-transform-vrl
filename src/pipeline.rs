@@ -247,31 +247,64 @@ async fn process_batch<T: Transport>(
     let mut json_count: u64 = 0;
     let mut msgpack_count: u64 = 0;
 
-    // Phase 1: Deserialise all events
+    // Phase 1: Deserialise all events — parallel via rayon when worker pool available
     let deser_start = Instant::now();
-    let mut events: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(batch_len);
-    for msg in &messages {
-        let format = if payload_format == PayloadFormat::Auto {
-            msg.format
+
+    // Prepare indexed messages for parallel deser
+    let indexed_msgs: Vec<(usize, PayloadFormat, &[u8])> = messages
+        .iter()
+        .enumerate()
+        .map(|(idx, msg)| {
+            let format = if payload_format == PayloadFormat::Auto {
+                msg.format
+            } else {
+                payload_format
+            };
+            (idx, format, msg.payload.as_slice())
+        })
+        .collect();
+
+    // Parallel deserialisation (CPU-bound parsing)
+    let deser_results: Vec<Result<(Value, PayloadFormat, usize), (usize, PayloadFormat, String)>> =
+        if let Some(pool) = worker_pool {
+            pool.process_batch(
+                &indexed_msgs,
+                |(idx, format, payload)| match deserialize_event(payload, *format) {
+                    Ok(v) => Ok((v, *format, *idx)),
+                    Err(e) => Err((*idx, *format, e.to_string())),
+                },
+            )
         } else {
-            payload_format
+            indexed_msgs
+                .iter()
+                .map(
+                    |(idx, format, payload)| match deserialize_event(payload, *format) {
+                        Ok(v) => Ok((v, *format, *idx)),
+                        Err(e) => Err((*idx, *format, e.to_string())),
+                    },
+                )
+                .collect()
         };
 
-        match format {
-            PayloadFormat::Json => json_count += 1,
-            PayloadFormat::MsgPack => msgpack_count += 1,
-            PayloadFormat::Auto => {}
-        }
-
-        match deserialize_event(&msg.payload, format) {
-            Ok(v) => events.push((v, format, events.len())),
-            Err(e) => {
+    // Sequential: separate successes from errors, track metrics + commit tokens
+    let mut events: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(batch_len);
+    for result in deser_results {
+        match result {
+            Ok(item) => {
+                match item.1 {
+                    PayloadFormat::Json => json_count += 1,
+                    PayloadFormat::MsgPack => msgpack_count += 1,
+                    PayloadFormat::Auto => {}
+                }
+                events.push(item);
+            }
+            Err((idx, _format, e)) => {
                 if log_sampled(&DESER_ERRORS, 1000) {
                     warn!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
                 }
-                security::input_validation_failure("deserialise", &e.to_string(), None);
+                security::input_validation_failure("deserialise", &e, None);
                 transform_metrics.record_deser_error();
-                commit_tokens.push(msg.token.clone());
+                commit_tokens.push(messages[idx].token.clone());
             }
         }
     }
