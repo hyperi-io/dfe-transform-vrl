@@ -96,6 +96,8 @@ pub fn contract() -> DeploymentContract {
             cpu_enabled: true,
             cpu_threshold: 80,
         }),
+        schema_version: 2,
+        oci_labels: hyperi_rustlib::deployment::OciLabels::default(),
     }
 }
 
