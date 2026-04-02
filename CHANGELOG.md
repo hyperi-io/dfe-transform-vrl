@@ -1,3 +1,17 @@
+## [1.0.1](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0...v1.0.1) (2026-04-02)
+
+
+### Bug Fixes
+
+* add parallel VRL evaluation tests proving multi-thread execution ([bee0759](https://github.com/hyperi-io/dfe-transform-vrl/commit/bee0759454013e25373b5899ce79e44f081fb3a7))
+* bump rustlib to >=2.4.3 and add debug/trace logging throughout pipeline ([f9c3892](https://github.com/hyperi-io/dfe-transform-vrl/commit/f9c3892f217cb4bcd2e9d0874019fd2b9d90c056))
+* parallel deserialisation in VRL pipeline via process_batch ([c984693](https://github.com/hyperi-io/dfe-transform-vrl/commit/c984693ab8b8b4472e2769d87ac1c35a23027d8c))
+* re-trigger release after tag cleanup ([7208417](https://github.com/hyperi-io/dfe-transform-vrl/commit/72084177fbeb79f6309874c0ca037275afa5e7a0))
+* remove tracked target symlink — breaks CI runners ([a300d71](https://github.com/hyperi-io/dfe-transform-vrl/commit/a300d71dc3494dadfa3dabd9b3aff41123df4f23))
+* update DfeMetrics::register() to pass &MetricsManager for manifest ([4c6e4c5](https://github.com/hyperi-io/dfe-transform-vrl/commit/4c6e4c5304a7476476512d36141a28e92889fbd3))
+* update to rustlib v2.x ServiceRuntime + deployment contract fields ([2e64348](https://github.com/hyperi-io/dfe-transform-vrl/commit/2e64348d3a3889094c0964f9779a573731f28704))
+* wire parallel VRL evaluation via AdaptiveWorkerPool ([506d5e9](https://github.com/hyperi-io/dfe-transform-vrl/commit/506d5e902df54ec4e0189a6781e04141a52c5cf4))
+
 # 1.0.0 (2026-03-29)
 
 
