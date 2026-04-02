@@ -22,6 +22,7 @@ build/
 out/
 test-results/
 coverage/
+target
 target/
 **/*.rs.bk
 *.pdb
