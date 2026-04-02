@@ -22,7 +22,7 @@ use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
 use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::metrics::MetricsManager;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::config::hot::HotConfig;
@@ -146,6 +146,7 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_transform_service(
     config: Config,
     config_path: Option<String>,
@@ -156,6 +157,21 @@ async fn run_transform_service(
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vrl"
     );
+    debug!(
+        brokers = ?config.source.brokers,
+        group_id = %config.source.group_id,
+        topics = ?config.source.topics,
+        input_format = %config.source.format,
+        sink_brokers = ?config.sink.brokers,
+        sink_topic = %config.sink.topic,
+        key_field = %config.sink.key_field,
+        batch_size = config.pipeline.batch_size,
+        batch_timeout_ms = config.pipeline.batch_timeout_ms,
+        transform_dir = ?config.transforms.dir,
+        transform_files = ?config.transforms.files,
+        enrichment_tables = config.enrichment_tables.len(),
+        "startup config"
+    );
 
     // Compile VRL programs (fail-fast before any async work)
     // Compile VRL programs and load enrichment tables
@@ -165,8 +181,24 @@ async fn run_transform_service(
     let enrichment_registry = if config.enrichment_tables.is_empty() {
         None
     } else {
+        for table_cfg in &config.enrichment_tables {
+            debug!(
+                table = %table_cfg.name,
+                key_columns = ?table_cfg.key_columns,
+                max_bytes = ?table_cfg.max_bytes,
+                refresh = table_cfg.refresh.as_ref().map(|r| r.interval_secs),
+                "loading enrichment table"
+            );
+        }
         let registry = crate::enrichment::EnrichmentRegistry::load(&config.enrichment_tables)
             .map_err(|e| anyhow::anyhow!("enrichment table loading failed: {e}"))?;
+        for table in registry.tables() {
+            debug!(
+                table = %table.name(),
+                rows = table.len(),
+                "enrichment table loaded"
+            );
+        }
         info!(tables = registry.len(), "enrichment tables loaded");
         Some(registry.into_arc())
     };
@@ -176,6 +208,12 @@ async fn run_transform_service(
             .map_err(|e| anyhow::anyhow!("VRL compilation failed: {e}"))?;
         Arc::new(compilation.program)
     };
+    // VRL compiles all source files into a single program; log program count (always 1)
+    debug!(
+        source_bytes = vrl_source.len(),
+        programs_loaded = 1,
+        "VRL program compiled"
+    );
     info!("VRL program compiled");
 
     // Shutdown coordination
@@ -258,7 +296,13 @@ async fn run_transform_service(
                 Ok(())
             },
         )
-        .with_post_reload_hook(|_hot| {
+        .with_post_reload_hook(|hot| {
+            debug!(
+                batch_size = hot.batch_size,
+                batch_timeout_ms = hot.batch_timeout_ms,
+                key_field = %hot.key_field,
+                "config reload applied"
+            );
             hyperi_rustlib::logger::security::config_changed(
                 "config_reload",
                 "system",

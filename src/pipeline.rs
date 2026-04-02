@@ -33,7 +33,7 @@ use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::logger::{log_debounced, log_sampled, log_state_change, security};
 use hyperi_rustlib::memory::MemoryGuard;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -52,6 +52,7 @@ use crate::kafka;
 use crate::metrics::TransformMetrics;
 
 /// Run the transform pipeline with Kafka transports (production entry point).
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: &Config,
     program: Arc<Program>,
@@ -89,6 +90,8 @@ pub async fn run(
         memory_guard,
         shutdown_rx,
         worker_pool,
+        &config.source.topics,
+        &config.sink.topic,
     )
     .await
 }
@@ -112,6 +115,8 @@ pub async fn run_with_transport<T: Transport>(
     memory_guard: Arc<MemoryGuard>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     worker_pool: Option<Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
+    source_topics: &[String],
+    sink_topic: &str,
 ) -> crate::Result<()> {
     ready_flag.store(true, Ordering::Release);
     if let Some(ref dfe) = transform_metrics.dfe {
@@ -165,7 +170,9 @@ pub async fn run_with_transport<T: Transport>(
                 payload_format,
                 transform_metrics,
                 &memory_guard,
-                &worker_pool,
+                worker_pool.as_ref(),
+                source_topics,
+                sink_topic,
             ) => {
                 if let Err(e) = result
                     && log_debounced(&BATCH_ERROR_TS, 5000)
@@ -195,7 +202,8 @@ pub async fn run_with_transport<T: Transport>(
 #[allow(
     clippy::too_many_arguments,
     clippy::cast_precision_loss,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::option_if_let_else
 )]
 async fn process_batch<T: Transport>(
     consumer: &T,
@@ -207,7 +215,9 @@ async fn process_batch<T: Transport>(
     payload_format: PayloadFormat,
     transform_metrics: &TransformMetrics,
     memory_guard: &MemoryGuard,
-    worker_pool: &Option<Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
+    worker_pool: Option<&Arc<hyperi_rustlib::worker::AdaptiveWorkerPool>>,
+    source_topics: &[String],
+    sink_topic: &str,
 ) -> crate::Result<()> {
     let messages = match tokio::time::timeout(batch_timeout, consumer.recv(batch_size)).await {
         Ok(result) => result.map_err(|e| crate::Error::Kafka(format!("consume error: {e}")))?,
@@ -239,7 +249,12 @@ async fn process_batch<T: Transport>(
     }
     // Layer 3: App-specific
     transform_metrics.batch_size.record(batch_len as f64);
-    debug!(count = batch_len, "consumed batch");
+    debug!(
+        count = batch_len,
+        bytes = batch_bytes,
+        topics = ?source_topics,
+        "batch received"
+    );
 
     let mut commit_tokens = Vec::with_capacity(batch_len);
     let mut produced_count: u64 = 0;
@@ -267,22 +282,33 @@ async fn process_batch<T: Transport>(
     // Parallel deserialisation (CPU-bound parsing)
     let deser_results: Vec<Result<(Value, PayloadFormat, usize), (usize, PayloadFormat, String)>> =
         if let Some(pool) = worker_pool {
-            pool.process_batch(
-                &indexed_msgs,
-                |(idx, format, payload)| match deserialize_event(payload, *format) {
+            pool.process_batch(&indexed_msgs, |(idx, format, payload)| {
+                trace!(
+                    index = idx,
+                    format = ?format,
+                    size_bytes = payload.len(),
+                    "deserialise message"
+                );
+                match deserialize_event(payload, *format) {
                     Ok(v) => Ok((v, *format, *idx)),
                     Err(e) => Err((*idx, *format, e.to_string())),
-                },
-            )
+                }
+            })
         } else {
             indexed_msgs
                 .iter()
-                .map(
-                    |(idx, format, payload)| match deserialize_event(payload, *format) {
+                .map(|(idx, format, payload)| {
+                    trace!(
+                        index = idx,
+                        format = ?format,
+                        size_bytes = payload.len(),
+                        "deserialise message"
+                    );
+                    match deserialize_event(payload, *format) {
                         Ok(v) => Ok((v, *format, *idx)),
                         Err(e) => Err((*idx, *format, e.to_string())),
-                    },
-                )
+                    }
+                })
                 .collect()
         };
 
@@ -312,6 +338,13 @@ async fn process_batch<T: Transport>(
     transform_metrics
         .deserialise_duration
         .record(deser_elapsed.as_secs_f64());
+    debug!(
+        count = events.len(),
+        elapsed_ms = deser_elapsed.as_millis(),
+        json = json_count,
+        msgpack = msgpack_count,
+        "deserialise phase complete"
+    );
 
     // Record format distribution
     if json_count > 0 {
@@ -328,22 +361,38 @@ async fn process_batch<T: Transport>(
     let vrl_results: Vec<Result<(Value, PayloadFormat, usize), (usize, crate::Error)>> =
         if let Some(pool) = worker_pool {
             pool.process_batch(&events, |(value, format, idx)| {
+                let vrl_t0 = std::time::Instant::now();
                 let mut value = value.clone();
-                match run_vrl(program, &mut value) {
+                let result = match run_vrl(program, &mut value) {
                     Ok(_) => Ok((value, *format, *idx)),
                     Err(e) => Err((*idx, e)),
-                }
+                };
+                trace!(
+                    index = idx,
+                    duration_us = vrl_t0.elapsed().as_micros(),
+                    ok = result.is_ok(),
+                    "VRL execute message"
+                );
+                result
             })
         } else {
             // Sequential fallback
             events
                 .into_iter()
-                .map(
-                    |(mut value, format, idx)| match run_vrl(program, &mut value) {
+                .map(|(mut value, format, idx)| {
+                    let vrl_t0 = std::time::Instant::now();
+                    let result = match run_vrl(program, &mut value) {
                         Ok(_) => Ok((value, format, idx)),
                         Err(e) => Err((idx, e)),
-                    },
-                )
+                    };
+                    trace!(
+                        index = idx,
+                        duration_us = vrl_t0.elapsed().as_micros(),
+                        ok = result.is_ok(),
+                        "VRL execute message"
+                    );
+                    result
+                })
                 .collect()
         };
 
@@ -353,7 +402,8 @@ async fn process_batch<T: Transport>(
         match result {
             Ok(item) => transformed.push(item),
             Err((idx, crate::Error::VrlAbort(ref reason))) => {
-                debug!(reason = %reason, "event dropped by VRL abort");
+                debug!(reason = %reason, index = idx, "event dropped by VRL abort");
+                trace!(stage = "vrl_transform", error = %reason, index = idx, "message routed to abort");
                 transform_metrics.abort_total.increment(1);
                 if let Some(ref dfe) = transform_metrics.dfe {
                     dfe.records_filtered(1);
@@ -364,6 +414,7 @@ async fn process_batch<T: Transport>(
                 if log_sampled(&VRL_ERRORS, 1000) {
                     warn!(error = %e, total = VRL_ERRORS.load(Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
                 }
+                trace!(stage = "vrl_transform", error = %e, index = idx, "message error routing");
                 security::input_validation_failure("vrl_transform", &e.to_string(), None);
                 transform_metrics.record_transform_error();
                 commit_tokens.push(messages[idx].token.clone());
@@ -374,6 +425,11 @@ async fn process_batch<T: Transport>(
     transform_metrics
         .execute_duration
         .record(vrl_elapsed.as_secs_f64());
+    debug!(
+        count = transformed.len(),
+        elapsed_ms = vrl_elapsed.as_millis(),
+        "VRL execute phase complete"
+    );
 
     // Phase 3: Serialise + Produce
     let ser_start = Instant::now();
@@ -382,11 +438,18 @@ async fn process_batch<T: Transport>(
         let key = extract_key(value, key_field);
         let key_str = key.as_deref().unwrap_or("");
         let ser_bytes = serialized.len() as u64;
+        trace!(
+            index = idx,
+            format = ?format,
+            size_bytes = ser_bytes,
+            "serialise message"
+        );
 
         match producer.send(key_str, &serialized).await {
             SendResult::Ok => {
                 produced_count += 1;
                 produced_bytes += ser_bytes;
+                trace!(key = key_str, topic = sink_topic, "produce message");
                 if log_state_change(&BACKPRESSURE_ACTIVE, false) {
                     info!("producer backpressure cleared");
                 }
@@ -409,6 +472,11 @@ async fn process_batch<T: Transport>(
                     SendResult::Ok => {
                         produced_count += 1;
                         produced_bytes += ser_bytes;
+                        trace!(
+                            key = key_str,
+                            topic = sink_topic,
+                            "produce message (after backpressure)"
+                        );
                         if let Some(ref dfe) = transform_metrics.dfe {
                             dfe.transport_sent("kafka", 1);
                         }
@@ -417,6 +485,7 @@ async fn process_batch<T: Transport>(
                         if log_sampled(&PRODUCE_ERRORS, 1000) {
                             error!(result = ?other, total = PRODUCE_ERRORS.load(Ordering::Relaxed), "produce failed (sampled 1/1000)");
                         }
+                        trace!(stage = "produce", key = key_str, topic = sink_topic, result = ?other, "message error routing");
                         transform_metrics.record_produce_error();
                         if let Some(ref dfe) = transform_metrics.dfe {
                             dfe.transport_send_errors("kafka", 1);
@@ -440,6 +509,13 @@ async fn process_batch<T: Transport>(
     transform_metrics
         .serialise_duration
         .record(ser_elapsed.as_secs_f64());
+    debug!(
+        produced = produced_count,
+        bytes = produced_bytes,
+        topic = sink_topic,
+        elapsed_ms = ser_elapsed.as_millis(),
+        "produce batch complete"
+    );
 
     // Layer 1: DfeMetrics
     if let Some(ref dfe) = transform_metrics.dfe {
@@ -462,10 +538,12 @@ async fn process_batch<T: Transport>(
 
     // Commit offsets
     if !commit_tokens.is_empty() {
+        let commit_count = commit_tokens.len();
         consumer
             .commit(&commit_tokens)
             .await
             .map_err(|e| crate::Error::Kafka(format!("offset commit error: {e}")))?;
+        debug!(count = commit_count, "offsets committed");
         if let Some(ref consumer_metrics) = transform_metrics.consumer {
             consumer_metrics.record_offsets_committed(1);
         }
@@ -547,7 +625,11 @@ fn extract_key(value: &Value, key_field: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::needless_raw_string_hashes
+)]
 mod tests {
     use super::*;
 

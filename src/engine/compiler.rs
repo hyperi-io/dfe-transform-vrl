@@ -79,6 +79,13 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
     }
 
     let combined = sources.join("\n\n");
+    // programs_loaded is always 1 — VRL concatenates all files into a single program
+    debug!(
+        file_count = sources.len(),
+        total_bytes = combined.len(),
+        programs_loaded = 1,
+        "VRL source loaded, ready for compilation"
+    );
     info!(
         file_count = sources.len(),
         total_bytes = combined.len(),

@@ -57,7 +57,10 @@ fn apply_sasl(config: &mut KafkaConfig, kf: &KafkaTestConfig) {
     if kf.has_sasl() {
         config.sasl_mechanism = kf.sasl_mechanism.clone();
         config.sasl_username = kf.sasl_user.clone();
-        config.sasl_password = kf.sasl_password.clone();
+        config.sasl_password = kf
+            .sasl_password
+            .clone()
+            .map(hyperi_rustlib::SensitiveString::from);
     }
 }
 
@@ -125,6 +128,7 @@ async fn test_produce_consume_json_transform() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
@@ -141,6 +145,9 @@ async fn test_produce_consume_json_transform() {
                 ready,
                 guard,
                 shutdown_rx,
+                None,
+                &[source_topic.clone()],
+                &sink_topic_for_pipeline,
             )
             .await
         }
@@ -221,6 +228,7 @@ async fn test_produce_consume_msgpack_transform() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
@@ -237,6 +245,9 @@ async fn test_produce_consume_msgpack_transform() {
                 ready,
                 guard,
                 shutdown_rx,
+                None,
+                &[source_topic.clone()],
+                &sink_topic_for_pipeline,
             )
             .await
         }
@@ -308,6 +319,7 @@ async fn test_vrl_abort_drops_events() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
@@ -324,6 +336,9 @@ async fn test_vrl_abort_drops_events() {
                 ready,
                 guard,
                 shutdown_rx,
+                None,
+                &[source_topic.clone()],
+                &sink_topic_for_pipeline,
             )
             .await
         }
