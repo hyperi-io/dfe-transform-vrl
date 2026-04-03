@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.1...v1.0.2) (2026-04-03)
+
+
+### Bug Fixes
+
+* replace serde_json with sonic-rs for SIMD JSON deserialisation ([3dd21ca](https://github.com/hyperi-io/dfe-transform-vrl/commit/3dd21ca0826e21607f386649e66a7794d0681403))
+
 ## [1.0.1](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.0...v1.0.1) (2026-04-02)
 
 
