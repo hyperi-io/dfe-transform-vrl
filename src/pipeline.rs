@@ -578,9 +578,12 @@ async fn process_batch<T: Transport>(
 }
 
 /// Deserialise raw bytes to VRL Value using the detected format.
+///
+/// Uses `sonic_rs` for JSON (SIMD-accelerated, 2-4x faster than `serde_json`).
+/// Both produce the same `vrl::value::Value` via serde `Deserialize`.
 fn deserialize_event(payload: &[u8], format: PayloadFormat) -> crate::Result<Value> {
     match format {
-        PayloadFormat::Json => serde_json::from_slice(payload)
+        PayloadFormat::Json => sonic_rs::from_slice(payload)
             .map_err(|e| crate::Error::Serialisation(format!("JSON deserialise: {e}"))),
         PayloadFormat::MsgPack => rmp_serde::from_slice(payload)
             .map_err(|e| crate::Error::Serialisation(format!("msgpack deserialise: {e}"))),

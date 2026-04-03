@@ -845,6 +845,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sonic-rs",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
