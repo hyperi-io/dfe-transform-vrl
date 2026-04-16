@@ -639,6 +639,90 @@ mod tests {
     }
 
     #[test]
+    fn load_from_source_auto_with_json_extension_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        std::fs::write(
+            &path,
+            r#"[{"ip":"1.2.3.4","country":"AU"},{"ip":"5.6.7.8","country":"NZ"}]"#,
+        )
+        .unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: None,
+        };
+        let rows = load_from_source(&src, "geo", &["ip".to_string()]).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn load_from_source_auto_with_csv_extension_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.csv");
+        std::fs::write(&path, "k,v\nfoo,1\nbar,2\n").unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: None,
+        };
+        let rows = load_from_source(&src, "table", &["k".to_string()]).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn load_from_source_auto_unknown_extension_json_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.dat");
+        std::fs::write(&path, r#"[{"k":"a","v":"1"}]"#).unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: None,
+        };
+        let rows = load_from_source(&src, "ext", &["k".to_string()]).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn load_from_source_auto_unknown_extension_csv_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        // JSON parse fails, CSV parse should succeed.
+        let path = dir.path().join("data.dat");
+        std::fs::write(&path, "k,v\nhello,world\n").unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: None,
+        };
+        let rows = load_from_source(&src, "ext", &["k".to_string()]).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn load_from_source_explicit_format_overrides_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        // File is CSV content but named .json — explicit format CSV should win.
+        let path = dir.path().join("tricky.json");
+        std::fs::write(&path, "k,v\nx,1\n").unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: Some(FileFormat::Csv),
+        };
+        let rows = load_from_source(&src, "t", &["k".to_string()]).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn load_from_source_yaml_format_via_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.yaml");
+        std::fs::write(&path, "- k: hello\n  v: world\n- k: foo\n  v: bar\n").unwrap();
+        let src = EnrichmentSourceConfig::File {
+            path: path.to_string_lossy().to_string(),
+            format: None,
+        };
+        let rows = load_from_source(&src, "y", &["k".to_string()]).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
     fn detect_format_json() {
         assert_eq!(detect_format("/data/table.json"), FileFormat::Json);
     }

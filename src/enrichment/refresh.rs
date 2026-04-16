@@ -152,3 +152,245 @@ fn reload_table(
         }
     }
 }
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cloned_ref_to_slice_refs,
+    clippy::redundant_clone,
+    clippy::missing_docs_in_private_items,
+    clippy::doc_markdown
+)]
+mod tests {
+    use super::*;
+    use crate::config::loader::{EnrichmentTableConfig, RefreshConfig};
+    use std::io::Write;
+
+    /// Build a temp CSV file we can reload against.
+    fn write_csv(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(f, "{content}").unwrap();
+        path
+    }
+
+    /// Standard no-op metrics used by reload_table.
+    fn make_metrics() -> Arc<TransformMetrics> {
+        Arc::new(TransformMetrics::default())
+    }
+
+    #[test]
+    fn reload_table_succeeds_with_csv_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(
+            dir.path(),
+            "geo.csv",
+            "ip,country\n1.2.3.4,AU\n5.6.7.8,NZ\n",
+        );
+
+        // Build a registry with a single CSV-backed table
+        let table_cfg = EnrichmentTableConfig {
+            name: "geo".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["ip".to_string()],
+            max_bytes: None,
+            refresh: Some(RefreshConfig { interval_secs: 60 }),
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg.clone()]).unwrap();
+        let reg_arc = registry.into_arc();
+
+        let metrics = make_metrics();
+
+        // Trigger a reload
+        reload_table(
+            &reg_arc,
+            "geo",
+            &table_cfg.source.clone().unwrap(),
+            &table_cfg.key_columns,
+            &metrics,
+        );
+
+        // Table should still exist and be populated
+        let table = reg_arc.get_table("geo").unwrap();
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn reload_table_mmdb_source_returns_error_gracefully() {
+        // Build a registry with ANY loadable table so the registry isn't empty.
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "trap".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+
+        // Mmdb source path — reload_table should fail gracefully and NOT
+        // swap the existing data.
+        let mmdb_source = EnrichmentSourceConfig::Mmdb {
+            path: "/nonexistent/geo.mmdb".to_string(),
+        };
+        reload_table(&reg_arc, "trap", &mmdb_source, &[], &metrics);
+
+        // Table is still there with its original CSV data
+        let table = reg_arc.get_table("trap").unwrap();
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn reload_table_stix_http_without_path_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "stix".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+
+        // STIX with no path, no URL — should hit the unsupported branch
+        let stix_no_path = EnrichmentSourceConfig::Stix {
+            path: None,
+            url: Some("https://example.invalid/taxii".to_string()),
+            collection: None,
+            auth: None,
+        };
+        reload_table(&reg_arc, "stix", &stix_no_path, &[], &metrics);
+
+        // Existing CSV data preserved
+        let table = reg_arc.get_table("stix").unwrap();
+        assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn reload_table_missing_file_preserves_existing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "ok.csv", "k,v\nhello,world\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "data".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+
+        // Reload from a source that doesn't exist — fail-safe should
+        // keep the old row.
+        let bad_source = EnrichmentSourceConfig::File {
+            path: "/nonexistent/path/data.csv".to_string(),
+            format: None,
+        };
+        reload_table(&reg_arc, "data", &bad_source, &["k".to_string()], &metrics);
+
+        let table = reg_arc.get_table("data").unwrap();
+        assert_eq!(table.len(), 1, "reload failure must not wipe existing data");
+    }
+
+    #[test]
+    fn reload_table_swaps_to_new_data_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "v1.csv", "k,v\nx,1\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "swap".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg.clone()]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+
+        // Assert initial state
+        let table = reg_arc.get_table("swap").unwrap();
+        assert_eq!(table.len(), 1);
+
+        // Now write a new CSV with more rows and reload
+        let csv2 = write_csv(dir.path(), "v2.csv", "k,v\nx,1\ny,2\nz,3\n");
+        let new_source = EnrichmentSourceConfig::File {
+            path: csv2.to_string_lossy().to_string(),
+            format: None,
+        };
+        reload_table(&reg_arc, "swap", &new_source, &["k".to_string()], &metrics);
+
+        let table = reg_arc.get_table("swap").unwrap();
+        assert_eq!(table.len(), 3, "table should reflect new rows post-reload");
+    }
+
+    #[test]
+    fn start_refresh_tasks_skips_tables_without_refresh_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "static.csv", "k,v\na,1\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "static_table".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            refresh: None, // No refresh config
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+
+        // Should not spawn any task (table has no refresh config)
+        start_refresh_tasks(&reg_arc, &metrics, &rx);
+    }
+
+    #[tokio::test]
+    async fn start_refresh_tasks_spawns_and_shuts_down_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "refreshable.csv", "k,v\na,1\n");
+        let table_cfg = EnrichmentTableConfig {
+            name: "refreshable".to_string(),
+            source: Some(EnrichmentSourceConfig::File {
+                path: csv.to_string_lossy().to_string(),
+                format: None,
+            }),
+            key_columns: vec!["k".to_string()],
+            refresh: Some(RefreshConfig { interval_secs: 60 }),
+            ..Default::default()
+        };
+        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
+        let reg_arc = registry.into_arc();
+        let metrics = make_metrics();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+
+        // Spawn the refresh task
+        start_refresh_tasks(&reg_arc, &metrics, &rx);
+
+        // Signal shutdown immediately
+        let _ = tx.send(true);
+
+        // Give the task time to observe the shutdown signal and exit
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}

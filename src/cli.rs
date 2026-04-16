@@ -369,3 +369,197 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
         _ = sigterm.recv() => Ok(()),
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::missing_panics_doc)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Parse a fake argv so we can exercise `App` without a real process.
+    fn parse(args: &[&str]) -> App {
+        let mut owned: Vec<String> = vec!["dfe-transform-vrl".to_string()];
+        owned.extend(args.iter().map(|s| (*s).to_string()));
+        App::parse_from(owned)
+    }
+
+    #[test]
+    fn app_parses_run_command() {
+        let app = parse(&["run"]);
+        assert!(matches!(app.command, Some(AppCommand::Run)));
+    }
+
+    #[test]
+    fn app_parses_version_command() {
+        let app = parse(&["version"]);
+        assert!(matches!(app.command, Some(AppCommand::Version)));
+    }
+
+    #[test]
+    fn app_parses_config_check_command() {
+        let app = parse(&["config-check"]);
+        assert!(matches!(app.command, Some(AppCommand::ConfigCheck)));
+    }
+
+    #[test]
+    fn app_parses_emit_dockerfile_command() {
+        let app = parse(&["emit-dockerfile"]);
+        assert!(matches!(app.command, Some(AppCommand::EmitDockerfile)));
+    }
+
+    #[test]
+    fn app_parses_emit_chart_with_dir() {
+        let app = parse(&["emit-chart", "/tmp/chart-out"]);
+        match &app.command {
+            Some(AppCommand::EmitChart { dir }) => assert_eq!(dir, "/tmp/chart-out"),
+            other => panic!("expected EmitChart, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_parses_emit_compose_command() {
+        let app = parse(&["emit-compose"]);
+        assert!(matches!(app.command, Some(AppCommand::EmitCompose)));
+    }
+
+    #[test]
+    fn app_parses_emit_contract_command() {
+        let app = parse(&["emit-contract"]);
+        assert!(matches!(app.command, Some(AppCommand::EmitContract)));
+    }
+
+    #[test]
+    fn app_parses_no_subcommand() {
+        let app = parse(&[]);
+        assert!(app.command.is_none());
+    }
+
+    #[test]
+    fn dfe_app_identity() {
+        let app = parse(&["run"]);
+        assert_eq!(app.name(), "dfe-transform-vrl");
+        assert_eq!(app.env_prefix(), "DFE_TRANSFORM");
+        let version = app.version_info();
+        assert_eq!(version.name, "dfe-transform-vrl");
+        assert!(!version.version.is_empty());
+    }
+
+    #[test]
+    fn dfe_app_common_args_accessible() {
+        let app = parse(&["run"]);
+        // Just verifies the accessor compiles and returns a reference.
+        let _args = app.common_args();
+    }
+
+    #[test]
+    fn command_maps_standard_variants() {
+        let version_app = parse(&["version"]);
+        assert!(version_app.command().is_some());
+        let config_check_app = parse(&["config-check"]);
+        assert!(config_check_app.command().is_some());
+        let run_app = parse(&["run"]);
+        assert!(run_app.command().is_none());
+        let emit_app = parse(&["emit-dockerfile"]);
+        assert!(emit_app.command().is_none());
+    }
+
+    #[test]
+    fn load_config_returns_defaults_when_path_missing() {
+        let app = parse(&["run"]);
+        // Non-existent path should fall back to defaults (Config::load allows this).
+        // But validation will then reject defaults (empty brokers etc.), so we get a
+        // Config(validation) error.
+        let result = app.load_config(Some("/nonexistent/path/config.yaml"));
+        assert!(result.is_err(), "empty config should fail validation");
+    }
+
+    #[test]
+    fn load_config_rejects_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.yaml");
+        std::fs::write(&path, "not valid yaml: [unclosed").unwrap();
+
+        let app = parse(&["run"]);
+        let result = app.load_config(Some(path.to_str().unwrap()));
+        assert!(result.is_err(), "malformed YAML should error");
+    }
+
+    #[test]
+    fn load_config_accepts_valid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ok.yaml");
+        let yaml = r#"
+pipeline:
+  name: "test-pipeline"
+  batch_size: 100
+source:
+  brokers: ["localhost:9092"]
+  group_id: "test-group"
+  topics: ["in"]
+  format: "json"
+sink:
+  brokers: ["localhost:9092"]
+  topic: "out"
+  key_field: ".id"
+  compression: "none"
+transforms:
+  files: ["transform.vrl"]
+"#;
+        std::fs::write(&path, yaml).unwrap();
+
+        let app = parse(&["run"]);
+        let config = app.load_config(Some(path.to_str().unwrap())).unwrap();
+        assert_eq!(config.pipeline.name, "test-pipeline");
+        assert_eq!(config.pipeline.batch_size, 100);
+    }
+
+    #[test]
+    fn handle_emit_command_dockerfile_returns_some() {
+        let app = parse(&["emit-dockerfile"]);
+        // Note: this prints to stdout, but that's fine for tests.
+        // We just verify the code path executes and returns Some(()).
+        let result = handle_emit_command(&app);
+        assert_eq!(result, Some(()));
+    }
+
+    #[test]
+    fn handle_emit_command_compose_returns_some() {
+        let app = parse(&["emit-compose"]);
+        let result = handle_emit_command(&app);
+        assert_eq!(result, Some(()));
+    }
+
+    #[test]
+    fn handle_emit_command_contract_returns_some() {
+        let app = parse(&["emit-contract"]);
+        let result = handle_emit_command(&app);
+        assert_eq!(result, Some(()));
+    }
+
+    #[test]
+    fn handle_emit_command_chart_generates_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = parse(&["emit-chart", dir.path().to_str().unwrap()]);
+        let result = handle_emit_command(&app);
+        assert_eq!(result, Some(()));
+        // Verify chart dir is non-empty
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(!entries.is_empty(), "chart dir should contain files");
+    }
+
+    #[test]
+    fn handle_emit_command_returns_none_for_non_emit() {
+        let app = parse(&["run"]);
+        assert_eq!(handle_emit_command(&app), None);
+        let app = parse(&["version"]);
+        assert_eq!(handle_emit_command(&app), None);
+        let app = parse(&["config-check"]);
+        assert_eq!(handle_emit_command(&app), None);
+    }
+
+    #[test]
+    fn handle_emit_command_no_subcommand_returns_none() {
+        let app = parse(&[]);
+        assert_eq!(handle_emit_command(&app), None);
+    }
+}

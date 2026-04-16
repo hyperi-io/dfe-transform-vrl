@@ -297,4 +297,71 @@ mod tests {
         m.abort_total.increment(1);
         m.events_per_second.set(12345.0);
     }
+
+    #[test]
+    fn new_wires_layer1_and_layer2_groups() {
+        // Construct a MetricsManager — exercises the full registration path
+        // through Layer 1 (DfeMetrics), Layer 2 groups, and Layer 3 histograms.
+        let manager = MetricsManager::new("test_dfe_transform_vrl");
+        let m = TransformMetrics::new(&manager, "0.1.0", "abc1234");
+
+        assert!(m.dfe.is_some());
+        assert!(m.app.is_some());
+        assert!(m.consumer.is_some());
+        assert!(m.sink.is_some());
+        assert!(m.backpressure.is_some());
+        assert!(m.enrichment.is_some());
+
+        // Layer 3 histograms/counters/gauges must be usable
+        m.execute_duration.record(0.01);
+        m.deserialise_duration.record(0.005);
+        m.serialise_duration.record(0.003);
+        m.batch_duration.record(0.1);
+        m.batch_size.record(1000.0);
+        m.programs_loaded.set(1.0);
+        m.abort_total.increment(1);
+        m.events_per_second.set(42_000.0);
+        m.enrichment_table_rows.set(500.0);
+        m.enrichment_reload_total.increment(1);
+        m.enrichment_reload_duration.record(0.5);
+        m.enrichment_last_reload_timestamp.set(1_234_567_890.0);
+    }
+
+    #[test]
+    fn enrichment_reload_records_success_and_failure() {
+        let manager = MetricsManager::new("test_reload_metrics");
+        let m = TransformMetrics::new(&manager, "0.1.0", "def5678");
+
+        // Exercises the timestamp-recording branch (success path)
+        m.record_enrichment_reload("table_a", 0.042, true);
+        // Exercises the failure branch
+        m.record_enrichment_reload("table_b", 0.999, false);
+    }
+
+    #[test]
+    fn set_enrichment_rows_covers_gauge_label_path() {
+        let manager = MetricsManager::new("test_set_rows");
+        let m = TransformMetrics::new(&manager, "0.1.0", "aaaa");
+        m.set_enrichment_rows("geo", 10_000);
+        m.set_enrichment_rows("services", 50);
+        m.set_enrichment_rows("empty", 0);
+    }
+
+    #[test]
+    fn stage_error_counters_all_three_stages() {
+        let manager = MetricsManager::new("test_stage_errors");
+        let m = TransformMetrics::new(&manager, "0.1.0", "bbbb");
+        m.record_deser_error();
+        m.record_transform_error();
+        m.record_produce_error();
+    }
+
+    #[test]
+    fn record_format_covers_all_formats() {
+        let manager = MetricsManager::new("test_formats");
+        let m = TransformMetrics::new(&manager, "0.1.0", "cccc");
+        m.record_format("json", 100);
+        m.record_format("msgpack", 50);
+        m.record_format("auto", 0);
+    }
 }
