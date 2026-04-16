@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.2...v1.0.3) (2026-04-16)
+
+
+### Bug Fixes
+
+* migrate to single versioning, bump rustlib to >=2.5.4, fix pre-existing bugs ([e5562bf](https://github.com/hyperi-io/dfe-transform-vrl/commit/e5562bfa4b1174919a07dcec890820109d9cc299)), closes [#5](https://github.com/hyperi-io/dfe-transform-vrl/issues/5)
+
 ## [1.0.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.1...v1.0.2) (2026-04-03)
 
 
