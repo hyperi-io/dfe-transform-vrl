@@ -23,7 +23,7 @@ use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 use hyperi_rustlib::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
 
-use super::common::{self, KafkaTestConfig, skip_if_no_kafka};
+use super::common::{self, KafkaTestConfig, ensure_kafka_or_skip};
 
 fn consumer_kafka_config(kf: &KafkaTestConfig, topics: &[String], group_id: &str) -> KafkaConfig {
     let mut config = KafkaConfig {
@@ -81,11 +81,9 @@ fn default_memory_guard() -> Arc<MemoryGuard> {
 }
 
 #[tokio::test]
-#[ignore = "requires Kafka"]
 async fn test_produce_consume_json_transform() {
-    skip_if_no_kafka!();
-
-    let kf = common::kafka_test_config();
+    let env = ensure_kafka_or_skip!();
+    let kf = env.config();
     let source_topic = common::test_topic("json-src");
     let sink_topic = common::test_topic("json-sink");
     let group = common::test_topic("json-cg");
@@ -190,11 +188,9 @@ async fn test_produce_consume_json_transform() {
 }
 
 #[tokio::test]
-#[ignore = "requires Kafka"]
 async fn test_produce_consume_msgpack_transform() {
-    skip_if_no_kafka!();
-
-    let kf = common::kafka_test_config();
+    let env = ensure_kafka_or_skip!();
+    let kf = env.config();
     let source_topic = common::test_topic("mp-src");
     let sink_topic = common::test_topic("mp-sink");
     let group = common::test_topic("mp-cg");
@@ -281,11 +277,9 @@ async fn test_produce_consume_msgpack_transform() {
 }
 
 #[tokio::test]
-#[ignore = "requires Kafka"]
 async fn test_vrl_abort_drops_events() {
-    skip_if_no_kafka!();
-
-    let kf = common::kafka_test_config();
+    let env = ensure_kafka_or_skip!();
+    let kf = env.config();
     let source_topic = common::test_topic("abort-src");
     let sink_topic = common::test_topic("abort-sink");
     let group = common::test_topic("abort-cg");

@@ -20,3 +20,11 @@ mod common;
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
 #[path = "e2e/kafka.rs"]
 mod kafka;
+
+#[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
+#[path = "e2e/connectivity.rs"]
+mod connectivity;
+
+#[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
+#[path = "e2e/cli_service.rs"]
+mod cli_service;

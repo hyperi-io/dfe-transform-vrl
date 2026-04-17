@@ -193,4 +193,121 @@ macro_rules! skip_if_no_kafka {
     };
 }
 
+#[allow(unused_imports)]
 pub(crate) use skip_if_no_kafka;
+
+// =============================================================================
+// Live-or-Testcontainers Kafka helper
+// =============================================================================
+
+/// RAII test environment for Kafka tests.
+///
+/// Resolution order:
+/// 1. `$KAFKA_BROKERS` (or `TEST_MODE=docker` localhost:19092) → use it (no container spawned)
+/// 2. Otherwise → spawn an Apache Kafka container via testcontainers (KRaft mode, no Zookeeper)
+///
+/// **Cleanup:** When this struct drops, any spawned container is automatically
+/// stopped and removed by the testcontainers `Drop` impl. Tests do not need
+/// explicit teardown — just let the binding go out of scope at end of test.
+///
+/// Usage:
+/// ```ignore
+/// let env = KafkaTestEnv::ensure().await;
+/// let kf = env.config();
+/// // ...use kf.brokers...
+/// // env drops here, container stops if one was spawned
+/// ```
+#[allow(dead_code)]
+pub struct KafkaTestEnv {
+    config: KafkaTestConfig,
+    // Kept alive for RAII; dropped (and container stopped) when KafkaTestEnv drops.
+    _container:
+        Option<testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>>,
+}
+
+#[allow(dead_code)]
+impl KafkaTestEnv {
+    /// Ensure a Kafka broker is available — either live or via testcontainers.
+    ///
+    /// If Docker isn't available and no live broker is configured, returns `None`
+    /// so callers can `return` (skip) the test.
+    pub async fn ensure() -> Option<Self> {
+        let live = kafka_test_config();
+        if live.is_reachable() {
+            eprintln!("Using live Kafka at {}", live.brokers);
+            return Some(Self {
+                config: live,
+                _container: None,
+            });
+        }
+
+        // No live broker — try to spawn a testcontainers Kafka.
+        eprintln!("No live Kafka reachable — attempting to spawn testcontainers Kafka...");
+        match Self::spawn_container().await {
+            Ok(env) => {
+                eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
+                Some(env)
+            }
+            Err(e) => {
+                eprintln!("Could not spawn testcontainers Kafka: {e}");
+                None
+            }
+        }
+    }
+
+    async fn spawn_container() -> Result<Self, String> {
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
+
+        let container = Kafka::default()
+            .start()
+            .await
+            .map_err(|e| format!("start Kafka container: {e}"))?;
+
+        let host = container
+            .get_host()
+            .await
+            .map_err(|e| format!("get host: {e}"))?;
+        let port = container
+            .get_host_port_ipv4(KAFKA_PORT)
+            .await
+            .map_err(|e| format!("get port: {e}"))?;
+        let brokers = format!("{host}:{port}");
+
+        Ok(Self {
+            config: KafkaTestConfig {
+                brokers,
+                security_protocol: "PLAINTEXT".into(),
+                sasl_mechanism: None,
+                sasl_user: None,
+                sasl_password: None,
+            },
+            _container: Some(container),
+        })
+    }
+
+    pub fn config(&self) -> &KafkaTestConfig {
+        &self.config
+    }
+}
+
+/// Skip the test (with eprintln explanation) if no Kafka can be made available.
+/// This is used when neither a live broker nor Docker is reachable in the env.
+#[macro_export]
+macro_rules! ensure_kafka_or_skip {
+    () => {{
+        match $crate::common::KafkaTestEnv::ensure().await {
+            Some(env) => env,
+            None => {
+                eprintln!(
+                    "SKIP: no live Kafka and Docker/testcontainers unavailable. \
+                     Set $KAFKA_BROKERS or run Docker."
+                );
+                return;
+            }
+        }
+    }};
+}
+
+#[allow(unused_imports)]
+pub(crate) use ensure_kafka_or_skip;
