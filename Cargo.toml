@@ -50,8 +50,8 @@ tokio = { version = ">=1.50", features = ["full"] }
 #     prost-build. The wrapper does Kafka in/out only.
 # When wiring HTTP/gRPC sinks (e.g. for enrichment refresh), re-enable the
 # specific feature at that point — don't pre-enable speculatively.
-hyperi-rustlib = { version = ">=2.5.4", features = [
-    "cli",
+hyperi-rustlib = { version = ">=2.6.1", features = [
+    "cli-service",
     "config",
     "config-reload",
     "deployment",
@@ -63,7 +63,7 @@ hyperi-rustlib = { version = ">=2.5.4", features = [
     "scaling",
     "transport",
     "transport-kafka",
-    "worker",
+    "worker-pool",
 ] }
 
 # VRL — Vector Remap Language (embedded transform engine)
