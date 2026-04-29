@@ -22,14 +22,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Each entry MUST have a comment with: (1) why the advisory is tolerated,
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.
 # Empty list = nothing tolerated; CI fails on any new advisory.
-#
-# Known transitive: RUSTSEC-2024-0384 (`instant` unmaintained, via
-# parking_lot 0.11 → wasm-timer → reqwest-retry 0.7.0 → hyperi-rustlib).
-# Surfaces in `cargo audit` (exit 0, warning only — not a blocker).
-# `cargo deny check` doesn't currently detect it. Resolution requires
-# hyperi-rustlib to bump its `reqwest-retry` cap from `<0.8` to `>=0.8`
-# (0.8.0 already migrated to maintained `wasmtimer`, wasm32-gated).
-***REMOVED***ignore = []
+ignore = []
 
 [licenses]
 version = 2
