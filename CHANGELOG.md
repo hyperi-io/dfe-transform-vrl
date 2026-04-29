@@ -1,3 +1,18 @@
+# [1.1.0](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.3...v1.1.0) (2026-04-29)
+
+
+### Bug Fixes
+
+* demote missing_docs to allow until 90-item docs pass lands ([2c861e2](https://github.com/hyperi-io/dfe-transform-vrl/commit/2c861e278c58cda896623e7ce9bdc6636bcc10e3))
+* **deps:** prune unused features — drops wasm-timer/instant chain ([15921c5](https://github.com/hyperi-io/dfe-transform-vrl/commit/15921c5f216ce5c2ddb12c0c2d6b3db551609ff3))
+* **test:** mark all 5 e2e tests #[ignore] — were silently touching live Kafka in CI ([05b181c](https://github.com/hyperi-io/dfe-transform-vrl/commit/05b181c59198209ec5c0f332ecc3024362ca1bd6))
+* wire jemalloc, flip publish-target=both, update deps, expand smoke ([99fa199](https://github.com/hyperi-io/dfe-transform-vrl/commit/99fa199b06ded8c09d913509e1d2582b10b1e2fd))
+
+
+### Features
+
+* tier 2 PGO+BOLT setup + small surfacing fixes ([8b4c6ad](https://github.com/hyperi-io/dfe-transform-vrl/commit/8b4c6ad78a748aaacf9d420b8c9e7699c55c924a))
+
 ## [1.0.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.2...v1.0.3) (2026-04-16)
 
 
