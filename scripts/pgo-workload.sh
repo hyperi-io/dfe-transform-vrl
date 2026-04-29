@@ -254,11 +254,14 @@ sink:
 transforms:
   dir: "TRANSFORMS_DIR_PLACEHOLDER"
 
+# High ports unlikely to clash with anything else on the runner pod
+# (the arc-runner-16cpu pod has prometheus or sccache on :9090, which
+# made the wrapper crash with EADDRINUSE on first Tier 2 build).
 health:
-  address: "127.0.0.1:9000"
+  address: "127.0.0.1:19000"
 
 metrics:
-  address: "127.0.0.1:9090"
+  address: "127.0.0.1:19090"
 
 logging:
   level: "warn"
@@ -291,7 +294,7 @@ for attempt in $(seq 1 60); do
         tail -100 "$WORK_DIR/wrapper.log" >&2
         exit 1
     fi
-    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9000/health/ready"; then
+    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:19000/health/ready"; then
         echo "pgo-workload: wrapper ready (attempt $attempt)"
         break
     fi
