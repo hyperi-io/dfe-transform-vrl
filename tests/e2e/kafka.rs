@@ -81,6 +81,9 @@ fn default_memory_guard() -> Arc<MemoryGuard> {
 }
 
 #[tokio::test]
+#[ignore = "requires live Kafka broker or testcontainers. \
+    Run explicitly with `cargo nextest run -- --ignored`. \
+    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_json_transform() {
     let env = ensure_kafka_or_skip!();
     let kf = env.config();
@@ -188,6 +191,9 @@ async fn test_produce_consume_json_transform() {
 }
 
 #[tokio::test]
+#[ignore = "requires live Kafka broker or testcontainers. \
+    Run explicitly with `cargo nextest run -- --ignored`. \
+    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_msgpack_transform() {
     let env = ensure_kafka_or_skip!();
     let kf = env.config();
@@ -277,6 +283,9 @@ async fn test_produce_consume_msgpack_transform() {
 }
 
 #[tokio::test]
+#[ignore = "requires live Kafka broker or testcontainers. \
+    Run explicitly with `cargo nextest run -- --ignored`. \
+    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_vrl_abort_drops_events() {
     let env = ensure_kafka_or_skip!();
     let kf = env.config();

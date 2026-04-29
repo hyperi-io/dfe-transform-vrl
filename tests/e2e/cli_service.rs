@@ -96,6 +96,9 @@ fn seed_producer_config(kf: &common::KafkaTestConfig, topic: &str) -> KafkaConfi
 }
 
 #[tokio::test]
+#[ignore = "requires live Kafka broker or testcontainers. \
+    Run explicitly with `cargo nextest run -- --ignored`. \
+    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_pipeline_run_end_to_end_with_live_kafka() {
     let env = ensure_kafka_or_skip!();
     let kf = env.config();
