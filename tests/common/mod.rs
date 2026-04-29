@@ -179,6 +179,7 @@ pub fn ensure_docker_infra() -> Result<bool, String> {
 // =============================================================================
 
 /// Skip test if Kafka is not available in the current test mode.
+#[allow(unused_macros)]
 macro_rules! skip_if_no_kafka {
     () => {
         let kf = crate::common::kafka_test_config();
@@ -204,7 +205,7 @@ pub(crate) use skip_if_no_kafka;
 ///
 /// Resolution order:
 /// 1. `$KAFKA_BROKERS` (or `TEST_MODE=docker` localhost:19092) → use it (no container spawned)
-/// 2. Otherwise → spawn an Apache Kafka container via testcontainers (KRaft mode, no Zookeeper)
+/// 2. Otherwise → spawn an Apache Kafka container via testcontainers (`KRaft` mode, no Zookeeper)
 ///
 /// **Cleanup:** When this struct drops, any spawned container is automatically
 /// stopped and removed by the testcontainers `Drop` impl. Tests do not need
@@ -286,7 +287,7 @@ impl KafkaTestEnv {
         })
     }
 
-    pub fn config(&self) -> &KafkaTestConfig {
+    pub const fn config(&self) -> &KafkaTestConfig {
         &self.config
     }
 }

@@ -6,6 +6,8 @@
 // License:   FSL-1.1-ALv2
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
+#![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+
 //! Quick smoke test that verifies the live Kafka credentials in `.env`
 //! actually work. Helpful for catching stale creds before running long
 //! pipeline tests.

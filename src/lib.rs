@@ -10,7 +10,13 @@
 //!
 //! Wrapper-controlled Kafka source/sink with in-process VRL transforms,
 //! native msgpack support, and bounded memory.
-
+//!
+//! Lints (`forbid(unsafe_code)`, `warn(clippy::pedantic)`, `warn(missing_docs)`,
+//! `warn(rustdoc::*)`, `deny(clippy::unwrap_used/expect_used/panic/dbg_macro)`)
+//! are configured in `Cargo.toml` `[lints]` — the modern Cargo 1.74+ canonical
+//! form, applies to both lib and bin from one place. Don't duplicate them here
+//! as `#![...]` attributes: that's the two-file-source-of-truth footgun (one
+***REMOVED***
 pub mod cli;
 pub mod config;
 pub mod deployment;

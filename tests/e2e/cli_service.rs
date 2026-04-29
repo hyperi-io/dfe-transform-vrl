@@ -15,13 +15,11 @@
 //! chunk of pipeline.rs coverage.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use dfe_transform_vrl::config::Config;
 use dfe_transform_vrl::config::hot::HotConfig;
-use dfe_transform_vrl::config::{
-    Config, PipelineConfig, SinkConfig, SourceConfig, TransformConfig,
-};
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;

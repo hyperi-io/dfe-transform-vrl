@@ -15,14 +15,14 @@ targets = [
 ]
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+version = 2
+unmaintained = "all"
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = []
 
 [licenses]
-unlicensed = "deny"
+version = 2
 allow = [
     "FSL-1.1-ALv2",
     "MIT",
