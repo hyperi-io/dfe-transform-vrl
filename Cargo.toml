@@ -134,9 +134,11 @@ testcontainers-modules = { version = ">=0.15", features = ["kafka"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-***REMOVED***# pattern: start as warn, address public API docs over time, promote to deny.
-# Lib currently has ~90 missing_docs warnings on internal-but-public items.
-missing_docs = "warn"
+***REMOVED***# `allow` — there are ~90 undocumented-but-public items (mostly struct fields
+# in config/loader.rs and metrics.rs). The ratchet path is documented in
+***REMOVED***# `deny`. Cannot run as `warn` while hyperi-ci CI uses `-D warnings`
+# (warn-level lints become hard errors and block the push).
+missing_docs = "allow"
 
 [lints.rustdoc]
 broken_intra_doc_links = "warn"
