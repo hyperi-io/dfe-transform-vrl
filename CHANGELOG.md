@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.0...v1.1.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* **pgo-workload:** use high ports (19000/19090) to avoid runner pod conflict ([0259d4c](https://github.com/hyperi-io/dfe-transform-vrl/commit/0259d4c215c178e7220b52a98fa0e60369ecccf7))
+
 # [1.1.0](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.0.3...v1.1.0) (2026-04-29)
 
 
