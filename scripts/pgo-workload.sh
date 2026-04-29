@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# Project:   dfe-transform-vrl
+# File:      scripts/pgo-workload.sh
+# Purpose:   PGO workload orchestrator — Kafka + wrapper + producer
+# Language:  Bash
+#
+# License:   FSL-1.1-ALv2
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+#
+# Usage:
+#   scripts/pgo-workload.sh <path-to-dfe-transform-vrl-binary>
+#
+# Drives the wrapper's hot path (Kafka consume → format detect → deserialise
+# → VRL execute → serialise → Kafka produce) under representative load so a
+# PGO-instrumented binary accumulates useful profile data.
+#
+# Environment variables (all optional):
+#   PGO_WORKLOAD_DURATION_SECS   Duration of load (default 300, floor 60)
+#   PGO_WORKLOAD_KAFKA_IMAGE     Override Kafka image
+#   PGO_WORKLOAD_KEEP            Set to 1 to skip cleanup (debug)
+#   PGO_DRIVER_PATH              Override pgo-driver binary path
+#
+# Preconditions:
+#   - Docker daemon running, user has access
+#   - $1 is the wrapper binary built with --features jemalloc
+#   - pgo-driver binary built with --features pgo-driver (auto-built if missing)
+#
+# Behaviour:
+#   - Starts single-node Kafka (KRaft, auto-create topics)
+#   - Writes ephemeral wrapper config + VRL transform fixture
+#   - Starts the passed-in wrapper binary in background
+#   - Waits for the wrapper's /health/ready to return 200
+#   - Runs pgo-driver to produce messages to the source topic for the
+#     configured duration (wrapper consumes, transforms, produces to sink)
+#   - Cleans up (traps EXIT): kills wrapper, removes container
+
+set -euo pipefail
+
+# ----------------------------------------------------------------------------
+# Args + env
+# ----------------------------------------------------------------------------
+
+if [[ $# -lt 1 ]]; then
+    echo "usage: $0 <path-to-dfe-transform-vrl-binary>" >&2
+    exit 1
+fi
+
+WRAPPER_BIN="$1"
+if [[ ! -x "$WRAPPER_BIN" ]]; then
+    echo "error: $WRAPPER_BIN is not executable" >&2
+    exit 1
+fi
+
+DURATION="${PGO_WORKLOAD_DURATION_SECS:-300}"
+KAFKA_IMAGE="${PGO_WORKLOAD_KAFKA_IMAGE:-apache/kafka:3.8.0}"
+KEEP="${PGO_WORKLOAD_KEEP:-0}"
+
+# Floor of 60s — shorter workloads produce bad PGO profiles
+if [[ "$DURATION" -lt 60 ]]; then
+    echo "error: PGO_WORKLOAD_DURATION_SECS must be >= 60 (got $DURATION)" >&2
+    echo "  short workloads produce NEGATIVE PGO gains by biasing the" >&2
+    echo "  compiler toward startup paths instead of hot paths" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Locate pgo-driver binary; build on demand if missing.
+PGO_DRIVER_PATH="${PGO_DRIVER_PATH:-}"
+if [[ -z "$PGO_DRIVER_PATH" ]]; then
+    for candidate in \
+        "$PROJECT_ROOT/target/release/pgo-driver" \
+        "$PROJECT_ROOT/target/debug/pgo-driver"; do
+        if [[ -x "$candidate" ]]; then
+            PGO_DRIVER_PATH="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -z "$PGO_DRIVER_PATH" || ! -x "$PGO_DRIVER_PATH" ]]; then
+    echo "pgo-workload: pgo-driver not found, building..." >&2
+    (cd "$PROJECT_ROOT" && cargo build --release --features pgo-driver --bin pgo-driver) \
+        || { echo "error: failed to build pgo-driver" >&2; exit 1; }
+    PGO_DRIVER_PATH="$PROJECT_ROOT/target/release/pgo-driver"
+    if [[ ! -x "$PGO_DRIVER_PATH" ]]; then
+        echo "error: pgo-driver still missing after build at $PGO_DRIVER_PATH" >&2
+        exit 1
+    fi
+fi
+
+# ----------------------------------------------------------------------------
+# Cleanup
+# ----------------------------------------------------------------------------
+
+WRAPPER_PID=""
+KAFKA_CID=""
+WORK_DIR=""
+
+cleanup() {
+    local rc=$?
+    if [[ "$KEEP" == "1" ]]; then
+        echo "PGO_WORKLOAD_KEEP=1 — skipping cleanup" >&2
+        echo "  wrapper PID: $WRAPPER_PID" >&2
+        echo "  kafka CID:   $KAFKA_CID" >&2
+        echo "  work dir:    $WORK_DIR" >&2
+        return $rc
+    fi
+    echo "pgo-workload: cleanup" >&2
+    if [[ -n "$WRAPPER_PID" ]] && kill -0 "$WRAPPER_PID" 2>/dev/null; then
+        kill -TERM "$WRAPPER_PID" 2>/dev/null || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ! kill -0 "$WRAPPER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        kill -KILL "$WRAPPER_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$KAFKA_CID" ]]; then
+        docker rm -f "$KAFKA_CID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
+        rm -rf "$WORK_DIR"
+    fi
+    exit $rc
+}
+trap cleanup EXIT INT TERM
+
+# ----------------------------------------------------------------------------
+# Start Kafka (KRaft mode, single-node, auto-create topics)
+# ----------------------------------------------------------------------------
+
+echo "pgo-workload: starting Kafka ($KAFKA_IMAGE)"
+KAFKA_CID=$(docker run -d --rm \
+    -p 19092:9092 \
+    -e KAFKA_NODE_ID=1 \
+    -e KAFKA_PROCESS_ROLES=broker,controller \
+    -e KAFKA_LISTENERS='PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093' \
+    -e KAFKA_ADVERTISED_LISTENERS='PLAINTEXT://localhost:19092' \
+    -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP='CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT' \
+    -e KAFKA_CONTROLLER_QUORUM_VOTERS='1@localhost:9093' \
+    -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+    -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT \
+    -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=true \
+    -e KAFKA_NUM_PARTITIONS=3 \
+    -e KAFKA_DEFAULT_REPLICATION_FACTOR=1 \
+    -e CLUSTER_ID="$(printf '%s' "pgo$(date +%s)$$" | base64 | head -c 22)" \
+    "$KAFKA_IMAGE")
+echo "pgo-workload: Kafka CID: $KAFKA_CID"
+
+for attempt in $(seq 1 30); do
+    if (echo > /dev/tcp/127.0.0.1/19092) 2>/dev/null; then
+        sleep 2  # let RAFT bootstrap finish
+        echo "pgo-workload: Kafka ready (attempt $attempt)"
+        break
+    fi
+    if [[ $attempt -eq 30 ]]; then
+        echo "error: Kafka did not become ready in 60s" >&2
+        docker logs --tail 50 "$KAFKA_CID" >&2
+        exit 1
+    fi
+    sleep 2
+done
+
+# ----------------------------------------------------------------------------
+# Write ephemeral wrapper config + VRL transform fixture
+# ----------------------------------------------------------------------------
+
+WORK_DIR=$(mktemp -d -t pgo-workload-XXXXXX)
+CONFIG_FILE="$WORK_DIR/config.yaml"
+TRANSFORM_DIR="$WORK_DIR/transforms"
+mkdir -p "$TRANSFORM_DIR"
+
+# Three VRL programs covering the typical hot-path patterns:
+#   - parse_json on stringified .message + field promotion
+#   - parse_key_value on .message k=v lines + numeric coercion
+#   - conditional routing + abort + string ops (downcase/replace)
+# Order matters: VRL programs are applied sequentially in filename order.
+
+cat > "$TRANSFORM_DIR/01_routing.vrl" <<'VRL'
+# Conditional routing — exercises string ops, branching, abort
+if exists(.level) {
+    .level = downcase!(string!(.level))
+} else {
+    .level = "unknown"
+}
+
+if .level == "debug" {
+    abort "debug events dropped"
+}
+
+if .level == "error" || .level == "critical" {
+    .routing = { "priority": "high", "alert": true }
+} else {
+    .routing = { "priority": "normal", "alert": false }
+}
+VRL
+
+cat > "$TRANSFORM_DIR/02_kv_extract.vrl" <<'VRL'
+# Extract k=v from .message — exercises parse_key_value + numeric coercion
+if exists(.message) && is_string(.message) {
+    msg = string!(.message)
+    # Fast skip if message looks like JSON (starts with {); 03 will handle.
+    if !starts_with(msg, "{") {
+        parsed, err = parse_key_value(msg)
+        if err == null {
+            .extracted = parsed
+            if exists(.extracted.duration) {
+                ds = string!(.extracted.duration)
+                ds = replace(ds, "ms", "")
+                .extracted.duration_ms = to_int(ds) ?? null
+            }
+        }
+    }
+}
+VRL
+
+cat > "$TRANSFORM_DIR/03_json_unflatten.vrl" <<'VRL'
+# Parse embedded JSON in .message — exercises parse_json + field promotion
+if exists(.message) && is_string(.message) {
+    msg = string!(.message)
+    if starts_with(msg, "{") {
+        parsed, err = parse_json(msg)
+        if err == null && is_object(parsed) {
+            .payload = parsed
+            del(.message)
+        }
+    }
+}
+VRL
+
+cat > "$CONFIG_FILE" <<'YAML'
+pipeline:
+  name: "pgo-workload"
+  batch_size: 500
+  batch_timeout_ms: 50
+
+source:
+  brokers:
+    - "localhost:19092"
+  topics:
+    - "pgo_source"
+  group_id: "pgo-workload"
+  format: "auto"
+  auto_offset_reset: "earliest"
+
+sink:
+  brokers:
+    - "localhost:19092"
+  topic: "pgo_sink"
+  compression: "lz4"
+
+transforms:
+  dir: "TRANSFORMS_DIR_PLACEHOLDER"
+
+health:
+  address: "127.0.0.1:9000"
+
+metrics:
+  address: "127.0.0.1:9090"
+
+logging:
+  level: "warn"
+  format: "json"
+YAML
+
+# Substitute the actual transforms dir into the config (heredoc is literal)
+sed -i "s|TRANSFORMS_DIR_PLACEHOLDER|$TRANSFORM_DIR|" "$CONFIG_FILE"
+
+# ----------------------------------------------------------------------------
+# Start wrapper
+# ----------------------------------------------------------------------------
+
+echo "pgo-workload: starting wrapper: $WRAPPER_BIN"
+echo "pgo-workload: config: $CONFIG_FILE"
+echo "pgo-workload: transforms: $TRANSFORM_DIR"
+
+# PGO profiles go here by default with cargo-pgo
+export LLVM_PROFILE_FILE="${LLVM_PROFILE_FILE:-$PROJECT_ROOT/target/pgo-profiles/pgo-%p_%m.profraw}"
+mkdir -p "$(dirname "$LLVM_PROFILE_FILE")"
+
+"$WRAPPER_BIN" --config "$CONFIG_FILE" run \
+    >"$WORK_DIR/wrapper.log" 2>&1 &
+WRAPPER_PID=$!
+echo "pgo-workload: wrapper PID: $WRAPPER_PID"
+
+for attempt in $(seq 1 60); do
+    if ! kill -0 "$WRAPPER_PID" 2>/dev/null; then
+        echo "error: wrapper died during startup" >&2
+        tail -100 "$WORK_DIR/wrapper.log" >&2
+        exit 1
+    fi
+    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9000/health/ready"; then
+        echo "pgo-workload: wrapper ready (attempt $attempt)"
+        break
+    fi
+    if [[ $attempt -eq 60 ]]; then
+        echo "error: wrapper did not become ready in 60s" >&2
+        tail -100 "$WORK_DIR/wrapper.log" >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+# Extra settle so the consumer group is fully joined before we start producing
+sleep 2
+
+# ----------------------------------------------------------------------------
+# Run load driver
+# ----------------------------------------------------------------------------
+
+echo "pgo-workload: driving load for ${DURATION}s via $PGO_DRIVER_PATH"
+
+PGO_DRIVER_DURATION_SECS="$DURATION" \
+PGO_DRIVER_BROKERS="127.0.0.1:19092" \
+PGO_DRIVER_TOPIC="pgo_source" \
+PGO_DRIVER_RPS="${PGO_DRIVER_RPS:-5000}" \
+    "$PGO_DRIVER_PATH"
+
+echo "pgo-workload: driver complete"
+
+# Give the wrapper a moment to drain buffers + flush profile data
+sleep 5
+
+echo "pgo-workload: done (wrapper logs: $WORK_DIR/wrapper.log)"

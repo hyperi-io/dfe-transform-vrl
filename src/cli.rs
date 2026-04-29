@@ -157,6 +157,23 @@ async fn run_transform_service(
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vrl"
     );
+
+    // Log derived DFE topology — operators rely on this to confirm the
+    // wrapper joined the right consumer group and resolves the right
+    // source name from the topic naming convention. Pattern matches
+    // dfe-transform-wasm; useful when debugging consumer-group surprises.
+    let derived_source = crate::kafka::derive_dfe_source(&config.source);
+    let consumer_group = crate::kafka::derive_consumer_group(&config.source, &config.pipeline.name);
+    info!(
+        source_topics = ?config.source.topics,
+        sink_topic = %config.sink.topic,
+        consumer_group = %consumer_group,
+        dfe_source = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::name),
+        dfe_input_topic = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::input_topic),
+        dfe_output_topic = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::output_topic),
+        "DFE topology"
+    );
+
     debug!(
         brokers = ?config.source.brokers,
         group_id = %config.source.group_id,

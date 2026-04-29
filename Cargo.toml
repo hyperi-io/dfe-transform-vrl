@@ -25,6 +25,14 @@ path = "src/lib.rs"
 name = "dfe-transform-vrl"
 path = "src/main.rs"
 
+# PGO workload driver — only built with `--features pgo-driver`.
+# Used by scripts/pgo-workload.sh during release-channel Tier 2 builds
+# (PGO instrumentation phase). Default `cargo build` skips it entirely.
+[[bin]]
+name = "pgo-driver"
+path = "src/bin/pgo-driver.rs"
+required-features = ["pgo-driver"]
+
 [dependencies]
 # Async runtime
 tokio = { version = ">=1.50", features = ["full"] }
@@ -90,9 +98,17 @@ rusqlite = { version = ">=0.32", features = ["bundled"], optional = true }
 # (spike/alpha/beta/release). Default build keeps system allocator so
 ***REMOVED***tikv-jemallocator = { version = ">=0.6", optional = true }
 
+# Direct rdkafka — ONLY used by the pgo-driver bin under `--features pgo-driver`.
+# Default builds (and `--features jemalloc`) skip this entirely. The main
+# wrapper uses Kafka via hyperi-rustlib transport-kafka, never directly.
+rdkafka = { version = ">=0.39", features = ["tokio", "cmake-build"], optional = true }
+
 [features]
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
+# pgo-driver: build the workload-driver bin used by scripts/pgo-workload.sh
+# during PGO instrumentation. NOT enabled in production builds.
+pgo-driver = ["dep:rdkafka"]
 transport-memory = ["hyperi-rustlib/transport-memory"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
