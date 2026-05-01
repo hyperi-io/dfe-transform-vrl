@@ -111,6 +111,10 @@ impl DfeApp for App {
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
+
+    fn deployment_contract(&self) -> Option<hyperi_rustlib::deployment::DeploymentContract> {
+        Some(crate::deployment::contract())
+    }
 }
 
 /// Handle emit subcommands that bypass the normal `DfeApp` lifecycle.
