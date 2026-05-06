@@ -42,16 +42,13 @@ pub struct App {
 
 #[derive(Subcommand, Clone, Debug)]
 enum AppCommand {
-    Run,
-    Version,
-    #[command(name = "config-check")]
-    ConfigCheck,
+    /// Standard rustlib commands (run, version, config-check, generate-artefacts, metrics-manifest).
+    #[command(flatten)]
+    Standard(StandardCommand),
     #[command(name = "emit-dockerfile")]
     EmitDockerfile,
     #[command(name = "emit-chart")]
-    EmitChart {
-        dir: String,
-    },
+    EmitChart { dir: String },
     #[command(name = "emit-compose")]
     EmitCompose,
     #[command(name = "emit-contract")]
@@ -81,14 +78,7 @@ impl DfeApp for App {
 
     fn command(&self) -> Option<&StandardCommand> {
         match &self.command {
-            Some(AppCommand::Version) => {
-                static VERSION: StandardCommand = StandardCommand::Version;
-                Some(&VERSION)
-            }
-            Some(AppCommand::ConfigCheck) => {
-                static CONFIG_CHECK: StandardCommand = StandardCommand::ConfigCheck;
-                Some(&CONFIG_CHECK)
-            }
+            Some(AppCommand::Standard(cmd)) => Some(cmd),
             _ => None,
         }
     }
@@ -407,19 +397,28 @@ mod tests {
     #[test]
     fn app_parses_run_command() {
         let app = parse(&["run"]);
-        assert!(matches!(app.command, Some(AppCommand::Run)));
+        assert!(matches!(
+            app.command,
+            Some(AppCommand::Standard(StandardCommand::Run))
+        ));
     }
 
     #[test]
     fn app_parses_version_command() {
         let app = parse(&["version"]);
-        assert!(matches!(app.command, Some(AppCommand::Version)));
+        assert!(matches!(
+            app.command,
+            Some(AppCommand::Standard(StandardCommand::Version))
+        ));
     }
 
     #[test]
     fn app_parses_config_check_command() {
         let app = parse(&["config-check"]);
-        assert!(matches!(app.command, Some(AppCommand::ConfigCheck)));
+        assert!(matches!(
+            app.command,
+            Some(AppCommand::Standard(StandardCommand::ConfigCheck))
+        ));
     }
 
     #[test]
