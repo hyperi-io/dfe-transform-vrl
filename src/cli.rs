@@ -136,7 +136,7 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
             println!("{}", contract.to_json());
             Some(())
         }
-        _ => None,
+        AppCommand::Standard(_) => None,
     }
 }
 
