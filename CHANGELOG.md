@@ -1,3 +1,17 @@
+## [1.1.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.1...v1.1.2) (2026-05-07)
+
+
+### Bug Fixes
+
+* **cli:** align test with flatten StandardCommand semantics ([c00a0c3](https://github.com/hyperi-io/dfe-transform-vrl/commit/c00a0c300bfa5ed55fb2dd4fc9fef26217050e92))
+* **cli:** flatten StandardCommand for generate-artefacts + metrics-manifest ([4d59214](https://github.com/hyperi-io/dfe-transform-vrl/commit/4d59214126bd394fb7740892efaeed2ebaaa90de))
+* **cli:** replace wildcard arm with explicit Standard variant ([183dee5](https://github.com/hyperi-io/dfe-transform-vrl/commit/183dee5c58ae784f12553d82191e0d17208bac74))
+* **deployment:** wire DfeApp::deployment_contract trait hook + bump rustlib to >=2.7.0 ([2886d81](https://github.com/hyperi-io/dfe-transform-vrl/commit/2886d81fd0cce57cca4a2bd6913c03a10e272813))
+* **deploy:** regenerate Dockerfile with Ubuntu 24.04 userdel fix ([8959071](https://github.com/hyperi-io/dfe-transform-vrl/commit/895907175d87108c59e1fd938f74cf9a56561f56))
+* **deps:** track rustlib 2.6.1 (cli→cli-service, worker→worker-pool) ([ef82f99](https://github.com/hyperi-io/dfe-transform-vrl/commit/ef82f99aa549f6cef995dc986e1b5f0646b16c4d))
+* **release:** force patch bump v1.1.2 ([0c39c92](https://github.com/hyperi-io/dfe-transform-vrl/commit/0c39c925759b3418ef7529a3a4afc0dd344d1a3e))
+* **release:** retrigger publish under hyperi-ci v2.1.6 ([e53121f](https://github.com/hyperi-io/dfe-transform-vrl/commit/e53121f7961e8ab59e022097b03c78b46233e5e3))
+
 ## [1.1.1](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.0...v1.1.1) (2026-04-29)
 
 
