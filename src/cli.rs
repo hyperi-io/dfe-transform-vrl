@@ -473,12 +473,16 @@ mod tests {
 
     #[test]
     fn command_maps_standard_variants() {
+        // After the StandardCommand flatten, every standard subcommand
+        // (run, version, config-check, generate-artefacts, metrics-manifest)
+        // returns Some via the trait. Only emit-* / non-standard variants
+        // return None.
         let version_app = parse(&["version"]);
         assert!(version_app.command().is_some());
         let config_check_app = parse(&["config-check"]);
         assert!(config_check_app.command().is_some());
         let run_app = parse(&["run"]);
-        assert!(run_app.command().is_none());
+        assert!(run_app.command().is_some());
         let emit_app = parse(&["emit-dockerfile"]);
         assert!(emit_app.command().is_none());
     }
