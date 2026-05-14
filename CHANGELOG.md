@@ -1,3 +1,11 @@
+## [1.1.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.2...v1.1.3) (2026-05-14)
+
+
+### Bug Fixes
+
+* **deps:** bump hyperi-rustlib to >=2.7.1 ([fe1e527](https://github.com/hyperi-io/dfe-transform-vrl/commit/fe1e5276eae6e185198df19f5605967493e0f6b3))
+* **release:** force patch bump v1.1.3 ([95b2d17](https://github.com/hyperi-io/dfe-transform-vrl/commit/95b2d17c1aefdcb181522f38ab0ea2cafdcdf1fc))
+
 ## [1.1.2](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.1...v1.1.2) (2026-05-07)
 
 
