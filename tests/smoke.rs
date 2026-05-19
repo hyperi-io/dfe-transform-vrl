@@ -121,6 +121,69 @@ fn example_config_yaml_parses_as_yaml() {
         .unwrap_or_else(|e| panic!("config.example.yaml is not valid YAML: {e}"));
 }
 
+/// GH issue #11 regression: the wrapper used to construct a SECOND
+/// `MetricsManager` that tried to bind the same `:9090` as rustlib's
+/// auto-started one, causing every startup to fail with EADDRINUSE.
+/// Spawn the actual binary, give it time to clear the metrics-server
+/// bind path, and assert it doesn't die with that error before we
+/// terminate it. Uses minimal.yaml whose `transforms.dir` doesn't
+/// exist on disk; the wrapper crashes downstream on Kafka connect or
+/// transforms-load — but the metrics server step happens *before*
+/// either, so EADDRINUSE would surface here.
+#[test]
+fn service_startup_does_not_crash_with_eaddrinuse() {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configs/minimal.yaml");
+    assert!(fixture.exists(), "fixture missing");
+
+    // Bind to random unused ports so we don't conflict with anything on
+    // the host running the test suite (the rustlib metrics server uses
+    // METRICS_ADDR; we set both health/metrics via env to ephemeral high
+    // ports).
+    let mut child = std::process::Command::new(binary_path())
+        .arg("--config")
+        .arg(&fixture)
+        .arg("run")
+        .env("METRICS_ADDR", "127.0.0.1:0")
+        .env("DFE_TRANSFORM_HEALTH__ADDRESS", "127.0.0.1:0")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn binary");
+
+    // Give the wrapper ~2s to run all startup steps (health bind, metrics
+    // bind, VRL compile, kafka init begin). EADDRINUSE shows up well
+    // before then.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Ok(Some(_)) = child.try_wait() {
+            // Process exited before 2s — collect stderr and assert it
+            // wasn't EADDRINUSE.
+            let mut stderr = String::new();
+            if let Some(mut s) = child.stderr.take() {
+                let _ = s.read_to_string(&mut stderr);
+            }
+            assert!(
+                !stderr.contains("Address already in use"),
+                "GH#11 regressed: wrapper crashed with EADDRINUSE on startup.\nstderr:\n{stderr}"
+            );
+            // Any other early exit is fine for this test's scope — minimal.yaml
+            // fails on transforms-load (`/etc/dfe-transform-vrl/transforms`
+            // doesn't exist) which we accept.
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Still running after 2s — startup succeeded past the metrics bind.
+    // Terminate cleanly.
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[test]
 fn emit_dockerfile_outputs_from() {
     let output = Command::new(binary_path())

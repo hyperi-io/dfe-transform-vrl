@@ -70,12 +70,12 @@ pipeline:
 # VRL transform files
 # -----------------------------------------------------------------------------
 # transforms:
-#   dir: "/etc/dfe/transforms/"        # directory of .vrl files (sorted by name)
+#   dir: "/etc/dfe-transform-vrl/transforms/"        # directory of .vrl files (sorted by name)
 #   # Or specify individual files (loaded in order):
 #   # files:
-#   #   - "/etc/dfe/transforms/01_parse.vrl"
-#   #   - "/etc/dfe/transforms/02_enrich.vrl"
-#   #   - "/etc/dfe/transforms/03_filter.vrl"
+#   #   - "/etc/dfe-transform-vrl/transforms/01_parse.vrl"
+#   #   - "/etc/dfe-transform-vrl/transforms/02_enrich.vrl"
+#   #   - "/etc/dfe-transform-vrl/transforms/03_filter.vrl"
 
 # -----------------------------------------------------------------------------
 # Health endpoint

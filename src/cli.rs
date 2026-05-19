@@ -21,7 +21,6 @@ use hyperi_rustlib::config::reloader::{ConfigReloader, ReloaderConfig};
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
 use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
-use hyperi_rustlib::metrics::MetricsManager;
 use tracing::{debug, error, info};
 
 use crate::config::Config;
@@ -144,7 +143,7 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
 async fn run_transform_service(
     config: Config,
     config_path: Option<String>,
-    runtime: hyperi_rustlib::cli::ServiceRuntime,
+    mut runtime: hyperi_rustlib::cli::ServiceRuntime,
 ) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
@@ -245,25 +244,30 @@ async fn run_transform_service(
         .await
         .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
 
-    // Metrics server
-    let mut metrics_manager = MetricsManager::new("dfe_transform_vrl");
+    // Metrics: reuse the MetricsManager that rustlib's DfeApp framework has
+    // already constructed and started for us (`runtime.metrics`). NEVER
+    // construct a new MetricsManager here — that creates a second server on
+    // the same port and the wrapper crashes with EADDRINUSE on startup (GH
+    // issue #11). The framework already exposes everything we register on
+    // the global recorder; we just wire our app-specific metrics + readiness
+    // into the running manager.
+    //
+    // `config.metrics.address` is intentionally ignored — rustlib's
+    // `--metrics-addr` (env `METRICS_ADDR`, default `0.0.0.0:9090`) is the
+    // single source of truth. Charts / deployments override that env var,
+    // not the YAML field, to relocate the endpoint.
     let commit_hash = option_env!("GIT_COMMIT").unwrap_or("unknown");
     let transform_metrics =
-        metrics::TransformMetrics::new(&metrics_manager, env!("CARGO_PKG_VERSION"), commit_hash);
+        metrics::TransformMetrics::new(&runtime.metrics, env!("CARGO_PKG_VERSION"), commit_hash);
 
-    // Wire readiness check into metrics manager
+    // Wire readiness check into the running manager.
     let readiness_flag = Arc::clone(&ready_flag);
     let readiness_guard = Arc::clone(&memory_guard);
-    metrics_manager.set_readiness_check(move || {
+    runtime.metrics.set_readiness_check(move || {
         readiness_flag.load(std::sync::atomic::Ordering::Acquire)
             && !readiness_guard.under_pressure()
     });
-
-    info!(address = %config.metrics.address, "starting metrics server");
-    metrics_manager
-        .start_server(&config.metrics.address)
-        .await
-        .map_err(|e| anyhow::anyhow!("metrics server failed: {e}"))?;
+    info!("readiness check wired into rustlib metrics server");
 
     // Hot-reloadable config subset (read by pipeline each batch)
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
@@ -382,7 +386,12 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::missing_panics_doc)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::missing_panics_doc
+)]
 mod tests {
     use super::*;
     use clap::Parser;
@@ -488,13 +497,31 @@ mod tests {
     }
 
     #[test]
-    fn load_config_returns_defaults_when_path_missing() {
+    fn load_config_missing_path_returns_file_not_found() {
+        // GH issue #9: explicit `--config <path>` MUST fail-fast with a
+        // clear "file not found" error when the file doesn't exist. The
+        // previous behaviour (silent fallback to defaults) hid mount-path
+        // typos and surfaced as misleading
+        // "sink.topic must not be empty" several stages later.
         let app = parse(&["run"]);
-        // Non-existent path should fall back to defaults (Config::load allows this).
-        // But validation will then reject defaults (empty brokers etc.), so we get a
-        // Config(validation) error.
         let result = app.load_config(Some("/nonexistent/path/config.yaml"));
-        assert!(result.is_err(), "empty config should fail validation");
+        let err = result.expect_err("missing --config path must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("config file not found"),
+            "error must say 'config file not found', got: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path/config.yaml"),
+            "error must include the actual missing path, got: {msg}"
+        );
+        // Must NOT fall through to validation errors like "sink.topic must
+        // not be empty" — those mislead operators into thinking the config
+        // is loaded but partially wrong.
+        assert!(
+            !msg.contains("sink.topic"),
+            "must not leak validation error from default config, got: {msg}"
+        );
     }
 
     #[test]

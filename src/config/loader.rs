@@ -493,13 +493,21 @@ impl Config {
         let mut config = Self::default();
 
         if let Some(path) = config_path {
-            if Path::new(path).exists() {
-                let content = std::fs::read_to_string(path)
-                    .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-                config = serde_yaml_ng::from_str(&content)?;
-                debug!(path, "loaded configuration file");
+            // Explicit `--config <path>` MUST exist. The previous behaviour
+            // (silent fallback to defaults) hid mount-path typos and surfaced
+            // as misleading "sink.topic must not be empty" validation
+            // errors several stages later. See GH issue #9.
+            if !Path::new(path).exists() {
+                return Err(crate::Error::Config(format!(
+                    "config file not found: {path}"
+                )));
             }
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
+            config = serde_yaml_ng::from_str(&content)?;
+            debug!(path, "loaded configuration file");
         } else {
+            // No --config: lenient fallback search in CWD.
             for path in &["config.yaml", "config.yml"] {
                 if Path::new(path).exists() {
                     let content = std::fs::read_to_string(path)
@@ -605,8 +613,34 @@ sink:
     }
 
     #[test]
-    fn load_missing_file_returns_defaults() {
-        let config = Config::load(Some("/nonexistent/path.yaml")).unwrap();
+    fn load_missing_explicit_path_returns_file_not_found() {
+        // GH issue #9: explicit `--config <path>` MUST fail-fast with a
+        // clear "config file not found" error. The previous behaviour
+        // (silent fallback to defaults) hid mount-path typos and surfaced
+        // as misleading "sink.topic must not be empty" validation errors
+        // several stages downstream.
+        let err = Config::load(Some("/nonexistent/path.yaml")).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("config file not found"),
+            "error must say 'config file not found', got: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path.yaml"),
+            "error must include the actual missing path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_no_path_with_no_cwd_config_returns_defaults() {
+        // No --config arg AND no config.yaml/.yml in CWD → defaults.
+        // This path stays lenient (only explicit --config requires
+        // existence per GH#9).
+        let tmp = tempfile::tempdir().unwrap();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let config = Config::load(None).unwrap();
+        std::env::set_current_dir(prev_cwd).unwrap();
         assert_eq!(config.pipeline.name, "default");
     }
 

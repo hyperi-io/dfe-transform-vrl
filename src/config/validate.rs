@@ -126,7 +126,7 @@ mod tests {
                 ..Default::default()
             },
             transforms: crate::config::TransformConfig {
-                dir: Some("/etc/dfe/transforms".to_string()),
+                dir: Some("/etc/dfe-transform-vrl/transforms".to_string()),
                 files: None,
             },
             ..Default::default()

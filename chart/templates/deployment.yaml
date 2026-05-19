@@ -52,7 +52,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - "--config"
-            - "/etc/dfe/config.yaml"
+            - "/etc/dfe-transform-vrl/config.yaml"
           ports:
             - name: metrics
               containerPort: {{ .Values.service.port }}

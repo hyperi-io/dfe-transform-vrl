@@ -31,7 +31,7 @@ pub fn contract() -> DeploymentContract {
         },
         env_prefix: "DFE_TRANSFORM".into(),
         metric_prefix: "transform_vrl".into(),
-        config_mount_path: "/etc/dfe/config.yaml".into(),
+        config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         base_image: "ubuntu:24.04".into(),
         extra_ports: vec![PortContract {
@@ -39,7 +39,10 @@ pub fn contract() -> DeploymentContract {
             port: 9000,
             protocol: "TCP".into(),
         }],
-        entrypoint_args: vec!["--config".into(), "/etc/dfe/config.yaml".into()],
+        entrypoint_args: vec![
+            "--config".into(),
+            "/etc/dfe-transform-vrl/config.yaml".into(),
+        ],
         secrets: vec![SecretGroupContract {
             group_name: "kafka".into(),
             env_vars: vec![
@@ -78,7 +81,7 @@ pub fn contract() -> DeploymentContract {
                 "tls": { "enabled": false }
             },
             "transforms": {
-                "dir": "/etc/dfe/transforms"
+                "dir": "/etc/dfe-transform-vrl/transforms"
             },
             "health": { "address": "0.0.0.0:9000" },
             "metrics": { "address": "0.0.0.0:9090" }
@@ -102,7 +105,7 @@ pub fn contract() -> DeploymentContract {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -130,6 +133,36 @@ mod tests {
         assert_eq!(c.extra_ports.len(), 1);
         assert_eq!(c.extra_ports[0].port, 9000);
         assert_eq!(c.extra_ports[0].name, "health");
+    }
+
+    /// GH issue #10 regression: config mount path must follow the
+    /// `/etc/<component-name>/config.yaml` convention used by every other
+    /// DFE component (loader, receiver, fetcher, archiver). The previous
+    /// path `/etc/dfe/config.yaml` forced dfe-docker compose authors to
+    /// special-case this one service.
+    #[test]
+    fn test_contract_config_mount_path_follows_dfe_convention() {
+        let c = contract();
+        assert_eq!(
+            c.config_mount_path, "/etc/dfe-transform-vrl/config.yaml",
+            "config mount path must be /etc/<component>/config.yaml — matches \
+             loader/receiver/fetcher/archiver convention"
+        );
+        // The wrapper's --config arg must point at the same path.
+        let config_arg_idx = c
+            .entrypoint_args
+            .iter()
+            .position(|a| a == "--config")
+            .expect("entrypoint_args must contain --config");
+        let config_arg_value = c
+            .entrypoint_args
+            .get(config_arg_idx + 1)
+            .expect("--config must have a path arg after it");
+        assert_eq!(
+            config_arg_value, "/etc/dfe-transform-vrl/config.yaml",
+            "--config arg must match config_mount_path; drift between the two \
+             will surface as 'config file not found' (GH#9) at startup"
+        );
     }
 
     #[test]

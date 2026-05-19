@@ -61,7 +61,7 @@ extraVolumeMounts: []
 # -- Topology spread constraints
 topologySpreadConstraints: []
 
-# -- Application configuration (mounted as /etc/dfe/config.yaml)
+# -- Application configuration (mounted as /etc/dfe-transform-vrl/config.yaml)
 config:
   health:
     address: 0.0.0.0:9000
@@ -95,7 +95,7 @@ config:
     tls:
       enabled: false
   transforms:
-    dir: /etc/dfe/transforms
+    dir: /etc/dfe-transform-vrl/transforms
 
 # -- Kafka credentials
 kafka:

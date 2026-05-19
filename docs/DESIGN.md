@@ -172,7 +172,7 @@ source:
   max_buffer_bytes: 67108864        # 64 MiB consumer buffer
 
 transforms:
-  dir: "/etc/dfe/transforms/"       # directory of .vrl files
+  dir: "/etc/dfe-transform-vrl/transforms/"       # directory of .vrl files
 
 sink:
   brokers: ["kafka:9092"]

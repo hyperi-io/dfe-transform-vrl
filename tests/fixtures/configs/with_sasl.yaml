@@ -30,7 +30,7 @@ sink:
     enabled: true
 
 transforms:
-  dir: /etc/dfe/transforms
+  dir: /etc/dfe-transform-vrl/transforms
 
 health:
   address: 0.0.0.0:9000
