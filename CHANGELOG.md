@@ -1,3 +1,11 @@
+## [1.1.4](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.3...v1.1.4) (2026-05-19)
+
+
+### Bug Fixes
+
+* resolve GH issues [#9](https://github.com/hyperi-io/dfe-transform-vrl/issues/9), [#10](https://github.com/hyperi-io/dfe-transform-vrl/issues/10), [#11](https://github.com/hyperi-io/dfe-transform-vrl/issues/11) plus regression tests ([1a7e29c](https://github.com/hyperi-io/dfe-transform-vrl/commit/1a7e29c85e63e3c5c6d79f1109d8248898b028ee))
+* update integration test for [#9](https://github.com/hyperi-io/dfe-transform-vrl/issues/9) file-not-found behaviour ([6efd078](https://github.com/hyperi-io/dfe-transform-vrl/commit/6efd078b8d8cac3a2a50a92839c201a2c16fa4a9))
+
 ## [1.1.3](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.2...v1.1.3) (2026-05-14)
 
 
