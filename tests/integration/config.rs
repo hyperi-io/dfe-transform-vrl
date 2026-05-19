@@ -66,10 +66,22 @@ fn test_default_config_fields() {
 }
 
 #[test]
-fn test_nonexistent_config_uses_defaults() {
-    let config = Config::load(Some("/nonexistent/config.yaml")).unwrap();
-    assert_eq!(config.pipeline.name, "default");
-    assert_eq!(config.pipeline.batch_size, 1000);
+fn test_nonexistent_explicit_config_returns_file_not_found() {
+    // GH issue #9: explicit `--config <path>` MUST fail-fast with a
+    // clear "config file not found" error. The previous behaviour
+    // (silent fallback to defaults) hid mount-path typos and surfaced
+    // as misleading "sink.topic must not be empty" validation errors
+    // several stages later.
+    let err = Config::load(Some("/nonexistent/config.yaml")).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("config file not found"),
+        "expected 'config file not found', got: {msg}"
+    );
+    assert!(
+        msg.contains("/nonexistent/config.yaml"),
+        "error must include the actual missing path, got: {msg}"
+    );
 }
 
 #[test]
