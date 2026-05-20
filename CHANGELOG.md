@@ -1,3 +1,10 @@
+## [1.1.5](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.4...v1.1.5) (2026-05-20)
+
+
+### Bug Fixes
+
+* **release:** force patch bump v1.1.5 ([2df03f1](https://github.com/hyperi-io/dfe-transform-vrl/commit/2df03f14db488925172387f0277e84ccadc59273))
+
 ## [1.1.4](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.3...v1.1.4) (2026-05-19)
 
 
