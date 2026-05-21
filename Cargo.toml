@@ -40,7 +40,8 @@ required-features = ["pgo-driver"]
 tokio = { version = ">=1.50", features = ["full"] }
 
 # Shared library — use for everything it provides. NO bespoke code that
-***REMOVED***#
+# duplicates rustlib functionality ("rustlib first" policy).
+#
 # Feature list audited 2026-04-29: only includes features whose API surface
 # is referenced in src/ or tests/. NOT included (verified zero refs):
 #   - `http` — would pull reqwest + reqwest-middleware + reqwest-retry 0.7
@@ -108,7 +109,8 @@ rusqlite = { version = ">=0.32", features = ["bundled"], optional = true }
 # Optional allocator (jemalloc-only per 2026-04-17 DFE policy).
 # hyperi-ci enables `--features jemalloc` automatically at every channel
 # (spike/alpha/beta/release). Default build keeps system allocator so
-***REMOVED***tikv-jemallocator = { version = ">=0.6", optional = true }
+# local dev `cargo build` stays fast.
+tikv-jemallocator = { version = ">=0.6", optional = true }
 
 # Direct rdkafka — ONLY used by the pgo-driver bin under `--features pgo-driver`.
 # Default builds (and `--features jemalloc`) skip this entirely. The main

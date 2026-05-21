@@ -148,7 +148,7 @@ cargo run -- config-check --config config.yaml
 
 - [docs/DESIGN.md](docs/DESIGN.md) — Full architecture and design
 - [config.example.yaml](config.example.yaml) — Configuration reference
-***REMOVED***
+
 ## License
 
 This project is licensed under the Functional Source License, Version 1.1,
