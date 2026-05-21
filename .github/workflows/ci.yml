@@ -11,7 +11,7 @@ on:
   push:
     branches: ["**"]
     paths-ignore:
-***REMOVED******REMOVED******REMOVED******REMOVED******REMOVED***      - "docs/**"
+      - "docs/**"
       - "**.md"
   pull_request:
     branches: [main]

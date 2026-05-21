@@ -16,7 +16,7 @@ description = "Embedded VRL transform engine — Kafka-to-Kafka with wrapper-con
 license = "FSL-1.1-ALv2"
 repository = "https://github.com/hyperi-io/dfe-transform-vrl"
 rust-version = "1.94"
-exclude = [***REMOVED*** ".github/", ***REMOVED*** "chart/", "docs/", ".tmp/"]
+exclude = [".github/", "chart/", "docs/", ".tmp/"]
 
 [lib]
 name = "dfe_transform_vrl"
@@ -135,10 +135,11 @@ testcontainers-modules = { version = ">=0.15", features = ["kafka"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-***REMOVED***# `allow` — there are ~90 undocumented-but-public items (mostly struct fields
-# in config/loader.rs and metrics.rs). The ratchet path is documented in
-***REMOVED***# `deny`. Cannot run as `warn` while hyperi-ci CI uses `-D warnings`
-# (warn-level lints become hard errors and block the push).
+# Documentation enforcement. Currently `allow` — there are ~90 undocumented-
+# but-public items (mostly struct fields in config/loader.rs and metrics.rs).
+# Once those land, promote to `warn`, then `deny`. Cannot run as `warn` while
+# hyperi-ci CI uses `-D warnings` (warn-level lints become hard errors and
+# block the push).
 missing_docs = "allow"
 
 [lints.rustdoc]

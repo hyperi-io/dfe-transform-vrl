@@ -16,7 +16,8 @@
 //! are configured in `Cargo.toml` `[lints]` — the modern Cargo 1.74+ canonical
 //! form, applies to both lib and bin from one place. Don't duplicate them here
 //! as `#![...]` attributes: that's the two-file-source-of-truth footgun (one
-***REMOVED***
+//! copy will rot).
+
 pub mod cli;
 pub mod config;
 pub mod deployment;
