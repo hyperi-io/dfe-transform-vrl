@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::logger::{log_debounced, log_sampled, log_state_change, security};
 use hyperi_rustlib::memory::MemoryGuard;
+use hyperi_rustlib::metrics::TransportKind;
 use hyperi_rustlib::transport::{PayloadFormat, SendResult, Transport};
 use tracing::{debug, error, info, trace, warn};
 
@@ -493,7 +494,7 @@ async fn process_batch<T: Transport>(
                         trace!(stage = "produce", key = key_str, topic = sink_topic, result = ?other, "message error routing");
                         transform_metrics.record_produce_error();
                         if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.transport_send_errors("kafka", 1);
+                            dfe.transport_send_errors(TransportKind::Kafka, 1);
                         }
                         false
                     }
@@ -503,7 +504,7 @@ async fn process_batch<T: Transport>(
                 error!(error = %e, "fatal produce error");
                 transform_metrics.record_produce_error();
                 if let Some(ref dfe) = transform_metrics.dfe {
-                    dfe.transport_send_errors("kafka", 1);
+                    dfe.transport_send_errors(TransportKind::Kafka, 1);
                 }
                 return Err(crate::Error::Kafka(format!("produce failed: {e}")));
             }
