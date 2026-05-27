@@ -113,12 +113,12 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
     match cmd {
         AppCommand::EmitDockerfile => {
             let contract = deployment::contract();
-            println!("{}", generate_dockerfile(&contract));
+            println!("{}", generate_dockerfile(&contract, None));
             Some(())
         }
         AppCommand::EmitChart { dir } => {
             let contract = deployment::contract();
-            if let Err(e) = generate_chart(&contract, dir) {
+            if let Err(e) = generate_chart(&contract, dir, None) {
                 eprintln!("error: failed to generate Helm chart: {e}");
                 std::process::exit(1);
             }
