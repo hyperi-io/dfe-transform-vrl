@@ -47,8 +47,8 @@ impl Harness {
             recv_timeout_ms: 10,
             ..MemoryConfig::default()
         };
-        let source = Arc::new(MemoryTransport::new(&cfg));
-        let sink = Arc::new(MemoryTransport::new(&cfg));
+        let source = Arc::new(MemoryTransport::new(&cfg).expect("memory transport"));
+        let sink = Arc::new(MemoryTransport::new(&cfg).expect("memory transport"));
 
         let hot = HotConfig {
             batch_size,
@@ -912,8 +912,8 @@ async fn test_pipeline_backpressure_retry_succeeds() {
         recv_timeout_ms: 10,
         ..MemoryConfig::default()
     };
-    let source = Arc::new(MemoryTransport::new(&cfg_src));
-    let sink = Arc::new(MemoryTransport::new(&cfg_sink));
+    let source = Arc::new(MemoryTransport::new(&cfg_src).expect("memory transport"));
+    let sink = Arc::new(MemoryTransport::new(&cfg_sink).expect("memory transport"));
 
     let hot_config = SharedConfig::new(HotConfig {
         batch_size: 20,
