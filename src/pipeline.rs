@@ -458,7 +458,7 @@ async fn process_batch<T: Transport>(
                     info!("producer backpressure cleared");
                 }
                 if let Some(ref dfe) = transform_metrics.dfe {
-                    dfe.transport_sent("kafka", 1);
+                    dfe.transport_sent(TransportKind::Kafka, 1);
                 }
                 true
             }
@@ -483,7 +483,7 @@ async fn process_batch<T: Transport>(
                             "produce message (after backpressure)"
                         );
                         if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.transport_sent("kafka", 1);
+                            dfe.transport_sent(TransportKind::Kafka, 1);
                         }
                         true
                     }
