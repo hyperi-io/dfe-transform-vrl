@@ -3,7 +3,7 @@
 // Purpose:   Smoke test live Kafka connectivity (creds + SASL handshake)
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]

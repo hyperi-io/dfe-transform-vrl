@@ -44,10 +44,24 @@ feat!: remove deprecated API endpoints
 BREAKING CHANGE: The /v1/users endpoint has been removed. Use /v2/users instead.
 ```
 
+### Examples
+
+```
+feat(auth): add OAuth2 support for Google login
+
+fix(api): handle null response from upstream service
+
+docs: update installation instructions for Windows
+
+refactor(core)!: restructure module exports
+
+BREAKING CHANGE: Named exports are now used instead of default exports.
+```
+
 ### Scope
 
 Scope is optional but recommended. Use it to indicate the area of the codebase
-affected (e.g., `config`, `engine`, `kafka`, `pipeline`).
+affected (e.g., `api`, `auth`, `core`, `cli`, `docs`).
 
 ## Semantic Versioning
 
@@ -90,13 +104,13 @@ You must sign off each commit to indicate your acceptance of the DCO. Combine
 the signoff with your conventional commit message:
 
 ```
-git commit --signoff -m "feat(engine): add custom VRL function support"
+git commit --signoff -m "feat(auth): add two-factor authentication"
 ```
 
 This produces:
 
 ```
-feat(engine): add custom VRL function support
+feat(auth): add two-factor authentication
 
 Signed-off-by: Your Name <your.email@example.com>
 ```
@@ -111,7 +125,7 @@ git config --global user.email "your.email@example.com"
 ## License for Contributions
 
 All contributions to this project are licensed under the Functional Source
-License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2), the same license
+License, Version 1.1, ALv2 Future License (BUSL-1.1), the same license
 that covers the project.
 
 Each version of the software (including your contributions) will automatically
@@ -133,19 +147,17 @@ anniversary of its release.
 - [ ] Tests pass (if applicable)
 - [ ] Documentation is updated (if applicable)
 
-## Building
+## CI/CD Workflow
 
-### Local Build
+When your pull request is merged to `main`:
 
-```bash
-cargo build --release
-```
+1. **semantic-release** analyses commit messages since the last release
+2. Determines the next version number based on commit types
+3. Generates/updates the CHANGELOG
+4. Creates a new GitHub release with release notes
+5. Publishes the package (if applicable)
 
-### Running Tests
-
-```bash
-cargo nextest run
-```
+This happens automatically - no manual intervention required.
 
 ## Questions
 

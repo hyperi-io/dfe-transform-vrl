@@ -3,7 +3,7 @@
 //! Purpose:   Enrichment table loaders for all source types
 //! Language:  Rust
 //!
-//! License:   FSL-1.1-ALv2
+//! License:   BUSL-1.1
 //! Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Load enrichment data from various sources into `FxHashMap<CompactKey, Arc<ObjectMap>>`.
