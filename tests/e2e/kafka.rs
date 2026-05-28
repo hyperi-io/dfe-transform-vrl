@@ -3,7 +3,7 @@
 // Purpose:   Kafka end-to-end tests — real produce/consume through VRL transforms
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Kafka end-to-end tests using real Kafka (docker-local or remote).

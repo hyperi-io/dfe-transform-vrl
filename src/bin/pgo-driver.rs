@@ -3,7 +3,7 @@
 // Purpose:   PGO workload driver — Kafka producer for VRL hot-path instrumentation
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! PGO workload driver for `dfe-transform-vrl`.

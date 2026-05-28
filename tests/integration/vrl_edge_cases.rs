@@ -3,7 +3,7 @@
 // Purpose:   Edge case and failure mode tests for VRL transforms
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 use dfe_transform_vrl::engine::compiler::compile_vrl;

@@ -3,7 +3,7 @@
 // Purpose:   End-to-end test of cli::run_transform_service with live Kafka
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Drives the full `pipeline::run` path with a real Kafka broker.

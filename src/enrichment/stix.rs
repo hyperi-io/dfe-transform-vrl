@@ -3,7 +3,7 @@
 //! Purpose:   STIX 2.1 indicator parsing and materialisation into `FxHashMap`
 //! Language:  Rust
 //!
-//! License:   FSL-1.1-ALv2
+//! License:   BUSL-1.1
 //! Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Parse STIX 2.1 bundles (file or HTTP) and materialise indicators into

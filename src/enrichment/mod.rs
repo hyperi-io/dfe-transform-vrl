@@ -3,7 +3,7 @@
 // Purpose:   Enrichment table loading and VRL function integration
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Multi-source enrichment engine for VRL transforms.
