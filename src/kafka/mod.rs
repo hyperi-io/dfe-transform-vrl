@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
 use hyperi_rustlib::transport::PayloadFormat;
-use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
+use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaRole, KafkaTransport};
 
 use crate::config;
 
@@ -23,6 +23,7 @@ use crate::config;
 pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
+        role: KafkaRole::Consumer, // source: consume only, no idle producer
         brokers: source.brokers.clone(),
         group: source.group_id.clone(),
         client_id: "dfe-transform-vrl-consumer".to_string(),
@@ -58,6 +59,7 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
 pub fn build_producer_config(sink: &config::SinkConfig, pipeline_name: &str) -> KafkaConfig {
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
+        role: KafkaRole::Producer, // sink: produce only, no consumer
         brokers: sink.brokers.clone(),
         group: String::new(),
         client_id: format!("dfe-transform-vrl-producer-{pipeline_name}"),
