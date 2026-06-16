@@ -97,7 +97,31 @@ logging:
   format: "json"                       # json, text
 
 # -----------------------------------------------------------------------------
-# Scaling pressure (KEDA-compatible)
+# Horizontal scaling-pressure engine (rustlib 2.8.11 ScalingEngine)
 # -----------------------------------------------------------------------------
-# scaling:
-#   pressure_threshold: 0.8
+# Read from the global config cascade by rustlib's ScalingEngineConfig (NOT the
+# app's own serde loader). Requires the `expression` rustlib feature (enabled in
+# Cargo.toml) -- without it the engine compiles out and this section is inert.
+#
+# Kafka-in -> transform -> Kafka-out: inbound + outbound are both kafka. The
+# smart default emits `dfe_transform_vrl_scaling_pressure{name="default"}` =
+# max(cpu_utilisation_ratio / cpu_target, transport_inbound_pressure_ratio),
+# gated to 0 when the outbound circuit is open. The pipeline pushes per-pod
+# assigned Kafka lag + the outbound circuit state every 5s.
+scaling:
+  enabled: true
+  interval_secs: 15
+  transport:
+    inbound: kafka
+    outbound: kafka
+  params:
+    cpu_target: 0.70
+    # lag_target: PER-POD = sustained_msgs_per_sec_per_pod * tolerable_backlog_s.
+    # TUNE-ME: left UNSET -- no measured per-pod VRL throughput exists yet, and
+    # guessing mis-scales. With it unset the lag term contributes 0 and the
+    # composite reduces to CPU vs the gratis inbound-pressure ratio. The KEDA
+    # ScaledObject's per-partition kafka lagThreshold (1000) still scales on raw
+    # lag independently. Set this once a real throughput number is measured.
+  pressures: []                          # empty => the smart default
+  # Legacy weighted ScalingPressure gate (worker-pool feedback). Retained.
+  pressure_threshold: 0.8

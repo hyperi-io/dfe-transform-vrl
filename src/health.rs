@@ -3,7 +3,7 @@
 // Purpose:   Health endpoint HTTP server via rustlib
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Health endpoint server using hyperi-rustlib `http-server` module.

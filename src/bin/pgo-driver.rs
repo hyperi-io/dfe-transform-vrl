@@ -3,7 +3,7 @@
 // Purpose:   PGO workload driver — Kafka producer for VRL hot-path instrumentation
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! PGO workload driver for `dfe-transform-vrl`.
@@ -29,7 +29,12 @@
 //! - 0: workload completed for full duration
 //! - 1: fatal setup error (broker unreachable, producer init)
 
-#![allow(clippy::expect_used)] // workload driver, not library code
+#![allow(clippy::expect_used)]
+// workload driver, not library code
+// Throughput-rate maths and array indexing on a monotonically-increasing
+// counter -- precision loss / 32-bit truncation are irrelevant to a load
+// generator and never reached on the 64-bit targets we build.
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 use std::env;
 use std::sync::Arc;

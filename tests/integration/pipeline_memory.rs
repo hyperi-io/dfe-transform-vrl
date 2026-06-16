@@ -3,16 +3,21 @@
 // Purpose:   Full-pipeline integration tests using MemoryTransport (no Kafka)
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! End-to-end pipeline tests that exercise `run_with_transport` using
-//! in-memory channels instead of Kafka. These cover the hot path that
-//! normally requires a running broker.
+//! End-to-end pipeline tests that exercise the WorkBatch governed engine driver
+//! ([`pipeline::run_governed_pipeline`]) using in-memory channels instead of
+//! Kafka. These cover the hot path that normally requires a running broker.
 //!
 //! Uses the `transport-memory` feature to pull in rustlib's MemoryTransport.
 //! Each test spins up a send-half (to simulate upstream producers) and a
 //! receive-half (to observe the pipeline's sink output).
+//!
+//! The engine carries NO byte budget (no governor here), so `run_governed`
+//! delegates to the whole-batch `run_workbatch` loop. Shutdown is driven by a
+//! [`CancellationToken`] (the driver returns cleanly on cancel). Sends pass
+//! owned [`Bytes`]; the sink output is read as `WorkBatch.records`.
 
 #![cfg(feature = "transport-memory")]
 
@@ -20,24 +25,26 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use bytes::Bytes;
 use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
-use dfe_transform_vrl::pipeline::run_with_transport;
+use dfe_transform_vrl::pipeline::run_governed_pipeline;
 use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::transport::{
     MemoryConfig, MemoryTransport, PayloadFormat, TransportReceiver, TransportSender,
 };
+use hyperi_rustlib::worker::engine::BatchProcessingConfig;
+use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use tokio_util::sync::CancellationToken;
 
 /// Build a pipeline harness: source transport, sink transport, hot config,
-/// shutdown channel. Returns everything a test needs to drive the pipeline.
+/// shutdown token. Returns everything a test needs to drive the pipeline.
 struct Harness {
     source: Arc<MemoryTransport>,
     sink: Arc<MemoryTransport>,
     hot_config: SharedConfig<HotConfig>,
-    shutdown_tx: tokio::sync::watch::Sender<bool>,
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    shutdown: CancellationToken,
 }
 
 impl Harness {
@@ -58,35 +65,43 @@ impl Harness {
         };
         let hot_config = SharedConfig::new(hot);
 
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
         Self {
             source,
             sink,
             hot_config,
-            shutdown_tx,
-            shutdown_rx,
+            shutdown: CancellationToken::new(),
         }
     }
 
     /// Inject a JSON message as if produced by an upstream service.
     async fn send_json(&self, json: &str) {
-        let result = self.source.send("", json.as_bytes()).await;
+        let result = self
+            .source
+            .send("", Bytes::copy_from_slice(json.as_bytes()))
+            .await;
         assert!(
             matches!(result, hyperi_rustlib::transport::SendResult::Ok),
             "send failed: {result:?}"
         );
     }
 
-    /// Drain pending messages from the sink — returns up to `max` payloads.
+    /// Drain pending records from the sink — returns up to `max` payloads.
     async fn drain_sink(&self, max: usize) -> Vec<Vec<u8>> {
-        let messages = self.sink.recv(max).await.unwrap_or_default();
-        messages.into_iter().map(|m| m.payload).collect()
+        let batch = self.sink.recv(max).await.unwrap_or_else(|_| {
+            hyperi_rustlib::transport::WorkBatch::<
+                <MemoryTransport as TransportReceiver>::Token,
+            >::empty()
+        });
+        batch
+            .records
+            .into_iter()
+            .map(|r| r.payload.to_vec())
+            .collect()
     }
 
     /// Stop the pipeline.
     fn shutdown(&self) {
-        let _ = self.shutdown_tx.send(true);
+        self.shutdown.cancel();
     }
 }
 
@@ -96,12 +111,22 @@ fn compile_program(source: &str) -> Arc<vrl::compiler::Program> {
     Arc::new(result.program)
 }
 
-/// Make a MemoryGuard with a generous limit so tests don't trip pressure.
-fn guard() -> Arc<MemoryGuard> {
-    Arc::new(MemoryGuard::new(MemoryGuardConfig {
-        limit_bytes: 1024 * 1024 * 1024,
-        ..MemoryGuardConfig::default()
-    }))
+/// A stand-alone batch engine with no byte budget -> whole-batch loop.
+///
+/// Builds the pool with an EXPLICIT 1-thread config (valid on any core count)
+/// rather than `BatchEngine::new`, whose `WorkerPoolConfig::default()` derives
+/// the bounds from `available_parallelism` and panics on a 1-core CI sandbox
+/// (`min_threads > max_threads`).
+fn engine() -> Arc<BatchEngine> {
+    let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+        min_threads: 1,
+        max_threads: 1,
+        ..Default::default()
+    }));
+    Arc::new(BatchEngine::with_pool(
+        pool,
+        BatchProcessingConfig::default(),
+    ))
 }
 
 #[tokio::test]
@@ -117,11 +142,13 @@ async fn test_pipeline_passes_json_through_identity_vrl() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -129,11 +156,10 @@ async fn test_pipeline_passes_json_through_identity_vrl() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -170,11 +196,13 @@ async fn test_pipeline_transforms_events_with_vrl_mutation() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -182,11 +210,10 @@ async fn test_pipeline_transforms_events_with_vrl_mutation() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -220,11 +247,13 @@ async fn test_pipeline_vrl_abort_drops_message() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -232,11 +261,10 @@ async fn test_pipeline_vrl_abort_drops_message() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -263,7 +291,9 @@ async fn test_pipeline_skips_malformed_json_but_continues() {
     let h = Harness::new(10, 50, ".id");
     h.send_json(r#"{"id": "good-1", "value": 1}"#).await;
     // Intentional malformed JSON
-    h.source.send("", b"{not valid json{").await;
+    h.source
+        .send("", Bytes::from_static(b"{not valid json{"))
+        .await;
     h.send_json(r#"{"id": "good-2", "value": 2}"#).await;
 
     let prog = compile_program(".");
@@ -271,11 +301,13 @@ async fn test_pipeline_skips_malformed_json_but_continues() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -283,11 +315,10 @@ async fn test_pipeline_skips_malformed_json_but_continues() {
             PayloadFormat::Json,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -322,11 +353,13 @@ async fn test_pipeline_vrl_runtime_error_skips_event() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -334,11 +367,10 @@ async fn test_pipeline_vrl_runtime_error_skips_event() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -386,11 +418,13 @@ async fn test_pipeline_large_batch_of_mixed_events() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -398,11 +432,10 @@ async fn test_pipeline_large_batch_of_mixed_events() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -413,9 +446,8 @@ async fn test_pipeline_large_batch_of_mixed_events() {
     pipeline.await.unwrap().unwrap();
 
     // 100 events, 25 aborted (drop=true), 25 runtime errors (name=42)
-    // => 50 should land. Allow slack since error path also increments
-    // `records_filtered` so the transport drops the bad event; only
-    // well-formed events end up in out.
+    // => 50 should land. Allow slack since error path also drops the bad
+    // event; only well-formed events end up in out.
     assert!(
         out.len() >= 40 && out.len() <= 60,
         "expected ~50 events, got {}",
@@ -433,7 +465,7 @@ async fn test_pipeline_msgpack_roundtrip() {
             "n": i,
         });
         let bytes = rmp_serde::to_vec(&val).unwrap();
-        h.source.send("", &bytes).await;
+        h.source.send("", Bytes::from(bytes)).await;
     }
 
     let prog = compile_program(".tag = \"tagged\"");
@@ -441,11 +473,13 @@ async fn test_pipeline_msgpack_roundtrip() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -453,11 +487,10 @@ async fn test_pipeline_msgpack_roundtrip() {
             PayloadFormat::MsgPack,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -481,7 +514,7 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
     // Mix of JSON and msgpack — auto-detect
     h.send_json(r#"{"id": "json-1", "src": "json"}"#).await;
     let mp = rmp_serde::to_vec(&serde_json::json!({"id": "mp-1", "src": "msgpack"})).unwrap();
-    h.source.send("", &mp).await;
+    h.source.send("", Bytes::from(mp)).await;
     h.send_json(r#"{"id": "json-2", "src": "json"}"#).await;
 
     let prog = compile_program(".");
@@ -489,11 +522,13 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -501,11 +536,10 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -526,11 +560,13 @@ async fn test_pipeline_shutdown_stops_loop_promptly() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -538,11 +574,10 @@ async fn test_pipeline_shutdown_stops_loop_promptly() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -576,11 +611,13 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -588,19 +625,20 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
 
-    // Let some batches drain with small batch_size (2)
+    // Let some batches drain.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Update hot config to larger batch size — should be picked up next iter
+    // Update hot config (the driver owns batch sizing now via the engine's
+    // chunk size / governor, so this is a no-op for throughput -- the update
+    // path must still apply cleanly without disturbing delivery).
     h.hot_config.update(HotConfig {
         batch_size: 100,
         batch_timeout_ms: 50,
@@ -613,11 +651,15 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
     h.shutdown();
     pipeline.await.unwrap().unwrap();
 
-    assert_eq!(out.len(), 10, "all events should drain after hot-reload");
+    assert_eq!(out.len(), 10, "all events should drain");
 }
 
 #[tokio::test]
-async fn test_pipeline_custom_key_field_routing() {
+async fn test_pipeline_routes_to_sink_topic() {
+    // Under rustlib #37 the sender's `key` arg is the destination TOPIC, so
+    // every output record routes on the configured sink topic ("out"), NOT a
+    // per-record partition key. (The dot-path partition-key extractor was
+    // removed in the WorkBatch migration; re-introduce once #37 lands.)
     let h = Harness::new(5, 50, ".org_id");
     h.send_json(r#"{"id":"e1","org_id":"tenant-a","x":1}"#)
         .await;
@@ -629,11 +671,13 @@ async fn test_pipeline_custom_key_field_routing() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -641,28 +685,37 @@ async fn test_pipeline_custom_key_field_routing() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let messages = h.sink.recv(10).await.unwrap_or_default();
+    let batch = h
+        .sink
+        .recv(10)
+        .await
+        .unwrap_or_else(|_| hyperi_rustlib::transport::WorkBatch::empty());
     h.shutdown();
     pipeline.await.unwrap().unwrap();
 
-    assert_eq!(messages.len(), 2);
-    // Verify keys are populated from .org_id
-    let keys: Vec<String> = messages
+    assert_eq!(batch.records.len(), 2);
+    // Every record routes to the sink topic.
+    for record in &batch.records {
+        assert_eq!(record.key.as_deref(), Some("out"));
+    }
+    // The org_ids survive in the payload (just not as the routing key).
+    let all = batch
+        .records
         .iter()
-        .map(|m| m.key.as_deref().unwrap_or("").to_string())
-        .collect();
-    assert!(keys.contains(&"tenant-a".to_string()));
-    assert!(keys.contains(&"tenant-b".to_string()));
+        .map(|r| String::from_utf8_lossy(&r.payload).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(all.contains("tenant-a"));
+    assert!(all.contains("tenant-b"));
 }
 
 #[tokio::test]
@@ -673,11 +726,13 @@ async fn test_pipeline_empty_source_idles_quietly() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -685,11 +740,10 @@ async fn test_pipeline_empty_source_idles_quietly() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -725,11 +779,13 @@ async fn test_pipeline_stress_1000_events() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -737,19 +793,18 @@ async fn test_pipeline_stress_1000_events() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
 
     // Give it time to drain 1000 events
-    tokio::time::sleep(Duration::from_millis(2_000)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Drain in multiple passes since batch=100
+    // Drain in multiple passes.
     let mut all_out = Vec::new();
     for _ in 0..15 {
         let batch = h.drain_sink(200).await;
@@ -774,67 +829,6 @@ async fn test_pipeline_stress_1000_events() {
     assert!(first.contains("processed_at"));
 }
 
-/// A tiny guard that trips pressure almost immediately.
-fn tiny_guard() -> Arc<MemoryGuard> {
-    Arc::new(MemoryGuard::new(MemoryGuardConfig {
-        limit_bytes: 1024, // 1 KiB — first batch will trip pressure
-        ..MemoryGuardConfig::default()
-    }))
-}
-
-#[tokio::test]
-async fn test_pipeline_memory_pressure_pauses_consumer() {
-    let h = Harness::new(10, 50, ".id");
-    // Send enough events that total bytes > 1 KiB
-    for i in 0..50 {
-        h.send_json(&format!(
-            r#"{{"id":"evt-{i}","padding":"{}"}}"#,
-            "x".repeat(100)
-        ))
-        .await;
-    }
-
-    let prog = compile_program(".");
-
-    let source = Arc::clone(&h.source);
-    let sink = Arc::clone(&h.sink);
-    let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
-    let guard_arc = tiny_guard();
-    let guard_for_pipeline = Arc::clone(&guard_arc);
-
-    let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
-        let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
-            &*source,
-            &*sink,
-            prog,
-            hot,
-            PayloadFormat::Auto,
-            &metrics,
-            ready,
-            guard_for_pipeline,
-            shutdown_rx,
-            None,
-            &["in".to_string()],
-            "out",
-        )
-        .await
-    });
-
-    // Drive a batch through to trip the pressure path
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Release memory to let it recover
-    guard_arc.release(guard_arc.current_bytes());
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    h.shutdown();
-    let _ = tokio::time::timeout(Duration::from_secs(2), pipeline).await;
-    // Test passes if no panic/hang occurred and the pressure branch executed
-}
-
 #[tokio::test]
 async fn test_pipeline_with_worker_pool_parallel_processing() {
     use hyperi_rustlib::worker::{AdaptiveWorkerPool, WorkerPoolConfig};
@@ -852,8 +846,11 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
         "#,
     );
 
+    // min_threads: 1 so the config stays valid on a 1-core CI sandbox, where
+    // max_threads resolves down to the single available core (min 2 > max 1
+    // would otherwise panic). max_threads 4 still parallelises where cores allow.
     let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
-        min_threads: 2,
+        min_threads: 1,
         max_threads: 4,
         ..Default::default()
     }));
@@ -861,12 +858,13 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
-
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -874,11 +872,10 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             Some(pool),
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
@@ -900,20 +897,18 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
 }
 
 #[tokio::test]
-async fn test_pipeline_backpressure_retry_succeeds() {
-    // Use a sink with a tight buffer to force backpressure
-    let cfg_src = MemoryConfig {
+async fn test_pipeline_burst_drains_with_concurrent_reader() {
+    // A burst into the source drains to the sink while a consumer reads it
+    // concurrently. (The old per-record backpressure-retry loop was deleted;
+    // a saturated sink is now a terminal ack-barrier error, so this exercises
+    // the happy burst path with a draining consumer rather than a retry.)
+    let cfg = MemoryConfig {
         buffer_size: 1000,
         recv_timeout_ms: 10,
         ..MemoryConfig::default()
     };
-    let cfg_sink = MemoryConfig {
-        buffer_size: 4, // very small — will backpressure on bursts
-        recv_timeout_ms: 10,
-        ..MemoryConfig::default()
-    };
-    let source = Arc::new(MemoryTransport::new(&cfg_src).expect("memory transport"));
-    let sink = Arc::new(MemoryTransport::new(&cfg_sink).expect("memory transport"));
+    let source = Arc::new(MemoryTransport::new(&cfg).expect("memory transport"));
+    let sink = Arc::new(MemoryTransport::new(&cfg).expect("memory transport"));
 
     let hot_config = SharedConfig::new(HotConfig {
         batch_size: 20,
@@ -921,12 +916,12 @@ async fn test_pipeline_backpressure_retry_succeeds() {
         key_field: ".id".to_string(),
         scaling_pressure_threshold: 0.8,
     });
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown = CancellationToken::new();
 
     // Send a burst
     for i in 0..20 {
         let _ = source
-            .send("", format!(r#"{{"id":"b{i}"}}"#).as_bytes())
+            .send("", Bytes::from(format!(r#"{{"id":"b{i}"}}"#).into_bytes()))
             .await;
     }
 
@@ -935,10 +930,13 @@ async fn test_pipeline_backpressure_retry_succeeds() {
 
     let source_pipeline = Arc::clone(&source);
     let sink_pipeline = Arc::clone(&sink);
+    let shutdown_pipeline = shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = TransformMetrics::default();
+        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source_pipeline,
             &*sink_pipeline,
             prog,
@@ -946,36 +944,34 @@ async fn test_pipeline_backpressure_retry_succeeds() {
             PayloadFormat::Auto,
             &metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown_pipeline,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });
 
-    // Continuously drain the sink to let backpressure clear
+    // Continuously drain the sink.
     let mut collected = 0;
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let msgs = sink_reader.recv(10).await.unwrap_or_default();
-        collected += msgs.len();
+        let batch = sink_reader
+            .recv(10)
+            .await
+            .unwrap_or_else(|_| hyperi_rustlib::transport::WorkBatch::empty());
+        collected += batch.records.len();
         if collected >= 20 {
             break;
         }
     }
 
-    let _ = shutdown_tx.send(true);
+    shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), pipeline).await;
 
-    // MemoryTransport consumes messages on recv; on backpressure-retry-fail
-    // those messages are dropped with the at-least-once fix (no commit).
-    // The main goal here is to exercise the backpressure code path — we just
-    // verify some events got through.
     assert!(
         collected > 0,
-        "should deliver some events through backpressure, got {collected}"
+        "should deliver some events through the burst, got {collected}"
     );
 }
 
@@ -999,11 +995,12 @@ async fn test_pipeline_with_real_metrics_recorder() {
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
     let hot = h.hot_config.clone();
-    let shutdown_rx = h.shutdown_rx.clone();
-
+    let shutdown = h.shutdown.clone();
+    let eng = engine();
     let pipeline = tokio::spawn(async move {
         let ready = Arc::new(AtomicBool::new(false));
-        run_with_transport(
+        run_governed_pipeline(
+            &eng,
             &*source,
             &*sink,
             prog,
@@ -1011,11 +1008,10 @@ async fn test_pipeline_with_real_metrics_recorder() {
             PayloadFormat::Auto,
             &transform_metrics,
             ready,
-            guard(),
-            shutdown_rx,
+            shutdown,
             None,
-            &["in".to_string()],
-            "out",
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
         )
         .await
     });

@@ -3,10 +3,15 @@
 // Purpose:   Kafka end-to-end tests — real produce/consume through VRL transforms
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Kafka end-to-end tests using real Kafka (docker-local or remote).
+//!
+//! Drives the WorkBatch governed engine driver
+//! ([`pipeline::run_governed_pipeline`]) with a stand-alone [`BatchEngine`]
+//! (no byte budget wired -> `run_governed` delegates to the whole-batch
+//! `run_workbatch` loop) and a [`CancellationToken`] for shutdown.
 //!
 //! Run explicitly: `TEST_MODE=docker cargo nextest run -- --ignored`
 
@@ -14,14 +19,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use bytes::Bytes;
 use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
 use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 use hyperi_rustlib::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
+use hyperi_rustlib::worker::engine::BatchProcessingConfig;
+use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use tokio_util::sync::CancellationToken;
 
 use super::common::{self, KafkaTestConfig, ensure_kafka_or_skip};
 
@@ -73,11 +81,23 @@ fn default_hot_config() -> SharedConfig<HotConfig> {
     })
 }
 
-fn default_memory_guard() -> Arc<MemoryGuard> {
-    Arc::new(MemoryGuard::new(MemoryGuardConfig {
-        limit_bytes: 100_000_000,
+/// A stand-alone batch engine with no byte budget wired -- `run_governed`
+/// delegates to the whole-batch `run_workbatch` loop (byte-identical to the
+/// pre-governor data path), which is what these broker round-trips exercise.
+///
+/// Pool built with an EXPLICIT 1-thread config (valid on any core count); the
+/// `BatchEngine::new` default derives bounds from `available_parallelism` and
+/// panics on a 1-core CI sandbox.
+fn default_engine() -> Arc<BatchEngine> {
+    let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+        min_threads: 1,
+        max_threads: 1,
         ..Default::default()
-    }))
+    }));
+    Arc::new(BatchEngine::with_pool(
+        pool,
+        BatchProcessingConfig::default(),
+    ))
 }
 
 #[tokio::test]
@@ -101,7 +121,9 @@ async fn test_produce_consume_json_transform() {
             "level": "info"
         }))
         .unwrap();
-        seed_producer.send(&format!("key-{i}"), &payload).await;
+        seed_producer
+            .send(&format!("key-{i}"), Bytes::from(payload))
+            .await;
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
     let _ = seed_producer.close().await;
@@ -123,20 +145,22 @@ async fn test_produce_consume_json_transform() {
     );
 
     let hot = default_hot_config();
-    let metrics = TransformMetrics::default();
+    let metrics = Arc::new(TransformMetrics::default());
     let ready_flag = Arc::new(AtomicBool::new(false));
-    let memory_guard = default_memory_guard();
+    let engine = default_engine();
+    let shutdown = CancellationToken::new();
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
         let ready = Arc::clone(&ready_flag);
-        let guard = Arc::clone(&memory_guard);
+        let metrics = Arc::clone(&metrics);
+        let engine = Arc::clone(&engine);
+        let shutdown = shutdown.clone();
+        let sink_topic = sink_topic.clone();
         async move {
-            pipeline::run_with_transport(
+            pipeline::run_governed_pipeline(
+                &engine,
                 &consumer,
                 &producer,
                 program,
@@ -144,11 +168,10 @@ async fn test_produce_consume_json_transform() {
                 PayloadFormat::Json,
                 &metrics,
                 ready,
-                guard,
-                shutdown_rx,
+                shutdown,
                 None,
-                &[source_topic.clone()],
-                &sink_topic_for_pipeline,
+                sink_topic,
+                Arc::new(AtomicBool::new(false)),
             )
             .await
         }
@@ -160,7 +183,7 @@ async fn test_produce_consume_json_transform() {
         "pipeline should be ready"
     );
 
-    let _ = shutdown_tx.send(true);
+    shutdown.cancel();
     let result = tokio::time::timeout(Duration::from_secs(10), handle)
         .await
         .unwrap()
@@ -171,18 +194,18 @@ async fn test_produce_consume_json_transform() {
         consumer_kafka_config(&kf, &[sink_topic.clone()], &common::test_topic("verify-cg"));
     let verifier = KafkaTransport::new(&verify_config).await.unwrap();
 
-    let messages = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
+    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
         .await
         .unwrap()
         .unwrap();
 
     assert!(
-        !messages.is_empty(),
+        !batch.is_empty(),
         "should have received transformed events in sink topic"
     );
 
-    for msg in &messages {
-        let value: serde_json::Value = serde_json::from_slice(&msg.payload).unwrap();
+    for record in &batch.records {
+        let value: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
         assert_eq!(value["transformed"], true);
         assert_eq!(value["level"], "INFO");
     }
@@ -210,7 +233,9 @@ async fn test_produce_consume_msgpack_transform() {
             "data": "msgpack-test"
         }))
         .unwrap();
-        seed_producer.send(&format!("key-{i}"), &payload).await;
+        seed_producer
+            .send(&format!("key-{i}"), Bytes::from(payload))
+            .await;
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
     let _ = seed_producer.close().await;
@@ -224,20 +249,22 @@ async fn test_produce_consume_msgpack_transform() {
     let program = Arc::new(compile_vrl(r#".format = "msgpack""#, None).unwrap().program);
 
     let hot = default_hot_config();
-    let metrics = TransformMetrics::default();
+    let metrics = Arc::new(TransformMetrics::default());
     let ready_flag = Arc::new(AtomicBool::new(false));
-    let memory_guard = default_memory_guard();
+    let engine = default_engine();
+    let shutdown = CancellationToken::new();
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
         let ready = Arc::clone(&ready_flag);
-        let guard = Arc::clone(&memory_guard);
+        let metrics = Arc::clone(&metrics);
+        let engine = Arc::clone(&engine);
+        let shutdown = shutdown.clone();
+        let sink_topic = sink_topic.clone();
         async move {
-            pipeline::run_with_transport(
+            pipeline::run_governed_pipeline(
+                &engine,
                 &consumer,
                 &producer,
                 program,
@@ -245,18 +272,17 @@ async fn test_produce_consume_msgpack_transform() {
                 PayloadFormat::Auto,
                 &metrics,
                 ready,
-                guard,
-                shutdown_rx,
+                shutdown,
                 None,
-                &[source_topic.clone()],
-                &sink_topic_for_pipeline,
+                sink_topic,
+                Arc::new(AtomicBool::new(false)),
             )
             .await
         }
     });
 
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let _ = shutdown_tx.send(true);
+    shutdown.cancel();
     let result = tokio::time::timeout(Duration::from_secs(10), handle)
         .await
         .unwrap()
@@ -270,15 +296,12 @@ async fn test_produce_consume_msgpack_transform() {
     );
     let verifier = KafkaTransport::new(&verify_config).await.unwrap();
 
-    let messages = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
+    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
         .await
         .unwrap()
         .unwrap();
 
-    assert!(
-        !messages.is_empty(),
-        "should have transformed msgpack events"
-    );
+    assert!(!batch.is_empty(), "should have transformed msgpack events");
     let _ = verifier.close().await;
 }
 
@@ -302,7 +325,9 @@ async fn test_vrl_abort_drops_events() {
             "keep": i % 2 == 0
         }))
         .unwrap();
-        seed_producer.send(&format!("key-{i}"), &payload).await;
+        seed_producer
+            .send(&format!("key-{i}"), Bytes::from(payload))
+            .await;
     }
     tokio::time::sleep(Duration::from_secs(1)).await;
     let _ = seed_producer.close().await;
@@ -316,20 +341,22 @@ async fn test_vrl_abort_drops_events() {
     let program = Arc::new(compile_vrl(r#"if !.keep { abort }"#, None).unwrap().program);
 
     let hot = default_hot_config();
-    let metrics = TransformMetrics::default();
+    let metrics = Arc::new(TransformMetrics::default());
     let ready_flag = Arc::new(AtomicBool::new(false));
-    let memory_guard = default_memory_guard();
+    let engine = default_engine();
+    let shutdown = CancellationToken::new();
 
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-
-    let sink_topic_for_pipeline = sink_topic.clone();
     let handle = tokio::spawn({
         let program = Arc::clone(&program);
         let hot = hot.clone();
         let ready = Arc::clone(&ready_flag);
-        let guard = Arc::clone(&memory_guard);
+        let metrics = Arc::clone(&metrics);
+        let engine = Arc::clone(&engine);
+        let shutdown = shutdown.clone();
+        let sink_topic = sink_topic.clone();
         async move {
-            pipeline::run_with_transport(
+            pipeline::run_governed_pipeline(
+                &engine,
                 &consumer,
                 &producer,
                 program,
@@ -337,18 +364,17 @@ async fn test_vrl_abort_drops_events() {
                 PayloadFormat::Json,
                 &metrics,
                 ready,
-                guard,
-                shutdown_rx,
+                shutdown,
                 None,
-                &[source_topic.clone()],
-                &sink_topic_for_pipeline,
+                sink_topic,
+                Arc::new(AtomicBool::new(false)),
             )
             .await
         }
     });
 
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let _ = shutdown_tx.send(true);
+    shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
 
     let verify_config = consumer_kafka_config(
@@ -358,19 +384,19 @@ async fn test_vrl_abort_drops_events() {
     );
     let verifier = KafkaTransport::new(&verify_config).await.unwrap();
 
-    let messages = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
+    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
         .await
         .unwrap()
         .unwrap();
 
     assert_eq!(
-        messages.len(),
+        batch.records.len(),
         2,
         "only keep=true events should pass through"
     );
 
-    for msg in &messages {
-        let value: serde_json::Value = serde_json::from_slice(&msg.payload).unwrap();
+    for record in &batch.records {
+        let value: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
         assert_eq!(value["keep"], true);
     }
 

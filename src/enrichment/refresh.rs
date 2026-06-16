@@ -3,7 +3,7 @@
 //! Purpose:   Background refresh for enrichment tables with periodic reload
 //! Language:  Rust
 //!
-//! License:   FSL-1.1-ALv2
+//! License:   BUSL-1.1
 //! Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Spawns per-table tokio tasks that periodically reload enrichment data

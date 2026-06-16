@@ -3,7 +3,7 @@
 // Purpose:   Deployment contract for artefact generation
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Deployment contract for Dockerfile, Helm chart, and compose fragment generation.
@@ -12,7 +12,7 @@
 //! in its container image. The container is just the Rust binary.
 
 use hyperi_rustlib::deployment::{
-    DeploymentContract, HealthContract, ImageProfile, KedaContract, NativeDepsContract,
+    DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
     PortContract, SecretEnvContract, SecretGroupContract,
 };
 
@@ -84,12 +84,29 @@ pub fn contract() -> DeploymentContract {
                 "dir": "/etc/dfe-transform-vrl/transforms"
             },
             "health": { "address": "0.0.0.0:9000" },
-            "metrics": { "address": "0.0.0.0:9090" }
+            "metrics": { "address": "0.0.0.0:9090" },
+            // Horizontal scaling-pressure engine (rustlib 2.8.11). Read from the
+            // global cascade by ScalingEngineConfig (requires the `expression`
+            // feature). Kafka in/out -> inbound + outbound = kafka. lag_target is
+            // intentionally omitted (TUNE-ME: no measured per-pod throughput);
+            // the lag term then contributes 0 rather than mis-scaling.
+            "scaling": {
+                "enabled": true,
+                "interval_secs": 15,
+                "transport": { "inbound": "kafka", "outbound": "kafka" },
+                "params": { "cpu_target": 0.70 },
+                "pressures": []
+            }
         })),
         depends_on: vec!["kafka".into()],
         native_deps: NativeDepsContract::for_rustlib_features(&["transport-kafka"], "ubuntu:24.04"),
         image_profile: ImageProfile::Production,
-        keda: Some(KedaContract {
+        // KedaContract is #[non_exhaustive] (rustlib 2.8.13) -- build it from a
+        // KedaConfig holding this app's real KEDA values and convert. The
+        // scaling_pressure_* trigger fields then come from KedaConfig defaults
+        // (trigger OFF -- the Prometheus serverAddress is cluster-specific), and
+        // ..Default::default() future-proofs any later contract-field additions.
+        keda: Some(KedaContract::from_config(&KedaConfig {
             min_replicas: 1,
             max_replicas: 10,
             polling_interval: 15,
@@ -98,7 +115,8 @@ pub fn contract() -> DeploymentContract {
             activation_lag_threshold: 0,
             cpu_enabled: true,
             cpu_threshold: 80,
-        }),
+            ..Default::default()
+        })),
         schema_version: 2,
         oci_labels: hyperi_rustlib::deployment::OciLabels::default(),
     }
@@ -190,5 +208,39 @@ mod tests {
         assert!(cfg.get("pipeline").is_some());
         assert!(cfg.get("source").is_some());
         assert!(cfg.get("sink").is_some());
+    }
+
+    /// Cascade-applied proof (rustlib 2.8.11): the `scaling` section the contract
+    /// ships in the deployed `--config` deserialises into rustlib's OWN
+    /// `ScalingEngineConfig` -- the exact type `from_cascade()` unmarshals from
+    /// the `scaling` key once `run_app` populates the cascade from the file. This
+    /// guards the shape (key names / kinds) the engine actually honours, so a
+    /// rename here can't silently leave the engine on its defaults.
+    #[test]
+    fn test_contract_scaling_section_matches_rustlib_engine_config() {
+        use hyperi_rustlib::scaling::ScalingEngineConfig;
+
+        let cfg = contract().default_config.expect("default_config present");
+        let scaling = cfg.get("scaling").expect("scaling section present");
+
+        let engine: ScalingEngineConfig = serde_json::from_value(scaling.clone())
+            .expect("scaling section must deser as rustlib ScalingEngineConfig");
+
+        assert!(engine.enabled, "scaling engine must be enabled");
+        assert_eq!(engine.interval_secs, 15);
+        assert_eq!(engine.transport.inbound.as_deref(), Some("kafka"));
+        assert_eq!(engine.transport.outbound.as_deref(), Some("kafka"));
+        assert!(
+            (engine.cpu_target() - 0.70).abs() < f64::EPSILON,
+            "cpu_target must be 0.70"
+        );
+        // lag_target is intentionally omitted (TUNE-ME: no measured per-pod
+        // throughput) so the lag term contributes 0 rather than mis-scaling.
+        assert!(
+            !engine.params.contains_key("lag_target"),
+            "lag_target must stay UNSET until a real per-pod throughput is measured"
+        );
+        // Empty pressures => rustlib composes the context-aware smart default.
+        assert!(engine.pressures.is_empty());
     }
 }

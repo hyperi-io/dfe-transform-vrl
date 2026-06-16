@@ -3,7 +3,7 @@
 // Purpose:   Smoke test live Kafka connectivity (creds + SASL handshake)
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
@@ -56,9 +56,11 @@ async fn test_live_kafka_connectivity_smoke() {
         Ok(Ok(transport)) => {
             eprintln!("KafkaTransport::new OK");
             // Send with timeout to detect hangs early
-            let send_result =
-                tokio::time::timeout(Duration::from_secs(15), transport.send(&topic, b"hello"))
-                    .await;
+            let send_result = tokio::time::timeout(
+                Duration::from_secs(15),
+                transport.send(&topic, bytes::Bytes::from_static(b"hello")),
+            )
+            .await;
             match send_result {
                 Ok(_) => eprintln!("Send OK"),
                 Err(_) => panic!("Send TIMED OUT after 15s"),

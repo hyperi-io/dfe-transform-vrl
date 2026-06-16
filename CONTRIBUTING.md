@@ -110,13 +110,11 @@ git config --global user.email "your.email@example.com"
 
 ## License for Contributions
 
-All contributions to this project are licensed under the Functional Source
-License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2), the same license
-that covers the project.
+All contributions to this project are licensed under the Business Source
+License 1.1 (BUSL-1.1), the same license that covers the project.
 
-Each version of the software (including your contributions) will automatically
-become available under the Apache License, Version 2.0 on the second
-anniversary of its release.
+Each version of the software (including your contributions) converts to the
+Change License on the Change Date specified in [LICENSE](LICENSE).
 
 ## How to Contribute
 

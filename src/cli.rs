@@ -3,7 +3,7 @@
 // Purpose:   CLI definition and service orchestrator
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! CLI definition and service lifecycle orchestrator.
@@ -20,7 +20,6 @@ use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, Version
 use hyperi_rustlib::config::reloader::{ConfigReloader, ReloaderConfig};
 use hyperi_rustlib::config::shared::SharedConfig;
 use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
-use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use tracing::{debug, error, info};
 
 use crate::config::Config;
@@ -226,17 +225,29 @@ async fn run_transform_service(
     );
     info!("VRL program compiled");
 
-    // Shutdown coordination
+    // Shutdown coordination. The runtime installs the signal handler and
+    // cancels `runtime.shutdown` on SIGTERM (K8s) / SIGINT (Ctrl+C). That token
+    // is the single source of truth: the engine driver stops on cancel, and we
+    // bridge it to a local `watch` channel for the two collaborators that still
+    // take a watch receiver (the health server and the enrichment refresh
+    // tasks) -- no second signal handler.
+    let shutdown_token = runtime.shutdown.clone();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    {
+        let bridge_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            bridge_token.cancelled().await;
+            let _ = shutdown_tx.send(true);
+        });
+    }
 
-    // Memory guard — cgroup-aware backpressure (Pattern B: pause consumer)
-    // Created early so readiness check can reference it.
-    let memory_guard = Arc::new(MemoryGuard::new(MemoryGuardConfig::from_env(
-        "DFE_TRANSFORM_VRL",
-    )));
+    // Memory guard — the runtime's shared, cgroup-aware guard. It is the SAME
+    // guard that feeds the self-regulation governor (the inbound pause-partitions
+    // brake) and the worker pool, so accounting is unified. No stand-alone guard.
+    let memory_guard = Arc::clone(&runtime.memory_guard);
     info!(
         limit_bytes = memory_guard.limit_bytes(),
-        "memory guard initialised"
+        "memory guard initialised (runtime shared)"
     );
 
     // Health server
@@ -333,56 +344,50 @@ async fn run_transform_service(
         crate::enrichment::refresh::start_refresh_tasks(reg, &transform_metrics, &shutdown_rx);
     }
 
-    // Pipeline
-    let pipeline_shutdown_rx = shutdown_rx.clone();
-    let pipeline_hot_config = hot_config.clone();
-    let pipeline_memory_guard = Arc::clone(&memory_guard);
-    let pipeline_worker_pool = runtime.worker_pool.clone();
-    let pipeline_handle = tokio::spawn(async move {
-        pipeline::run(
-            &config,
-            program,
-            pipeline_hot_config,
-            &transform_metrics,
-            ready_flag,
-            pipeline_memory_guard,
-            pipeline_shutdown_rx,
-            pipeline_worker_pool,
-        )
-        .await
-    });
+    // Batch engine: the runtime built it (governed byte-budget lever already
+    // wired when self-regulation is on). The mid-tier transform requires it.
+    let engine = runtime
+        .batch_engine
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("batch engine unavailable (worker pool not configured)"))?;
 
-    // Wait for SIGTERM (K8s) or SIGINT (Ctrl+C)
-    wait_for_shutdown_signal().await?;
-    info!("received shutdown signal");
-    let _ = shutdown_tx.send(true);
+    // Self-regulation governor (default-ON, opt-out). Cloned into the pipeline
+    // so the Kafka pause-partitions inbound gate can be attached to the consumer.
+    let governor = runtime.governor.clone();
+    let worker_pool = runtime.worker_pool.clone();
 
-    // Wait for pipeline to drain
-    match pipeline_handle.await {
-        Ok(Ok(())) => info!("pipeline shutdown complete"),
-        Ok(Err(e)) => error!(error = %e, "pipeline shutdown with error"),
-        Err(e) => error!(error = %e, "pipeline task panicked"),
+    // Scaling-signal cell (2.8.11). The runtime built the ScalingEngine (live
+    // when `scaling.enabled` + the `expression` feature is on); the pipeline's
+    // background ticker pushes per-pod assigned Kafka lag + the outbound circuit
+    // state into this cell so the engine's inbound pressure term is real and not
+    // CPU-only. Kafka-in is a rustlib transport, so no domain CEL term is needed.
+    let scaling_signals = Arc::clone(&runtime.scaling_signals);
+
+    // Pipeline -- runs the governed engine driver until `shutdown_token` is
+    // cancelled (the driver returns cleanly on cancel). `run_service` is awaited
+    // by `run_app`, so this blocks here for the process lifetime; no separate
+    // spawn + signal-wait is needed (the runtime owns signal handling).
+    let result = pipeline::run(
+        &config,
+        program,
+        hot_config.clone(),
+        Arc::clone(&transform_metrics),
+        ready_flag,
+        shutdown_token,
+        worker_pool,
+        engine,
+        governor,
+        Some(scaling_signals),
+    )
+    .await;
+
+    match result {
+        Ok(()) => info!("pipeline shutdown complete"),
+        Err(ref e) => error!(error = %e, "pipeline shutdown with error"),
     }
 
     info!("shutdown complete");
-    Ok(())
-}
-
-/// Wait for either SIGTERM or SIGINT.
-///
-/// K8s sends SIGTERM before killing pods. Ctrl+C sends SIGINT for local dev.
-async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    let mut sigterm =
-        signal(SignalKind::terminate()).map_err(|e| anyhow::anyhow!("SIGTERM handler: {e}"))?;
-
-    tokio::select! {
-        result = tokio::signal::ctrl_c() => {
-            result.map_err(|e| anyhow::anyhow!("SIGINT handler: {e}"))
-        }
-        _ = sigterm.recv() => Ok(()),
-    }
+    result.map_err(|e| anyhow::anyhow!("pipeline failed: {e}"))
 }
 
 #[cfg(test)]

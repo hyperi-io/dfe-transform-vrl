@@ -3,7 +3,7 @@
 // Purpose:   End-to-end test of cli::run_transform_service with live Kafka
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Drives the full `pipeline::run` path with a real Kafka broker.
@@ -11,22 +11,26 @@
 //! testcontainers Apache Kafka if no live broker is reachable.
 //!
 //! This test is the only thing that exercises `pipeline::run` (which
-//! constructs `KafkaTransport` directly), so it accounts for a significant
-//! chunk of pipeline.rs coverage.
+//! constructs `KafkaTransport` directly and drives the governed engine), so it
+//! accounts for a significant chunk of pipeline.rs coverage. The governor is
+//! `None` here (self-regulation off) so the path is the whole-batch loop.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
+use bytes::Bytes;
 use dfe_transform_vrl::config::Config;
 use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
 use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::memory::{MemoryGuard, MemoryGuardConfig};
 use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 use hyperi_rustlib::transport::{TransportBase, TransportSender};
+use hyperi_rustlib::worker::engine::BatchProcessingConfig;
+use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use tokio_util::sync::CancellationToken;
 
 use super::common::{self, ensure_kafka_or_skip};
 
@@ -127,7 +131,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
         .unwrap();
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
-            seed.send(&format!("e2e-{i}"), &payload),
+            seed.send(&format!("e2e-{i}"), Bytes::from(payload)),
         )
         .await
         .expect("seed send timed out");
@@ -143,29 +147,41 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             .program,
     );
 
-    // 3. Drive pipeline::run() — exercises full Kafka init, event loop,
-    //    metrics, memory guard. This is the path that's previously been
-    //    untested without Kafka.
-    let metrics = TransformMetrics::default();
+    // 3. Drive pipeline::run() — exercises full Kafka init, the governed engine
+    //    driver, metrics. This is the path that's previously been untested
+    //    without Kafka. Governor is None (self-regulation off) -> whole-batch
+    //    loop; engine carries no byte budget.
+    let metrics = Arc::new(TransformMetrics::default());
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
     let ready_flag = Arc::new(AtomicBool::new(false));
-    let memory_guard = Arc::new(MemoryGuard::new(MemoryGuardConfig {
-        limit_bytes: 100_000_000,
-        ..MemoryGuardConfig::default()
+    // Explicit 1-thread pool (valid on any core count); `BatchEngine::new`
+    // derives the pool bounds from `available_parallelism` and panics on a
+    // 1-core CI sandbox.
+    let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+        min_threads: 1,
+        max_threads: 1,
+        ..Default::default()
     }));
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let engine = Arc::new(BatchEngine::with_pool(
+        pool,
+        BatchProcessingConfig::default(),
+    ));
+    let shutdown = CancellationToken::new();
 
     let pipeline_config = config.clone();
-    let pipeline_metrics = metrics;
+    let pipeline_metrics = Arc::clone(&metrics);
+    let pipeline_shutdown = shutdown.clone();
     let pipeline_handle = tokio::spawn(async move {
         pipeline::run(
             &pipeline_config,
             program,
             hot_config,
-            &pipeline_metrics,
+            pipeline_metrics,
             ready_flag,
-            memory_guard,
-            shutdown_rx,
+            pipeline_shutdown,
+            None,
+            engine,
+            None,
             None,
         )
         .await
@@ -190,15 +206,18 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             .expect("verifier create failed");
 
     use hyperi_rustlib::transport::TransportReceiver;
-    let messages = tokio::time::timeout(Duration::from_secs(15), verifier.recv(10))
+    let batch = tokio::time::timeout(Duration::from_secs(15), verifier.recv(10))
         .await
         .expect("verifier recv timed out")
         .expect("verifier recv error");
 
-    eprintln!("Verifier received {} messages from sink", messages.len());
+    eprintln!(
+        "Verifier received {} records from sink",
+        batch.records.len()
+    );
 
     // 6. Shutdown pipeline cleanly
-    let _ = shutdown_tx.send(true);
+    shutdown.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(10), pipeline_handle).await;
     let _ = verifier.close().await;
 
@@ -206,13 +225,13 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
     // assignment timing). Assert at least one round-tripped to validate
     // that pipeline::run actually wired everything correctly.
     assert!(
-        !messages.is_empty(),
+        !batch.is_empty(),
         "expected at least one transformed event in {sink_topic}"
     );
 
     // Verify VRL transform actually ran
-    for msg in &messages {
-        let val: serde_json::Value = serde_json::from_slice(&msg.payload).unwrap();
+    for record in &batch.records {
+        let val: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
         assert_eq!(val["tag"], "cli-e2e-pass", "VRL .tag should be set");
     }
 }

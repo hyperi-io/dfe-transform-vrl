@@ -3,7 +3,7 @@
 // Purpose:   Deep VRL execution tests — complex programs, error paths, fuzz
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Deep tests of VRL program execution against real event data.

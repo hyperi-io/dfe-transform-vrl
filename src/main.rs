@@ -3,7 +3,7 @@
 // Purpose:   Binary entry point
 // Language:  Rust
 //
-// License:   FSL-1.1-ALv2
+// License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Binary entry point — parse args, dispatch to CLI module.
