@@ -39,7 +39,7 @@ required-features = ["pgo-driver"]
 # signal, sync, time, task, test (test is dev-only but `full` covers it).
 tokio = { version = ">=1.50", features = ["full"] }
 
-# CancellationToken (rustlib's shutdown token type) -- used to drive the
+# CancellationToken (scalo's shutdown token type) -- used to drive the
 # governed engine driver to a clean stop.
 tokio-util = ">=0.7"
 
@@ -48,37 +48,36 @@ tokio-util = ">=0.7"
 bytes = ">=1.7"
 
 # Shared library — use for everything it provides. NO bespoke code that
-# duplicates rustlib functionality ("rustlib first" policy).
+# duplicates scalo functionality ("scalo first" policy).
 #
 # Feature list audited 2026-04-29: only includes features whose API surface
 # is referenced in src/ or tests/. NOT included (verified zero refs):
 #   - `http` — would pull reqwest + reqwest-middleware + reqwest-retry 0.7
 #     (the transitive wasm-timer / instant 0.1.13 chain). The wrapper does
-#     no outbound HTTP; rustlib's HttpClient was speculatively enabled and
+#     no outbound HTTP; scalo's HttpClient was speculatively enabled and
 #     never wired up.
 #   - `transport-grpc` — would pull tonic + prost + tonic-prost-build +
 #     prost-build. The wrapper does Kafka in/out only.
 # When wiring HTTP/gRPC sinks (e.g. for enrichment refresh), re-enable the
 # specific feature at that point — don't pre-enable speculatively.
 #
-# `expression` is REQUIRED alongside `scaling`: the `ScalingEngine` is gated
-# `#[cfg(all(feature = "scaling", feature = "expression"))]`. `cli-service` does
-# NOT pull `expression`, so without it the engine silently compiles out (no
-# scaling_pressure gauge, signals pushed to a cell nobody reads). It enables the
-# CEL evaluator (`cel` crate) that powers the pressure expressions.
-hyperi-rustlib = { version = ">=2.8.14, <3", features = [
+# `scaling` drives the unified `ScalingPressure` engine the runtime serves at
+# `/scaling/pressure` to KEDA. The 2.9 governor (`governor` feature, default-ON)
+# owns the inbound pause-partitions brake + AIMD byte budget over the shared
+# memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
+# (`scaling` / `self_regulation`), no CEL expression engine needed.
+scalo = { version = ">=2.9.0, <3", features = [
     "cli-service",
     "config",
     "config-reload",
     "deployment",
-    "expression",
     "governor",
     "http-server",
     "logger",
     "memory",
     "metrics",
-    "metrics-dfe",
     "scaling",
+    "service-metrics",
     "transport",
     "transport-kafka",
     "worker-batch",
@@ -88,17 +87,17 @@ hyperi-rustlib = { version = ">=2.8.14, <3", features = [
 # VRL — Vector Remap Language (embedded transform engine)
 vrl = ">=0.31"
 
-# CLI (project-specific subcommands, not duplicating rustlib CLI framework).
+# CLI (project-specific subcommands, not duplicating scalo CLI framework).
 # `derive` for #[derive(Parser)]; `env` not needed — we have no env-backed
-# args (rustlib config cascade handles env-var binding for us).
+# args (scalo config cascade handles env-var binding for us).
 clap = { version = ">=4.5.60", features = ["derive"] }
 
-# Configuration (project-specific schema, not duplicating rustlib config cascade)
+# Configuration (project-specific schema, not duplicating scalo config cascade)
 figment = { version = ">=0.10.19", features = ["env"] }
 dotenvy = ">=0.15.7"
 serde_yaml_ng = ">=0.10.0"
 
-# Metrics types (Counter, Gauge, Histogram) returned by rustlib MetricsManager
+# Metrics types (Counter, Gauge, Histogram) returned by scalo MetricsManager
 metrics = ">=0.24.3, <0.25"
 
 # Serialisation
@@ -131,7 +130,7 @@ tikv-jemallocator = { version = ">=0.6", optional = true }
 
 # Direct rdkafka — ONLY used by the pgo-driver bin under `--features pgo-driver`.
 # Default builds (and `--features jemalloc`) skip this entirely. The main
-# wrapper uses Kafka via hyperi-rustlib transport-kafka, never directly.
+# wrapper uses Kafka via scalo transport-kafka, never directly.
 rdkafka = { version = ">=0.39", features = ["tokio", "cmake-build"], optional = true }
 
 [features]
@@ -140,7 +139,7 @@ jemalloc = ["dep:tikv-jemallocator"]
 # pgo-driver: build the workload-driver bin used by scripts/pgo-workload.sh
 # during PGO instrumentation. NOT enabled in production builds.
 pgo-driver = ["dep:rdkafka"]
-transport-memory = ["hyperi-rustlib/transport-memory"]
+transport-memory = ["scalo/transport-memory"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
 

@@ -134,23 +134,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "antlr4rust"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "093d520274bfff7278d776f7ea12981a0a0a6f96db90964658e0f38fc6e9a6a6"
-dependencies = [
- "better_any",
- "bit-set",
- "byteorder",
- "lazy_static",
- "murmur3",
- "once_cell",
- "parking_lot",
- "typed-arena",
- "uuid",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -353,12 +336,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "better_any"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4372b9543397a4b86050cc5e7ee36953edf4bac9518e8a774c2da694977fb6e4"
-
-[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -505,12 +482,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 
 [[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
-
-[[package]]
 name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -535,24 +506,6 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex",
-]
-
-[[package]]
-name = "cel"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47a40f338a8c3505921000b609279775792c07cc21f97a3011578c0c5e1738ae"
-dependencies = [
- "antlr4rust",
- "base64",
- "chrono",
- "lazy_static",
- "nom 7.1.3",
- "pastey",
- "regex",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1025,13 +978,13 @@ dependencies = [
  "csv",
  "dotenvy",
  "figment",
- "hyperi-rustlib",
  "maxminddb",
  "metrics",
  "rdkafka",
  "rmp-serde",
  "rusqlite",
  "rustc-hash",
+ "scalo",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1888,46 +1841,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyperi-rustlib"
-version = "2.8.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57550bb87ae6a3845db5767b0d69010077357c879ea0ea9a15c106fc26b3ce0a"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "cel",
- "chrono",
- "clap",
- "dashmap",
- "dirs",
- "dotenvy",
- "figment",
- "memchr",
- "metrics",
- "metrics-exporter-prometheus",
- "owo-colors",
- "parking_lot",
- "rayon",
- "rdkafka",
- "regex",
- "rmpv",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sonic-rs",
- "sysinfo",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "tracing-throttle",
-]
-
-[[package]]
 name = "hyperlocal"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2620,15 +2533,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "murmur3"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a198f9589efc03f544388dfc4a19fe8af4323662b62f598b8dcfdac62c14771c"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3008,12 +2912,6 @@ name = "parse-size"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "487f2ccd1e17ce8c1bfab3a65c89525af41cfad4c8659021a1e9a2aacd73b89b"
-
-[[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
 
 [[package]]
 name = "pear"
@@ -4085,6 +3983,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "scalo"
+version = "2.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c258da404a824a056d32861168702dcd869a002e959e12f3ca7968cabc30e02"
+dependencies = [
+ "axum",
+ "bytes",
+ "chrono",
+ "clap",
+ "dashmap",
+ "dirs",
+ "dotenvy",
+ "figment",
+ "memchr",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "owo-colors",
+ "parking_lot",
+ "rayon",
+ "rdkafka",
+ "regex",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sonic-rs",
+ "sysinfo",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-throttle",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4459,7 +4395,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -5210,12 +5146,6 @@ name = "twox-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
-
-[[package]]
-name = "typed-arena"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
 
 [[package]]
 name = "typenum"

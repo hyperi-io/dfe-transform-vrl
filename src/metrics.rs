@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      src/metrics.rs
-// Purpose:   Standardised DFE metrics via rustlib MetricsManager + dfe_groups
+// Purpose:   Standardised DFE metrics via scalo MetricsManager + metric groups
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -9,21 +9,26 @@
 //! Prometheus metrics using the DFE metrics standard.
 //!
 //! Three layers:
-//! - **Layer 1 (DfeMetrics):** Platform-wide `dfe_*` metrics (records, transport, scaling)
-//! - **Layer 2 (`dfe_groups`):** Common metric groups (`AppMetrics`, `ConsumerMetrics`, etc.)
-//! - **Layer 3 (app-specific):** `dfe_transform_vrl_*` metrics unique to this service
+//! - **Layer 1 (`ServiceMetrics`):** Platform-wide `dfe_*` metrics (records, transport, scaling)
+//! - **Layer 2 (`metrics::groups`):** Common metric groups (`AppMetrics`, `ConsumerMetrics`, etc.)
+//! - **Layer 3 (app-specific):** metrics unique to this service
 //!
-//! Namespace: `dfe_transform_vrl` (set on `MetricsManager`).
+//! Metric names are emitted BARE -- the `MetricsManager` namespace (the app
+//! name `dfe-transform-vrl` -> `dfe_transform_vrl_`) prepends the prefix ONCE
+//! via the global recorder's prefix layer. App code MUST pass bare segment
+//! names (e.g. `records_error_total`, not `dfe_transform_vrl_records_error_total`)
+//! or the prefix would double up. Per-app differentiation in the platform is by
+//! LABEL (Prometheus job/pod), never the metric name.
 
-use hyperi_rustlib::metrics::dfe_groups::{
+use scalo::metrics::groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
 };
-use hyperi_rustlib::metrics::{DfeMetrics, MetricsManager};
+use scalo::metrics::{MetricsManager, ServiceMetrics};
 
 /// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
     // Layer 1: Platform standard (dfe_*)
-    pub dfe: Option<DfeMetrics>,
+    pub dfe: Option<ServiceMetrics>,
 
     // Layer 2: Common metric groups (dfe_transform_vrl_*)
     pub app: Option<AppMetrics>,
@@ -50,12 +55,13 @@ pub struct TransformMetrics {
 }
 
 impl TransformMetrics {
-    /// Create all metrics via the rustlib `MetricsManager`.
+    /// Create all metrics via the scalo `MetricsManager`.
     ///
-    /// The `MetricsManager` must be created with namespace `"dfe_transform_vrl"`
-    /// so all registered metrics are prefixed correctly.
+    /// The `MetricsManager` namespace is the app name (`dfe-transform-vrl` ->
+    /// `dfe_transform_vrl_`); the prefix layer prepends it once to every bare
+    /// name registered here.
     pub fn new(manager: &MetricsManager, version: &str, commit: &str) -> Self {
-        let dfe = DfeMetrics::register(manager);
+        let dfe = ServiceMetrics::register(manager);
 
         let app = AppMetrics::new(manager, version, commit);
         let consumer = ConsumerMetrics::new(manager);
@@ -121,9 +127,10 @@ impl TransformMetrics {
     #[inline]
     pub fn record_deser_error(&self) {
         self.records_error.increment(1);
-        // Labelled counter for stage breakdown
+        // Labelled counter for stage breakdown. Bare name -- the namespace
+        // prefix layer prepends `dfe_transform_vrl_` once.
         metrics::counter!(
-            "dfe_transform_vrl_records_error_total",
+            "records_error_total",
             "stage" => "deserialise"
         )
         .increment(1);
@@ -134,7 +141,7 @@ impl TransformMetrics {
     pub fn record_transform_error(&self) {
         self.records_error.increment(1);
         metrics::counter!(
-            "dfe_transform_vrl_records_error_total",
+            "records_error_total",
             "stage" => "transform"
         )
         .increment(1);
@@ -145,7 +152,7 @@ impl TransformMetrics {
     pub fn record_produce_error(&self) {
         self.records_error.increment(1);
         metrics::counter!(
-            "dfe_transform_vrl_records_error_total",
+            "records_error_total",
             "stage" => "produce"
         )
         .increment(1);
@@ -155,7 +162,7 @@ impl TransformMetrics {
     #[inline]
     pub fn record_format(&self, format: &str, count: u64) {
         metrics::counter!(
-            "dfe_transform_vrl_records_format_total",
+            "records_format_total",
             "format" => format.to_string()
         )
         .increment(count);
@@ -166,7 +173,7 @@ impl TransformMetrics {
     #[allow(clippy::cast_precision_loss)]
     pub fn set_enrichment_rows(&self, table: &str, rows: usize) {
         metrics::gauge!(
-            "dfe_transform_vrl_enrichment_table_rows",
+            "enrichment_table_rows",
             "table" => table.to_string()
         )
         .set(rows as f64);
@@ -177,19 +184,19 @@ impl TransformMetrics {
     pub fn record_enrichment_reload(&self, table: &str, duration_secs: f64, success: bool) {
         let result = if success { "success" } else { "error" };
         metrics::counter!(
-            "dfe_transform_vrl_enrichment_reload_total",
+            "enrichment_reload_total",
             "table" => table.to_string(),
             "result" => result
         )
         .increment(1);
         metrics::histogram!(
-            "dfe_transform_vrl_enrichment_reload_duration_seconds",
+            "enrichment_reload_duration_seconds",
             "table" => table.to_string()
         )
         .record(duration_secs);
         if success {
             metrics::gauge!(
-                "dfe_transform_vrl_enrichment_table_last_reload_timestamp",
+                "enrichment_table_last_reload_timestamp",
                 "table" => table.to_string()
             )
             .set(
@@ -203,7 +210,10 @@ impl TransformMetrics {
 }
 
 impl Default for TransformMetrics {
-    /// Default for tests — no `DfeMetrics` or groups (no global recorder installed).
+    /// Default for tests — no `ServiceMetrics` or groups (no global recorder
+    /// installed). Bare names match the `new()` registration path; the
+    /// namespace prefix layer (absent in tests) is what would prepend
+    /// `dfe_transform_vrl_` in production.
     fn default() -> Self {
         Self {
             dfe: None,
@@ -212,25 +222,21 @@ impl Default for TransformMetrics {
             sink: None,
             backpressure: None,
             enrichment: None,
-            execute_duration: metrics::histogram!("dfe_transform_vrl_execute_duration_seconds"),
-            deserialise_duration: metrics::histogram!(
-                "dfe_transform_vrl_deserialise_duration_seconds"
-            ),
-            serialise_duration: metrics::histogram!("dfe_transform_vrl_serialise_duration_seconds"),
-            batch_duration: metrics::histogram!("dfe_transform_vrl_batch_duration_seconds"),
-            records_error: metrics::counter!("dfe_transform_vrl_records_error_total"),
-            records_format: metrics::counter!("dfe_transform_vrl_records_format_total"),
-            programs_loaded: metrics::gauge!("dfe_transform_vrl_programs_loaded"),
-            abort_total: metrics::counter!("dfe_transform_vrl_abort_total"),
-            batch_size: metrics::histogram!("dfe_transform_vrl_batch_size"),
-            enrichment_table_rows: metrics::gauge!("dfe_transform_vrl_enrichment_table_rows"),
-            events_per_second: metrics::gauge!("dfe_transform_vrl_events_per_second"),
-            enrichment_reload_total: metrics::counter!("dfe_transform_vrl_enrichment_reload_total"),
-            enrichment_reload_duration: metrics::histogram!(
-                "dfe_transform_vrl_enrichment_reload_duration_seconds"
-            ),
+            execute_duration: metrics::histogram!("execute_duration_seconds"),
+            deserialise_duration: metrics::histogram!("deserialise_duration_seconds"),
+            serialise_duration: metrics::histogram!("serialise_duration_seconds"),
+            batch_duration: metrics::histogram!("batch_duration_seconds"),
+            records_error: metrics::counter!("records_error_total"),
+            records_format: metrics::counter!("records_format_total"),
+            programs_loaded: metrics::gauge!("programs_loaded"),
+            abort_total: metrics::counter!("abort_total"),
+            batch_size: metrics::histogram!("batch_size"),
+            enrichment_table_rows: metrics::gauge!("enrichment_table_rows"),
+            events_per_second: metrics::gauge!("events_per_second"),
+            enrichment_reload_total: metrics::counter!("enrichment_reload_total"),
+            enrichment_reload_duration: metrics::histogram!("enrichment_reload_duration_seconds"),
             enrichment_last_reload_timestamp: metrics::gauge!(
-                "dfe_transform_vrl_enrichment_table_last_reload_timestamp"
+                "enrichment_table_last_reload_timestamp"
             ),
         }
     }
@@ -301,7 +307,7 @@ mod tests {
     #[test]
     fn new_wires_layer1_and_layer2_groups() {
         // Construct a MetricsManager — exercises the full registration path
-        // through Layer 1 (DfeMetrics), Layer 2 groups, and Layer 3 histograms.
+        // through Layer 1 (ServiceMetrics), Layer 2 groups, and Layer 3 histograms.
         let manager = MetricsManager::new("test_dfe_transform_vrl");
         let m = TransformMetrics::new(&manager, "0.1.0", "abc1234");
 

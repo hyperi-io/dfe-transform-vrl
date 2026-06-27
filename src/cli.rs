@@ -8,18 +8,20 @@
 
 //! CLI definition and service lifecycle orchestrator.
 //!
-//! Implements the `DfeApp` trait from rustlib, wiring together config loading,
-//! VRL compilation, health/metrics servers, pipeline, and graceful shutdown.
+//! Implements the `ServiceApp` trait from scalo, wiring together config
+//! loading, VRL compilation, health/metrics servers, pipeline, and graceful
+//! shutdown.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use hyperi_rustlib::cli::{CliError, CommonArgs, DfeApp, StandardCommand, VersionInfo};
-use hyperi_rustlib::config::reloader::{ConfigReloader, ReloaderConfig};
-use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
+use scalo::cli::{CliError, CommonArgs, ServiceApp, StandardCommand, VersionInfo};
+use scalo::config::reloader::{ConfigReloader, ReloaderConfig};
+use scalo::config::shared::SharedConfig;
+use scalo::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
+use scalo::scaling::ScalingComponent;
 use tracing::{debug, error, info};
 
 use crate::config::Config;
@@ -40,7 +42,7 @@ pub struct App {
 
 #[derive(Subcommand, Clone, Debug)]
 enum AppCommand {
-    /// Standard rustlib commands (run, version, config-check, generate-artefacts, metrics-manifest).
+    /// Standard scalo commands (run, version, config-check, generate-artefacts, metrics-manifest).
     #[command(flatten)]
     Standard(StandardCommand),
     #[command(name = "emit-dockerfile")]
@@ -53,7 +55,7 @@ enum AppCommand {
     EmitContract,
 }
 
-impl DfeApp for App {
+impl ServiceApp for App {
     type Config = Config;
 
     #[allow(clippy::unnecessary_literal_bound)]
@@ -93,19 +95,34 @@ impl DfeApp for App {
     async fn run_service(
         &self,
         config: Config,
-        runtime: hyperi_rustlib::cli::ServiceRuntime,
+        runtime: scalo::cli::ServiceRuntime,
     ) -> Result<(), CliError> {
         run_transform_service(config, self.common.config.clone(), runtime)
             .await
             .map_err(|e| CliError::Service(e.to_string()))
     }
 
-    fn deployment_contract(&self) -> Option<hyperi_rustlib::deployment::DeploymentContract> {
+    fn scaling_components(&self, _config: &Config) -> Vec<ScalingComponent> {
+        // Register this app's weighted KEDA components on the runtime's unified
+        // `ScalingPressure` (the engine served at `/scaling/pressure`). The
+        // pipeline's per-pod ticker drives `kafka_lag`; the worker-pool scaler
+        // drives `worker_pool_saturation` (set_component is a no-op for an
+        // unregistered name, so both MUST be registered here to count).
+        // `memory` is the never-OOM HARD gate, fed via `set_memory`. The lag
+        // term is the dominant KEDA driver (consumer-group lag); the pool
+        // saturation term reflects CPU-bound transform pressure.
+        vec![
+            ScalingComponent::new("kafka_lag", 0.70, 100_000.0),
+            ScalingComponent::new("worker_pool_saturation", 0.30, 1.0),
+        ]
+    }
+
+    fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }
 }
 
-/// Handle emit subcommands that bypass the normal `DfeApp` lifecycle.
+/// Handle emit subcommands that bypass the normal `ServiceApp` lifecycle.
 /// Returns `Some(())` if handled, `None` if not an emit command.
 pub fn handle_emit_command(app: &App) -> Option<()> {
     let cmd = app.command.as_ref()?;
@@ -142,7 +159,7 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
 async fn run_transform_service(
     config: Config,
     config_path: Option<String>,
-    mut runtime: hyperi_rustlib::cli::ServiceRuntime,
+    mut runtime: scalo::cli::ServiceRuntime,
 ) -> anyhow::Result<()> {
     info!(
         pipeline = %config.pipeline.name,
@@ -160,9 +177,9 @@ async fn run_transform_service(
         source_topics = ?config.source.topics,
         sink_topic = %config.sink.topic,
         consumer_group = %consumer_group,
-        dfe_source = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::name),
-        dfe_input_topic = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::input_topic),
-        dfe_output_topic = ?derived_source.as_ref().map(hyperi_rustlib::DfeSource::output_topic),
+        dfe_source = ?derived_source.as_ref().map(scalo::KafkaSource::name),
+        dfe_input_topic = ?derived_source.as_ref().map(scalo::KafkaSource::input_topic),
+        dfe_output_topic = ?derived_source.as_ref().map(scalo::KafkaSource::output_topic),
         "DFE topology"
     );
 
@@ -255,7 +272,7 @@ async fn run_transform_service(
         .await
         .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
 
-    // Metrics: reuse the MetricsManager that rustlib's DfeApp framework has
+    // Metrics: reuse the MetricsManager that scalo's ServiceApp framework has
     // already constructed and started for us (`runtime.metrics`). NEVER
     // construct a new MetricsManager here — that creates a second server on
     // the same port and the wrapper crashes with EADDRINUSE on startup (GH
@@ -263,7 +280,7 @@ async fn run_transform_service(
     // the global recorder; we just wire our app-specific metrics + readiness
     // into the running manager.
     //
-    // `config.metrics.address` is intentionally ignored — rustlib's
+    // `config.metrics.address` is intentionally ignored — scalo's
     // `--metrics-addr` (env `METRICS_ADDR`, default `0.0.0.0:9090`) is the
     // single source of truth. Charts / deployments override that env var,
     // not the YAML field, to relocate the endpoint.
@@ -278,7 +295,7 @@ async fn run_transform_service(
         readiness_flag.load(std::sync::atomic::Ordering::Acquire)
             && !readiness_guard.under_pressure()
     });
-    info!("readiness check wired into rustlib metrics server");
+    info!("readiness check wired into scalo metrics server");
 
     // Hot-reloadable config subset (read by pipeline each batch)
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
@@ -329,7 +346,7 @@ async fn run_transform_service(
                 key_field = %hot.key_field,
                 "config reload applied"
             );
-            hyperi_rustlib::logger::security::config_changed(
+            scalo::logger::security::config_changed(
                 "config_reload",
                 "system",
                 "pipeline config reloaded",
@@ -353,15 +370,21 @@ async fn run_transform_service(
 
     // Self-regulation governor (default-ON, opt-out). Cloned into the pipeline
     // so the Kafka pause-partitions inbound gate can be attached to the consumer.
+    // The governor owns the inbound brake + AIMD byte budget (already wired into
+    // the batch engine by ServiceRuntime) over the shared memory guard.
     let governor = runtime.governor.clone();
     let worker_pool = runtime.worker_pool.clone();
 
-    // Scaling-signal cell (2.8.11). The runtime built the ScalingEngine (live
-    // when `scaling.enabled` + the `expression` feature is on); the pipeline's
-    // background ticker pushes per-pod assigned Kafka lag + the outbound circuit
-    // state into this cell so the engine's inbound pressure term is real and not
-    // CPU-only. Kafka-in is a rustlib transport, so no domain CEL term is needed.
-    let scaling_signals = Arc::clone(&runtime.scaling_signals);
+    // Unified scaling-pressure engine (scalo 2.9). The runtime built ONE
+    // `ScalingPressure` from `ScalingPressureConfig::from_cascade()` + the
+    // components this app registered via `scaling_components`, and already wired
+    // it into the MetricsManager (served at `/scaling/pressure` to KEDA) and the
+    // worker pool (which feeds `worker_pool_saturation`). The pipeline's per-pod
+    // ticker feeds the `kafka_lag` component + the outbound circuit latch + the
+    // memory HARD gate. This collapses the old dual-engine model (the separate
+    // runtime `ScalingSignalsCell` is gone). `None` when `scaling.enabled =
+    // false` -- the ticker is then not spawned.
+    let scaling = runtime.scaling.clone();
 
     // Pipeline -- runs the governed engine driver until `shutdown_token` is
     // cancelled (the driver returns cleanly on cancel). `run_service` is awaited
@@ -377,7 +400,8 @@ async fn run_transform_service(
         worker_pool,
         engine,
         governor,
-        Some(scaling_signals),
+        scaling,
+        memory_guard,
     )
     .await;
 

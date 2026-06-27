@@ -14,8 +14,8 @@
 
 use std::time::Duration;
 
-use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
-use hyperi_rustlib::transport::{TransportBase, TransportSender};
+use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
+use scalo::transport::{TransportBase, TransportSender};
 
 use super::common;
 
@@ -45,10 +45,7 @@ async fn test_live_kafka_connectivity_smoke() {
     if kf.has_sasl() {
         config.sasl_mechanism = kf.sasl_mechanism.clone();
         config.sasl_username = kf.sasl_user.clone();
-        config.sasl_password = kf
-            .sasl_password
-            .clone()
-            .map(hyperi_rustlib::SensitiveString::from);
+        config.sasl_password = kf.sasl_password.clone().map(scalo::SensitiveString::from);
     }
 
     let result = tokio::time::timeout(Duration::from_secs(20), KafkaTransport::new(&config)).await;

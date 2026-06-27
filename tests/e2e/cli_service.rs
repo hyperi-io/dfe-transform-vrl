@@ -25,11 +25,12 @@ use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
-use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
-use hyperi_rustlib::transport::{TransportBase, TransportSender};
-use hyperi_rustlib::worker::engine::BatchProcessingConfig;
-use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use scalo::config::shared::SharedConfig;
+use scalo::memory::{MemoryGuard, MemoryGuardConfig};
+use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
+use scalo::transport::{TransportBase, TransportSender};
+use scalo::worker::engine::BatchProcessingConfig;
+use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
 
 use super::common::{self, ensure_kafka_or_skip};
@@ -91,10 +92,7 @@ fn seed_producer_config(kf: &common::KafkaTestConfig, topic: &str) -> KafkaConfi
     if kf.has_sasl() {
         config.sasl_mechanism = kf.sasl_mechanism.clone();
         config.sasl_username = kf.sasl_user.clone();
-        config.sasl_password = kf
-            .sasl_password
-            .clone()
-            .map(hyperi_rustlib::SensitiveString::from);
+        config.sasl_password = kf.sasl_password.clone().map(scalo::SensitiveString::from);
     }
     config
 }
@@ -183,6 +181,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             engine,
             None,
             None,
+            Arc::new(MemoryGuard::new(MemoryGuardConfig::default())),
         )
         .await
     });
@@ -205,7 +204,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             .expect("verifier create timed out")
             .expect("verifier create failed");
 
-    use hyperi_rustlib::transport::TransportReceiver;
+    use scalo::transport::TransportReceiver;
     let batch = tokio::time::timeout(Duration::from_secs(15), verifier.recv(10))
         .await
         .expect("verifier recv timed out")

@@ -10,7 +10,7 @@
 //! ([`pipeline::run_governed_pipeline`]) using in-memory channels instead of
 //! Kafka. These cover the hot path that normally requires a running broker.
 //!
-//! Uses the `transport-memory` feature to pull in rustlib's MemoryTransport.
+//! Uses the `transport-memory` feature to pull in scalo's MemoryTransport.
 //! Each test spins up a send-half (to simulate upstream producers) and a
 //! receive-half (to observe the pipeline's sink output).
 //!
@@ -30,12 +30,12 @@ use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline::run_governed_pipeline;
-use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::transport::{
+use scalo::config::shared::SharedConfig;
+use scalo::transport::{
     MemoryConfig, MemoryTransport, PayloadFormat, TransportReceiver, TransportSender,
 };
-use hyperi_rustlib::worker::engine::BatchProcessingConfig;
-use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use scalo::worker::engine::BatchProcessingConfig;
+use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
 
 /// Build a pipeline harness: source transport, sink transport, hot config,
@@ -80,7 +80,7 @@ impl Harness {
             .send("", Bytes::copy_from_slice(json.as_bytes()))
             .await;
         assert!(
-            matches!(result, hyperi_rustlib::transport::SendResult::Ok),
+            matches!(result, scalo::transport::SendResult::Ok),
             "send failed: {result:?}"
         );
     }
@@ -88,9 +88,7 @@ impl Harness {
     /// Drain pending records from the sink — returns up to `max` payloads.
     async fn drain_sink(&self, max: usize) -> Vec<Vec<u8>> {
         let batch = self.sink.recv(max).await.unwrap_or_else(|_| {
-            hyperi_rustlib::transport::WorkBatch::<
-                <MemoryTransport as TransportReceiver>::Token,
-            >::empty()
+            scalo::transport::WorkBatch::<<MemoryTransport as TransportReceiver>::Token>::empty()
         });
         batch
             .records
@@ -656,7 +654,7 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
 
 #[tokio::test]
 async fn test_pipeline_routes_to_sink_topic() {
-    // Under rustlib #37 the sender's `key` arg is the destination TOPIC, so
+    // Under scalo #37 the sender's `key` arg is the destination TOPIC, so
     // every output record routes on the configured sink topic ("out"), NOT a
     // per-record partition key. (The dot-path partition-key extractor was
     // removed in the WorkBatch migration; re-introduce once #37 lands.)
@@ -698,7 +696,7 @@ async fn test_pipeline_routes_to_sink_topic() {
         .sink
         .recv(10)
         .await
-        .unwrap_or_else(|_| hyperi_rustlib::transport::WorkBatch::empty());
+        .unwrap_or_else(|_| scalo::transport::WorkBatch::empty());
     h.shutdown();
     pipeline.await.unwrap().unwrap();
 
@@ -831,7 +829,7 @@ async fn test_pipeline_stress_1000_events() {
 
 #[tokio::test]
 async fn test_pipeline_with_worker_pool_parallel_processing() {
-    use hyperi_rustlib::worker::{AdaptiveWorkerPool, WorkerPoolConfig};
+    use scalo::worker::{AdaptiveWorkerPool, WorkerPoolConfig};
 
     let h = Harness::new(20, 50, ".id");
     for i in 0..50 {
@@ -959,7 +957,7 @@ async fn test_pipeline_burst_drains_with_concurrent_reader() {
         let batch = sink_reader
             .recv(10)
             .await
-            .unwrap_or_else(|_| hyperi_rustlib::transport::WorkBatch::empty());
+            .unwrap_or_else(|_| scalo::transport::WorkBatch::empty());
         collected += batch.records.len();
         if collected >= 20 {
             break;
@@ -977,7 +975,7 @@ async fn test_pipeline_burst_drains_with_concurrent_reader() {
 
 #[tokio::test]
 async fn test_pipeline_with_real_metrics_recorder() {
-    // Exercise the DfeMetrics / layered-groups recording branches by using
+    // Exercise the ServiceMetrics / layered-groups recording branches by using
     // TransformMetrics::new() with a real MetricsManager rather than the
     // test-default (which has all layers as None).
     let h = Harness::new(10, 50, ".id");
@@ -988,8 +986,7 @@ async fn test_pipeline_with_real_metrics_recorder() {
 
     let prog = compile_program(r#".tag = "metricated""#);
 
-    let manager =
-        hyperi_rustlib::metrics::MetricsManager::new("test_pipeline_dfe_transform_vrl_real");
+    let manager = scalo::metrics::MetricsManager::new("test_pipeline_dfe_transform_vrl_real");
     let transform_metrics = Arc::new(TransformMetrics::new(&manager, "0.1.0", "testcommit"));
 
     let source = Arc::clone(&h.source);

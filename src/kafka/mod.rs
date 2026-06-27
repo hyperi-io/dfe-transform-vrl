@@ -1,29 +1,30 @@
 // Project:   dfe-transform-vrl
 // File:      src/kafka/mod.rs
-// Purpose:   Kafka consumer and producer via rustlib transport-kafka
+// Purpose:   Kafka consumer and producer via scalo transport-kafka
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Kafka transport layer using hyperi-rustlib `transport-kafka`.
+//! Kafka transport layer using scalo `transport-kafka`.
 //!
-//! Wraps rustlib's `KafkaTransport` to provide the consume/produce/commit
-//! cycle with format detection via rustlib's `FormatDetector`.
+//! Wraps scalo's `KafkaTransport` to provide the consume/produce/commit
+//! cycle with format detection via scalo's `FormatDetector`.
 
 use std::collections::HashMap;
 
-use hyperi_rustlib::kafka_config::{DfeSource, ServiceRole};
-use hyperi_rustlib::transport::PayloadFormat;
-use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaRole, KafkaTransport};
+use scalo::kafka_config::{KafkaSource, ServiceRole};
+use scalo::transport::PayloadFormat;
+use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 
 use crate::config;
 
 /// Build a `KafkaConfig` for the consumer from our source config.
 pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
+    // Consumer profile: group + topics set (subscribes). scalo 2.9 dropped the
+    // explicit KafkaRole -- a non-empty group + topics is the consumer shape.
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
-        role: KafkaRole::Consumer, // source: consume only, no idle producer
         brokers: source.brokers.clone(),
         group: source.group_id.clone(),
         client_id: "dfe-transform-vrl-consumer".to_string(),
@@ -57,9 +58,11 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
 /// The producer uses the same `KafkaTransport` but only the `send()` path.
 /// We configure it as a separate transport instance with sink brokers/auth.
 pub fn build_producer_config(sink: &config::SinkConfig, pipeline_name: &str) -> KafkaConfig {
+    // Producer profile: empty group (no subscription). scalo 2.9 dropped the
+    // explicit KafkaRole -- an empty group is the producer-only shape; the
+    // `topics` list is the produce destination, not a subscription.
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
-        role: KafkaRole::Producer, // sink: produce only, no consumer
         brokers: sink.brokers.clone(),
         group: String::new(),
         client_id: format!("dfe-transform-vrl-producer-{pipeline_name}"),
@@ -102,7 +105,7 @@ pub async fn create_producer(config: &KafkaConfig) -> crate::Result<KafkaTranspo
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))
 }
 
-/// Map our source format config to rustlib's `PayloadFormat`.
+/// Map our source format config to scalo's `PayloadFormat`.
 pub fn parse_format(format_str: &str) -> PayloadFormat {
     match format_str {
         "json" => PayloadFormat::Json,
@@ -111,21 +114,21 @@ pub fn parse_format(format_str: &str) -> PayloadFormat {
     }
 }
 
-/// Derive a `DfeSource` from the first configured source topic.
+/// Derive a `KafkaSource` from the first configured source topic.
 ///
 /// If the topic follows DFE naming convention (`{source}_land`), extracts
 /// the source name. Otherwise returns `None`.
-pub fn derive_dfe_source(source: &config::SourceConfig) -> Option<DfeSource> {
+pub fn derive_dfe_source(source: &config::SourceConfig) -> Option<KafkaSource> {
     source
         .topics
         .first()
-        .and_then(|topic| DfeSource::source_from_topic(topic))
-        .map(DfeSource::new)
+        .and_then(|topic| KafkaSource::source_from_topic(topic))
+        .map(KafkaSource::new)
 }
 
 /// Derive a consumer group ID using DFE naming conventions.
 ///
-/// Uses `DfeSource` if a source can be derived from the topic name,
+/// Uses `KafkaSource` if a source can be derived from the topic name,
 /// falling back to the explicit `group_id` from config. The explicit
 /// config always takes precedence (it may be set by dfe-engine).
 pub fn derive_consumer_group(source: &config::SourceConfig, pipeline_name: &str) -> String {
@@ -134,7 +137,7 @@ pub fn derive_consumer_group(source: &config::SourceConfig, pipeline_name: &str)
         return source.group_id.clone();
     }
 
-    // Try DfeSource convention
+    // Try KafkaSource convention
     if let Some(dfe_source) = derive_dfe_source(source)
         && let Ok(cg) = dfe_source.consumer_group(
             "transform-vrl",

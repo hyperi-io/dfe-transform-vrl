@@ -26,7 +26,7 @@ async fn main() {
         return;
     }
 
-    if let Err(e) = hyperi_rustlib::cli::run_app(app).await {
+    if let Err(e) = scalo::cli::run_app(app).await {
         eprintln!("fatal: {e}");
         std::process::exit(1);
     }

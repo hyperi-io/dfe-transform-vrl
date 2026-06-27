@@ -24,11 +24,11 @@ use dfe_transform_vrl::config::hot::HotConfig;
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
-use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
-use hyperi_rustlib::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
-use hyperi_rustlib::worker::engine::BatchProcessingConfig;
-use hyperi_rustlib::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
+use scalo::config::shared::SharedConfig;
+use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
+use scalo::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
+use scalo::worker::engine::BatchProcessingConfig;
+use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
 
 use super::common::{self, KafkaTestConfig, ensure_kafka_or_skip};
@@ -65,10 +65,7 @@ fn apply_sasl(config: &mut KafkaConfig, kf: &KafkaTestConfig) {
     if kf.has_sasl() {
         config.sasl_mechanism = kf.sasl_mechanism.clone();
         config.sasl_username = kf.sasl_user.clone();
-        config.sasl_password = kf
-            .sasl_password
-            .clone()
-            .map(hyperi_rustlib::SensitiveString::from);
+        config.sasl_password = kf.sasl_password.clone().map(scalo::SensitiveString::from);
     }
 }
 

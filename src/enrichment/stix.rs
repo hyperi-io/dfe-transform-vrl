@@ -83,7 +83,7 @@ pub fn load_stix(
             crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
         })?
     } else if let Some(_url) = url {
-        // HTTP fetch will be wired via rustlib HttpClient in the async refresh path.
+        // HTTP fetch will be wired via scalo HttpClient in the async refresh path.
         // For now, return a clear error if only URL is provided without async context.
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': STIX HTTP fetch requires async context (use refresh task or load from file)"

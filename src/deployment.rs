@@ -11,14 +11,17 @@
 //! Unlike dfe-transform-vector, this service does NOT need the Vector binary
 //! in its container image. The container is just the Rust binary.
 
-use hyperi_rustlib::deployment::{
+use scalo::deployment::{
     DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
-    PortContract, SecretEnvContract, SecretGroupContract,
+    PortContract, SecretEnvContract, SecretGroupContract, base_image_from_cascade,
 };
 
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
 pub fn contract() -> DeploymentContract {
+    // One cascade-resolved base image drives BOTH the runtime FROM and the
+    // native-deps codename (so the Confluent librdkafka repo matches the base).
+    let base_image = base_image_from_cascade();
     DeploymentContract {
         app_name: "dfe-transform-vrl".into(),
         binary_name: "dfe-transform-vrl".into(),
@@ -33,7 +36,7 @@ pub fn contract() -> DeploymentContract {
         metric_prefix: "transform_vrl".into(),
         config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
-        base_image: "ubuntu:24.04".into(),
+        base_image: base_image.clone(),
         extra_ports: vec![PortContract {
             name: "health".into(),
             port: 9000,
@@ -85,23 +88,23 @@ pub fn contract() -> DeploymentContract {
             },
             "health": { "address": "0.0.0.0:9000" },
             "metrics": { "address": "0.0.0.0:9090" },
-            // Horizontal scaling-pressure engine (rustlib 2.8.11). Read from the
-            // global cascade by ScalingEngineConfig (requires the `expression`
-            // feature). Kafka in/out -> inbound + outbound = kafka. lag_target is
-            // intentionally omitted (TUNE-ME: no measured per-pod throughput);
-            // the lag term then contributes 0 rather than mis-scaling.
+            // Unified scaling-pressure engine (scalo 2.9). The CEL weighted
+            // engine collapsed into ONE ScalingPressure served at
+            // /scaling/pressure to KEDA: base config holds only the gate
+            // thresholds; the weighted components (kafka_lag, memory) are
+            // registered in code via `ServiceApp::scaling_components`. The
+            // memory gate forces pressure to 100 once usage crosses
+            // memory_gate_threshold (scale before OOM).
             "scaling": {
                 "enabled": true,
-                "interval_secs": 15,
-                "transport": { "inbound": "kafka", "outbound": "kafka" },
-                "params": { "cpu_target": 0.70 },
-                "pressures": []
+                "memory_gate_threshold": 0.8
             }
         })),
         depends_on: vec!["kafka".into()],
-        native_deps: NativeDepsContract::for_rustlib_features(&["transport-kafka"], "ubuntu:24.04"),
+        // `for_rustlib_features` is scalo's own (stable) API name -- keep it.
+        native_deps: NativeDepsContract::for_rustlib_features(&["transport-kafka"], &base_image),
         image_profile: ImageProfile::Production,
-        // KedaContract is #[non_exhaustive] (rustlib 2.8.13) -- build it from a
+        // KedaContract is #[non_exhaustive] (scalo) -- build it from a
         // KedaConfig holding this app's real KEDA values and convert. The
         // scaling_pressure_* trigger fields then come from KedaConfig defaults
         // (trigger OFF -- the Prometheus serverAddress is cluster-specific), and
@@ -118,7 +121,10 @@ pub fn contract() -> DeploymentContract {
             ..Default::default()
         })),
         schema_version: 2,
-        oci_labels: hyperi_rustlib::deployment::OciLabels::default(),
+        oci_labels: scalo::deployment::OciLabels {
+            licenses: "BUSL-1.1".into(),
+            ..Default::default()
+        },
     }
 }
 
@@ -210,37 +216,29 @@ mod tests {
         assert!(cfg.get("sink").is_some());
     }
 
-    /// Cascade-applied proof (rustlib 2.8.11): the `scaling` section the contract
-    /// ships in the deployed `--config` deserialises into rustlib's OWN
-    /// `ScalingEngineConfig` -- the exact type `from_cascade()` unmarshals from
-    /// the `scaling` key once `run_app` populates the cascade from the file. This
-    /// guards the shape (key names / kinds) the engine actually honours, so a
-    /// rename here can't silently leave the engine on its defaults.
+    /// Cascade-applied proof (scalo 2.9): the `scaling` section the contract
+    /// ships in the deployed `--config` deserialises into scalo's OWN
+    /// `ScalingPressureConfig` -- the exact type `from_cascade()` unmarshals
+    /// from the `scaling` key once `run_app` populates the cascade from the
+    /// file. This guards the shape (key names / kinds) the engine honours, so a
+    /// rename here can't silently leave the engine on its defaults. The 2.9
+    /// unified engine config holds only the gate thresholds; the weighted KEDA
+    /// components are registered in code (`ServiceApp::scaling_components`), not
+    /// in the config.
     #[test]
-    fn test_contract_scaling_section_matches_rustlib_engine_config() {
-        use hyperi_rustlib::scaling::ScalingEngineConfig;
+    fn test_contract_scaling_section_matches_scalo_pressure_config() {
+        use scalo::scaling::ScalingPressureConfig;
 
         let cfg = contract().default_config.expect("default_config present");
         let scaling = cfg.get("scaling").expect("scaling section present");
 
-        let engine: ScalingEngineConfig = serde_json::from_value(scaling.clone())
-            .expect("scaling section must deser as rustlib ScalingEngineConfig");
+        let pressure: ScalingPressureConfig = serde_json::from_value(scaling.clone())
+            .expect("scaling section must deser as scalo ScalingPressureConfig");
 
-        assert!(engine.enabled, "scaling engine must be enabled");
-        assert_eq!(engine.interval_secs, 15);
-        assert_eq!(engine.transport.inbound.as_deref(), Some("kafka"));
-        assert_eq!(engine.transport.outbound.as_deref(), Some("kafka"));
+        assert!(pressure.enabled, "scaling engine must be enabled");
         assert!(
-            (engine.cpu_target() - 0.70).abs() < f64::EPSILON,
-            "cpu_target must be 0.70"
+            (pressure.memory_gate_threshold - 0.8).abs() < f64::EPSILON,
+            "memory_gate_threshold must be 0.8 (scale before OOM)"
         );
-        // lag_target is intentionally omitted (TUNE-ME: no measured per-pod
-        // throughput) so the lag term contributes 0 rather than mis-scaling.
-        assert!(
-            !engine.params.contains_key("lag_target"),
-            "lag_target must stay UNSET until a real per-pod throughput is measured"
-        );
-        // Empty pressures => rustlib composes the context-aware smart default.
-        assert!(engine.pressures.is_empty());
     }
 }

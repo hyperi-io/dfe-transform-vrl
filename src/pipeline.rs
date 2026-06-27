@@ -9,7 +9,7 @@
 //! Event processing pipeline.
 //!
 //! The mid-tier transform stage (Kafka consume -> VRL transform -> Kafka
-//! produce -> commit) is driven by rustlib's unified `WorkBatch` engine
+//! produce -> commit) is driven by scalo's unified `WorkBatch` engine
 //! ([`BatchEngine::run_governed`]). The driver owns the
 //! `recv -> process -> send -> commit` loop with full self-regulation
 //! (inbound pause-partitions gate + AIMD byte-budget streaming + at-least-once
@@ -43,26 +43,26 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use bytes::Bytes;
-use hyperi_rustlib::SelfRegulationGovernor;
-use hyperi_rustlib::config::shared::SharedConfig;
-use hyperi_rustlib::logger::{log_sampled, security};
-use hyperi_rustlib::metrics::TransportKind;
-use hyperi_rustlib::scaling::ScalingSignalsCell;
-use hyperi_rustlib::transport::kafka::{KafkaTransport, total_consumer_lag};
-use hyperi_rustlib::transport::{
-    PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch,
-};
-use hyperi_rustlib::worker::AdaptiveWorkerPool;
-use hyperi_rustlib::worker::BatchEngine;
-use hyperi_rustlib::worker::engine::{CommitMode, EngineError};
+use scalo::SelfRegulationGovernor;
+use scalo::config::shared::SharedConfig;
+use scalo::logger::{log_sampled, security};
+use scalo::memory::MemoryGuard;
+use scalo::metrics::TransportKind;
+use scalo::scaling::ScalingPressure;
+use scalo::transport::kafka::{KafkaTransport, total_consumer_lag};
+use scalo::transport::{PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch};
+use scalo::worker::AdaptiveWorkerPool;
+use scalo::worker::BatchEngine;
+use scalo::worker::engine::{CommitMode, EngineError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 /// Cadence for pushing per-pod scaling signals (assigned Kafka lag + outbound
-/// circuit state) into the [`ScalingSignalsCell`]. Fresher than the engine's
-/// own ~15s scaling tick so the inbound pressure term never lags the autoscaler
-/// poll, and cheap (one `librdkafka` stats read per tick). Mirrors the loader's
-/// 5s flush-tick push cadence.
+/// circuit state + memory ratio) into the runtime's unified [`ScalingPressure`]
+/// (the engine served at `/scaling/pressure` to KEDA). Fresher than the worker
+/// pool's own scaling tick so the inbound pressure term never lags the
+/// autoscaler poll, and cheap (one `librdkafka` stats read per tick). Mirrors
+/// the loader's 5s flush-tick push cadence.
 const SCALING_SIGNAL_INTERVAL_SECS: u64 = 5;
 
 // Per-site log spam guards
@@ -103,7 +103,8 @@ pub async fn run(
     worker_pool: Option<Arc<AdaptiveWorkerPool>>,
     engine: Arc<BatchEngine>,
     governor: Option<SelfRegulationGovernor>,
-    scaling_signals: Option<Arc<ScalingSignalsCell>>,
+    scaling: Option<Arc<ScalingPressure>>,
+    memory_guard: Arc<MemoryGuard>,
 ) -> crate::Result<()> {
     let consumer_config = kafka::build_consumer_config(&config.source);
     let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
@@ -145,15 +146,25 @@ pub async fn run(
     // composite pressure to 0 (more pods cannot relieve an unreachable broker).
     let circuit_open = Arc::new(AtomicBool::new(false));
 
-    // Per-pod scaling-signal ticker (2.8.11). The engine owns the recv loop, so
-    // there is no app-side poll tick to piggy-back on; a lightweight background
-    // task pushes the assigned Kafka lag + outbound circuit state on a fixed
-    // cadence. Stops when the shutdown token is cancelled. Only spawned when the
-    // ScalingEngine is live (`scaling.enabled` + `expression` feature) -- with
-    // it absent the cell is never read.
-    let signal_task = scaling_signals.map(|signals| {
+    // Per-pod scaling-signal ticker (scalo 2.9 unified engine). The batch
+    // engine owns the recv loop, so there is no app-side poll tick to piggy-back
+    // on; a lightweight background task feeds the runtime's shared
+    // `ScalingPressure` -- the engine served at `/scaling/pressure` to KEDA --
+    // on a fixed cadence. It pushes:
+    //   - the `kafka_lag` component (the assigned-partition lag, the primary
+    //     KEDA driver, registered via `ServiceApp::scaling_components`);
+    //   - the outbound circuit latch (open -> pressure gated to 0: more pods
+    //     cannot relieve a dead broker);
+    //   - the memory ratio (the never-OOM HARD gate: usage past the
+    //     memory_gate_threshold forces pressure to 100 -> immediate scale-up).
+    // These replace the old per-pod `ScalingSignalsCell` push, which fed the
+    // SAME source values into a now-removed second engine. Stops on shutdown.
+    // Only spawned when the runtime built the engine (`scaling.enabled`);
+    // absent it, `set_component`/`set_memory` would have no engine to feed.
+    let signal_task = scaling.map(|scaling| {
         let consumer = Arc::clone(&consumer);
         let circuit_open = Arc::clone(&circuit_open);
+        let memory_guard = Arc::clone(&memory_guard);
         let shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut tick =
@@ -169,8 +180,13 @@ pub async fn run(
                         // > 0, set in build_consumer_config); 0 if disabled.
                         let lag = total_consumer_lag(&consumer.stats()).max(0);
                         #[allow(clippy::cast_precision_loss)]
-                        signals.set_kafka_assigned_lag(lag as f64);
-                        signals.set_circuit_open(circuit_open.load(Ordering::Acquire));
+                        scaling.set_component("kafka_lag", lag as f64);
+                        scaling.set_circuit_open(circuit_open.load(Ordering::Acquire));
+                        // Feed the memory HARD gate from the shared cgroup-aware
+                        // guard (the SAME guard the governor's inbound brake
+                        // uses) so /scaling/pressure scales up before OOM.
+                        scaling
+                            .set_memory(memory_guard.current_bytes(), memory_guard.limit_bytes());
                     }
                 }
             }
@@ -226,7 +242,7 @@ pub async fn run_governed_pipeline<R, S>(
     circuit_open: Arc<AtomicBool>,
 ) -> crate::Result<()>
 where
-    R: hyperi_rustlib::transport::TransportReceiver,
+    R: scalo::transport::TransportReceiver,
     S: TransportSender,
 {
     ready_flag.store(true, Ordering::Release);
@@ -242,7 +258,7 @@ where
     // commit_tokens flow through untouched via `map_records`, so a fan-in never
     // under-acks the source offsets (at-least-once on the surviving set).
     // `hot_config` is retained for its other live fields (validated + reloaded)
-    // even though the partition-key path is dormant until rustlib #37 lands.
+    // even though the partition-key path is dormant until scalo #37 lands.
     let _ = &hot_config;
     let process = {
         let program = Arc::clone(&program);
@@ -385,7 +401,7 @@ where
 /// re-serialise. Returns ONLY the surviving records; records dropped by a VRL
 /// `abort`, a transform error, or a (de)serialise error are removed (and
 /// metered). Each surviving record's `key` is set to the sink topic so the
-/// Kafka producer routes it correctly (rustlib #37: `send`'s key arg IS the
+/// Kafka producer routes it correctly (scalo #37: `send`'s key arg IS the
 /// destination topic).
 #[allow(
     clippy::too_many_lines,
@@ -407,7 +423,7 @@ fn transform_records(
 
     let batch_bytes: u64 = records.iter().map(|r| r.payload.len() as u64).sum();
 
-    // Layer 1: DfeMetrics (platform)
+    // Layer 1: ServiceMetrics (platform)
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_received(batch_len as u64);
     }
@@ -519,7 +535,7 @@ fn transform_records(
     // Phase 3: serialise the surviving events back to their wire format and
     // build the output records. The Kafka producer routes each record to its
     // `key` (= the sink topic). Partition keying via the routing field is NOT
-    // settable through the sender trait (rustlib #37: `send`'s key arg IS the
+    // settable through the sender trait (scalo #37: `send`'s key arg IS the
     // destination topic, so there is no slot for a partition key); the routing
     // field stays a config surface only until #37 lands.
     let ser_start = Instant::now();
@@ -582,7 +598,7 @@ fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8
 }
 
 // NB: the dot-path partition-key extractor (`extract_key`) was removed in the
-// WorkBatch migration. rustlib #37 means the Kafka sender's `key` arg IS the
+// WorkBatch migration. scalo #37 means the Kafka sender's `key` arg IS the
 // destination topic (no slot for a partition key via `send`/`send_batch`), so
 // the produce path keys on the sink topic and there is nothing for an extractor
 // to feed. Re-introduce a per-record partition key once #37 lands.
@@ -651,7 +667,7 @@ mod tests {
     /// NOT disturb the source acks.
     #[test]
     fn test_transform_records_preserves_tokens_on_fan_in() {
-        use hyperi_rustlib::transport::CommitToken;
+        use scalo::transport::CommitToken;
 
         #[derive(Debug, Clone, PartialEq, Eq)]
         struct TestToken(u64);

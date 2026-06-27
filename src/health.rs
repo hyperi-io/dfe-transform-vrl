@@ -1,21 +1,21 @@
 // Project:   dfe-transform-vrl
 // File:      src/health.rs
-// Purpose:   Health endpoint HTTP server via rustlib
+// Purpose:   Health endpoint HTTP server via scalo
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Health endpoint server using hyperi-rustlib `http-server` module.
+//! Health endpoint server using scalo `http-server` module.
 //!
 //! Serves `/health/live` and `/health/ready` endpoints on the configured
-//! address (default :9000). The rustlib `HttpServer` provides these endpoints
+//! address (default :9000). The scalo `HttpServer` provides these endpoints
 //! automatically when `enable_health_endpoints` is true.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use hyperi_rustlib::http_server::{HttpServer, HttpServerConfig, Router};
+use scalo::http_server::{HttpServer, HttpServerConfig, Router};
 use tracing::info;
 
 /// Start the health server on the given address.

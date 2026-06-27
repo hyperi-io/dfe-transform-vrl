@@ -250,7 +250,7 @@ pub struct SourceConfig {
     pub session_timeout_ms: u32,
     pub commit_interval_ms: u32,
     /// librdkafka statistics emission interval (ms). 0 = disabled.
-    /// When enabled (and rustlib supports `StatsContext` in `KafkaTransport`),
+    /// When enabled (and scalo supports `StatsContext` in `KafkaTransport`),
     /// rdkafka broker RTT, consumer lag, and queue depth metrics auto-emit
     /// to the Prometheus `/metrics` endpoint.
     pub statistics_interval_ms: u32,
@@ -386,10 +386,10 @@ impl Default for ScalingConfig {
 }
 
 // =============================================================================
-// Config loading cascade — uses rustlib flat_env helpers
+// Config loading cascade — uses scalo flat_env helpers
 // =============================================================================
 
-use hyperi_rustlib::config::flat_env::{
+use scalo::config::flat_env::{
     ApplyFlatEnv, Normalize, flat_env_list, flat_env_string, flat_env_string_sensitive,
 };
 
@@ -398,7 +398,7 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
 /// Env var names are the contract with dfe-engine — do not rename.
-/// Uses rustlib `flat_env_*` helpers for consistent parsing and logging.
+/// Uses scalo `flat_env_*` helpers for consistent parsing and logging.
 impl ApplyFlatEnv for Config {
     fn apply_flat_env(&mut self, prefix: &str) {
         // Pipeline
@@ -550,7 +550,7 @@ impl Config {
     /// change notifications via `registry::on_change()`. Called after load
     /// and after each hot-reload.
     pub fn register_sections(&self) {
-        use hyperi_rustlib::config::registry;
+        use scalo::config::registry;
         registry::register("pipeline", &self.pipeline);
         registry::register("source", &self.source);
         registry::register("sink", &self.sink);
