@@ -32,3 +32,17 @@ rustflags = ["-C", "target-cpu=native"]
 [registries.hyperi]
 index = "sparse+https://hypersec.jfrog.io/artifactory/api/cargo/hyperi-cargo-virtual/index/"
 credential-provider = "cargo:token"
+
+# =============================================================================
+# Network resilience for crate downloads
+# =============================================================================
+# CI crate fetches intermittently die with "[16] Error in the HTTP2 framing
+# layer" (a curl/HTTP2 interaction against the crates.io CDN, not a code or
+# dependency fault). Force HTTP/1.1 to sidestep the framing bug entirely, and
+# raise the retry budget so any remaining transient blip self-heals instead of
+# failing the build.
+[http]
+multiplexing = false
+
+[net]
+retry = 10
