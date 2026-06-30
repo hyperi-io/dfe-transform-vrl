@@ -6,7 +6,9 @@ Embedded VRL (Vector Remap Language) transform engine with wrapper-controlled Ka
 
 dfe-transform-vrl is a Rust binary that runs VRL transforms on Kafka event streams.
 It embeds the VRL crate directly, giving full control over memory, backpressure,
-and wire format — without running Vector as a subprocess.
+and wire format - without running Vector as a subprocess. It is built on the
+[scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime (config cascade,
+logging, metrics, Kafka transport, health probes, scaling).
 
 **Why this exists (vs dfe-transform-vector):**
 
@@ -118,14 +120,11 @@ Prometheus metrics endpoint.
 
 ## Architecture
 
-```text
-Kafka source          VRL engine          Kafka sink
-(rdkafka consumer)    (in-process)        (rdkafka producer)
-     |                     |                    |
-     |  msgpack or JSON    |   Value in/out     |  msgpack or JSON
-     +-------------------->+-------------------->+
-     |                                          |
-     +<---- offset commit (after delivery) -----+
+```mermaid
+flowchart LR
+    SRC["Kafka source<br/>rdkafka consumer"] -->|"msgpack or JSON"| VRL["VRL engine<br/>in-process, Value in/out"]
+    VRL -->|"msgpack or JSON"| SINK["Kafka sink<br/>rdkafka producer"]
+    SINK -. "delivery confirmed -> commit source offset (at-least-once)" .-> SRC
 ```
 
 The wrapper owns both Kafka connections. Consumer offsets are committed only
@@ -146,8 +145,8 @@ cargo run -- config-check --config config.yaml
 
 ## Documentation
 
-- [docs/DESIGN.md](docs/DESIGN.md) — Full architecture and design
-- [config.example.yaml](config.example.yaml) — Configuration reference
+- [docs/DESIGN.md](docs/DESIGN.md) - Full architecture and design
+- [config.example.yaml](config.example.yaml) - Configuration reference
 
 ## License
 

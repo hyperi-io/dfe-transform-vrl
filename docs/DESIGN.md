@@ -25,30 +25,19 @@ negating the CPU and memory benefits of msgpack.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   dfe-transform-vrl                      │
-│                                                          │
-│  ┌──────────┐   ┌───────────┐   ┌────────────────┐     │
-│  │  Kafka    │   │    VRL    │   │    Kafka        │     │
-│  │ Transport │──▶│  Engine   │──▶│   Transport     │     │
-│  │ (rustlib) │   │           │   │   (rustlib)     │     │
-│  │          │   │           │   │                │     │
-│  │ msgpack  │   │  Value    │   │   msgpack      │     │
-│  │ or JSON  │   │  in/out   │   │   or JSON      │     │
-│  └──────────┘   └───────────┘   └────────────────┘     │
-│       │                               │                  │
-│       │         offset commit         │                  │
-│       ◀───────────────────────────────┘                  │
-│                (after delivery confirmation)             │
-│                                                          │
-│  ┌──────────────────┐  ┌───────────────────────┐        │
-│  │  Health Server    │  │  Metrics Server        │        │
-│  │  :9000           │  │  :9090                 │        │
-│  │  /health/live    │  │  /metrics              │        │
-│  │  /health/ready   │  │  prometheus format     │        │
-│  └──────────────────┘  └───────────────────────┘        │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph DP["Data path"]
+        direction LR
+        KS["Kafka source (scalo)<br/>msgpack or JSON"] -->|consume| VRL["VRL engine<br/>Value in/out"]
+        VRL --> KP["Kafka sink (scalo)<br/>msgpack or JSON"]
+        KP -. "offset commit after delivery (at-least-once)" .-> KS
+    end
+    subgraph OPS["Operational endpoints (same process)"]
+        direction LR
+        HS["Health :9000<br/>/health/live + /health/ready"]
+        MS["Metrics :9090<br/>/metrics (prometheus)"]
+    end
 ```
 
 ## Data Flow
@@ -67,7 +56,7 @@ Kafka partition message (raw bytes)
   │
   ├─ Serialise: rmp_serde::to_vec(&value) or serde_json::to_vec(&value)
   │
-  └─ KafkaTransport::send() (rustlib) → delivery future
+  └─ KafkaTransport::send() (scalo) → delivery future
 ```
 
 ### Offset Commit Strategy (At-Least-Once)
@@ -85,7 +74,7 @@ If the process crashes before commit, messages are re-consumed and re-processed
 
 ### Format Detection
 
-Uses `hyperi-rustlib::transport::FormatDetector`:
+Uses `scalo::transport::FormatDetector`:
 
 - Auto-sense mode (default): first message on a partition locks the format
 - Force mode: explicit msgpack or JSON only
@@ -215,7 +204,7 @@ Configuration changes are split into two categories:
 ### Hot-reloaded (takes effect on next batch)
 
 These fields are read from `SharedConfig<HotConfig>` at the start of each batch
-iteration. Changes propagate via rustlib's `ConfigReloader` (file polling + SIGHUP).
+iteration. Changes propagate via scalo's `ConfigReloader` (file polling + SIGHUP).
 
 | Field | What it controls |
 |-------|-----------------|
