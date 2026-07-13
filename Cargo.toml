@@ -66,10 +66,11 @@ bytes = ">=1.7"
 # owns the inbound pause-partitions brake + AIMD byte budget over the shared
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
-scalo = { version = ">=2.10.0, <3", features = [
+scalo = { version = ">=2.10.4, <3", features = [
     "cli-service",
     "config",
     "config-reload",
+    "config-schema",
     "deployment",
     "governor",
     "http-server",
@@ -83,6 +84,10 @@ scalo = { version = ">=2.10.0, <3", features = [
     "worker-batch",
     "worker-pool",
 ] }
+
+# JSON Schema derivation for the reflectable config-schema capability
+# (scalo-rs#6). Same version range as scalo so cargo unifies to one schemars.
+schemars = { version = ">=1.2.1, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # VRL — Vector Remap Language (embedded transform engine)
 vrl = ">=0.31"

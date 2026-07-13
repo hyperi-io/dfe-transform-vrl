@@ -120,12 +120,56 @@ pub fn contract() -> DeploymentContract {
             cpu_threshold: 80,
             ..Default::default()
         })),
-        schema_version: 2,
+        schema_version: 3,
         oci_labels: scalo::deployment::OciLabels {
             licenses: "BUSL-1.1".into(),
             ..Default::default()
         },
+        // Reflectable config (scalo-rs#6): derived JSON Schema of the full
+        // Config + the capability catalog (the VRL transform + the enrichment-
+        // table source types the schema cannot self-describe as friendly forms).
+        config_schema: Some(scalo::deployment::config_schema_json::<crate::config::Config>()),
+        capabilities: capabilities(),
     }
+}
+
+/// Capability catalog for dfe-transform-vrl: the VRL transform engine plus the
+/// enrichment-table source types (grounded in `config::loader`). See
+/// `docs/reflectable-config-shape.md` in scalo-rs for the shape.
+fn capabilities() -> Vec<scalo::deployment::Capability> {
+    use scalo::deployment::{Capability, FieldSpec};
+    vec![
+        Capability::new("transform", "vrl")
+            .description("Vector Remap Language transform engine: applies ordered .vrl programs to each event.")
+            .maturity("stable")
+            .field(FieldSpec::string("dir").description("Directory of .vrl files, applied sorted by filename."))
+            .field(FieldSpec::list("files").description("Explicit ordered list of .vrl file paths.")),
+        Capability::source("enrichment")
+            .description("Enrichment tables queried from VRL via get_enrichment_table_record().")
+            .maturity("stable")
+            .children(vec![
+                Capability::service("file")
+                    .description("CSV/JSON/YAML file (format auto-detected when unset).")
+                    .field(FieldSpec::string("path").required().description("Path to the data file."))
+                    .field(
+                        FieldSpec::enumeration("format", ["csv", "json", "yaml", "auto"])
+                            .description("Explicit file format (default auto)."),
+                    ),
+                Capability::service("mmdb")
+                    .description("MaxMind DB (e.g. GeoIP) lookups.")
+                    .field(FieldSpec::string("path").required().description("Path to the .mmdb file.")),
+                Capability::service("stix")
+                    .description("STIX/TAXII threat-intel indicators (file or TAXII URL).")
+                    .field(FieldSpec::string("path").description("Local STIX bundle path."))
+                    .field(FieldSpec::string("url").description("TAXII collection URL."))
+                    .field(FieldSpec::string("collection").description("TAXII collection id."))
+                    .field(FieldSpec::string("auth").description("Auth spec (type + env-var refs for bearer/basic/api_key).")),
+                Capability::service("sqlite")
+                    .description("SQLite query result materialised as a lookup table.")
+                    .field(FieldSpec::string("path").required().description("Path to the SQLite database."))
+                    .field(FieldSpec::string("query").required().description("SELECT query; first column is the lookup key.")),
+            ]),
+    ]
 }
 
 #[cfg(test)]
@@ -140,6 +184,31 @@ mod tests {
         assert_eq!(c.binary_name, "dfe-transform-vrl");
         assert_eq!(c.env_prefix, "DFE_TRANSFORM");
         assert_eq!(c.metric_prefix, "transform_vrl");
+    }
+
+    #[test]
+    fn test_contract_carries_reflectable_config() {
+        let c = contract();
+        assert!(c.config_schema.is_some());
+        assert_eq!(c.schema_version, 3);
+        assert!(!c.capabilities.is_empty());
+        // The VRL transform capability + the enrichment source family.
+        assert!(c.capabilities.iter().any(|cap| cap.name == "vrl"));
+        let enrich = c
+            .capabilities
+            .iter()
+            .find(|cap| cap.name == "enrichment")
+            .expect("enrichment capability");
+        let kinds: Vec<&str> = enrich.children.iter().map(|s| s.name.as_str()).collect();
+        assert!(kinds.contains(&"stix") && kinds.contains(&"sqlite"));
+    }
+
+    /// The committed reflectable artefacts under docs/ must not drift from a
+    /// fresh regen. Regenerate with `dfe-transform-vrl config-schema --dir docs`.
+    #[test]
+    fn test_config_artifacts_do_not_drift() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        scalo::deployment::assert_no_config_artifact_drift(&contract(), dir);
     }
 
     #[test]

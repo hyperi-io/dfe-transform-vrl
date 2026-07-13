@@ -1,0 +1,118 @@
+[
+  {
+    "kind": "transform",
+    "name": "vrl",
+    "description": "Vector Remap Language transform engine: applies ordered .vrl programs to each event.",
+    "maturity": "stable",
+    "fields": [
+      {
+        "name": "dir",
+        "type": "string",
+        "required": false,
+        "description": "Directory of .vrl files, applied sorted by filename."
+      },
+      {
+        "name": "files",
+        "type": "list",
+        "required": false,
+        "description": "Explicit ordered list of .vrl file paths."
+      }
+    ]
+  },
+  {
+    "kind": "source",
+    "name": "enrichment",
+    "description": "Enrichment tables queried from VRL via get_enrichment_table_record().",
+    "maturity": "stable",
+    "children": [
+      {
+        "kind": "service",
+        "name": "file",
+        "description": "CSV/JSON/YAML file (format auto-detected when unset).",
+        "fields": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": true,
+            "description": "Path to the data file."
+          },
+          {
+            "name": "format",
+            "type": "enum",
+            "required": false,
+            "description": "Explicit file format (default auto).",
+            "enum_values": [
+              "csv",
+              "json",
+              "yaml",
+              "auto"
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "service",
+        "name": "mmdb",
+        "description": "MaxMind DB (e.g. GeoIP) lookups.",
+        "fields": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": true,
+            "description": "Path to the .mmdb file."
+          }
+        ]
+      },
+      {
+        "kind": "service",
+        "name": "stix",
+        "description": "STIX/TAXII threat-intel indicators (file or TAXII URL).",
+        "fields": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": false,
+            "description": "Local STIX bundle path."
+          },
+          {
+            "name": "url",
+            "type": "string",
+            "required": false,
+            "description": "TAXII collection URL."
+          },
+          {
+            "name": "collection",
+            "type": "string",
+            "required": false,
+            "description": "TAXII collection id."
+          },
+          {
+            "name": "auth",
+            "type": "string",
+            "required": false,
+            "description": "Auth spec (type + env-var refs for bearer/basic/api_key)."
+          }
+        ]
+      },
+      {
+        "kind": "service",
+        "name": "sqlite",
+        "description": "SQLite query result materialised as a lookup table.",
+        "fields": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": true,
+            "description": "Path to the SQLite database."
+          },
+          {
+            "name": "query",
+            "type": "string",
+            "required": true,
+            "description": "SELECT query; first column is the lookup key."
+          }
+        ]
+      }
+    ]
+  }
+]

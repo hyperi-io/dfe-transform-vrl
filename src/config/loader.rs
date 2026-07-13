@@ -20,7 +20,7 @@ use tracing::debug;
 use crate::Result;
 
 /// SASL authentication for Kafka.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SaslConfig {
     pub enabled: bool,
@@ -53,7 +53,7 @@ impl Default for SaslConfig {
 }
 
 /// TLS configuration for Kafka.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TlsConfig {
     pub enabled: bool,
@@ -86,7 +86,7 @@ pub struct TlsConfig {
 /// - `health.address` — HTTP server binds to socket at startup
 /// - `metrics.address` — metrics server binds to socket at startup
 /// - `logging.*` — tracing subscriber configured at startup
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     pub pipeline: PipelineConfig,
@@ -106,7 +106,7 @@ pub struct Config {
 /// Supports two config formats:
 /// - **New (tagged):** `source` field with type-tagged enum (`file`, `mmdb`, `stix`, `sqlite`)
 /// - **Legacy (flat):** `path` + `key_columns` only (treated as `File` with auto format detection)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(default)]
 pub struct EnrichmentTableConfig {
     /// Table name used in VRL: `get_enrichment_table_record("name", ...)`.
@@ -153,7 +153,7 @@ impl EnrichmentTableConfig {
 }
 
 /// Source definition for an enrichment table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum EnrichmentSourceConfig {
     File {
@@ -181,7 +181,7 @@ pub enum EnrichmentSourceConfig {
 }
 
 /// File format for enrichment table loading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FileFormat {
     Csv,
@@ -191,7 +191,7 @@ pub enum FileFormat {
 }
 
 /// Authentication for STIX/TAXII sources.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StixAuthConfig {
     /// Auth type: `bearer`, `basic`, or `api_key`.
     #[serde(rename = "type")]
@@ -205,14 +205,14 @@ pub struct StixAuthConfig {
 }
 
 /// Periodic refresh configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RefreshConfig {
     /// Refresh interval in seconds. Minimum enforced: 60.
     pub interval_secs: u64,
 }
 
 /// Pipeline identity and processing settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PipelineConfig {
     /// Pipeline name (used in metrics labels, Kafka `group_id`, logging).
@@ -234,7 +234,7 @@ impl Default for PipelineConfig {
 }
 
 /// Kafka source configuration (wrapper-controlled consumer).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
     pub brokers: Vec<String>,
@@ -278,7 +278,7 @@ impl Default for SourceConfig {
 }
 
 /// Kafka sink configuration (wrapper-controlled producer).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
     pub brokers: Vec<String>,
@@ -314,7 +314,7 @@ impl Default for SinkConfig {
 }
 
 /// VRL transform file configuration.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TransformConfig {
     /// Directory to load all .vrl transform files from (sorted by filename).
@@ -324,7 +324,7 @@ pub struct TransformConfig {
 }
 
 /// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct HealthConfig {
     pub address: String,
@@ -339,7 +339,7 @@ impl Default for HealthConfig {
 }
 
 /// Metrics endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub address: String,
@@ -354,7 +354,7 @@ impl Default for MetricsConfig {
 }
 
 /// Logging configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct LoggingConfig {
     pub level: String,
@@ -371,7 +371,7 @@ impl Default for LoggingConfig {
 }
 
 /// KEDA scaling pressure configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ScalingConfig {
     pub pressure_threshold: f64,
