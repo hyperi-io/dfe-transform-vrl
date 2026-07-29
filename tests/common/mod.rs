@@ -184,7 +184,6 @@ macro_rules! skip_if_no_kafka {
     () => {
         let kf = crate::common::kafka_test_config();
         if !kf.is_reachable() {
-            crate::common::require_service_in_ci("Kafka", &kf.brokers);
             eprintln!(
                 "Skipping: Kafka not reachable at {} (TEST_MODE={:?})",
                 kf.brokers,
@@ -302,16 +301,19 @@ impl KafkaTestEnv {
     }
 }
 
-/// Panic if a backing service is missing while running in CI.
+/// Panic if NEITHER a live broker nor Docker is available while running in CI.
 ///
-/// Skipping is right on a developer machine, where the daemon may simply be
-/// down. In CI it makes the test pass VACUOUSLY: the suite reports green while
-/// exercising none of the integration surface. A gate that disappears along
-/// with its environment is not a gate.
+/// Scoped to "no path at all", not to "the live broker is absent". CI is not
+/// promised an external Kafka, but it does provide a container runtime, so
+/// `KafkaTestEnv::ensure()` should always find one of the two. Finding neither
+/// means the test would pass VACUOUSLY -- green while exercising nothing.
+///
+/// The live-only probe (`skip_if_no_kafka!`) stays a plain skip for the same
+/// reason: failing on it would assert an environment nobody agreed to provide.
 pub fn require_service_in_ci(what: &str, detail: &str) {
     assert!(
         std::env::var_os("CI").is_none(),
-        "{what} unreachable in CI ({detail}) -- integration tests must RUN here, \
+        "{what} unavailable in CI ({detail}) -- integration tests must RUN here, \
          not skip. Skipping would report green while testing nothing."
     );
 }
