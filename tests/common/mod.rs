@@ -326,10 +326,7 @@ macro_rules! ensure_kafka_or_skip {
         match $crate::common::KafkaTestEnv::ensure().await {
             Some(env) => env,
             None => {
-                $crate::common::require_service_in_ci(
-                    "Kafka",
-                    "no live broker and no Docker",
-                );
+                $crate::common::require_service_in_ci("Kafka", "no live broker and no Docker");
                 eprintln!(
                     "SKIP: no live Kafka and Docker/testcontainers unavailable. \
                      Set $KAFKA_BROKERS or run Docker."
