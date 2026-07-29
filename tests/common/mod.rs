@@ -184,6 +184,7 @@ macro_rules! skip_if_no_kafka {
     () => {
         let kf = crate::common::kafka_test_config();
         if !kf.is_reachable() {
+            crate::common::require_service_in_ci("Kafka", &kf.brokers);
             eprintln!(
                 "Skipping: Kafka not reachable at {} (TEST_MODE={:?})",
                 kf.brokers,
@@ -257,10 +258,19 @@ impl KafkaTestEnv {
     }
 
     async fn spawn_container() -> Result<Self, String> {
+        use testcontainers::ImageExt;
         use testcontainers::runners::AsyncRunner;
         use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
 
+        // Pinned here, not left to the module default of 3.8.0. A tag baked
+        // into a dependency's source is invisible to dependency review:
+        // Renovate reads Cargo.toml, correctly reports the crate current, and
+        // never sees the image.
+        // renovate: datasource=docker depName=apache/kafka-native
+        const KAFKA_TAG: &str = "4.3.1";
+
         let container = Kafka::default()
+            .with_tag(KAFKA_TAG)
             .start()
             .await
             .map_err(|e| format!("start Kafka container: {e}"))?;
@@ -292,6 +302,20 @@ impl KafkaTestEnv {
     }
 }
 
+/// Panic if a backing service is missing while running in CI.
+///
+/// Skipping is right on a developer machine, where the daemon may simply be
+/// down. In CI it makes the test pass VACUOUSLY: the suite reports green while
+/// exercising none of the integration surface. A gate that disappears along
+/// with its environment is not a gate.
+pub fn require_service_in_ci(what: &str, detail: &str) {
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{what} unreachable in CI ({detail}) -- integration tests must RUN here, \
+         not skip. Skipping would report green while testing nothing."
+    );
+}
+
 /// Skip the test (with eprintln explanation) if no Kafka can be made available.
 /// This is used when neither a live broker nor Docker is reachable in the env.
 #[macro_export]
@@ -300,6 +324,10 @@ macro_rules! ensure_kafka_or_skip {
         match $crate::common::KafkaTestEnv::ensure().await {
             Some(env) => env,
             None => {
+                $crate::common::require_service_in_ci(
+                    "Kafka",
+                    "no live broker and no Docker",
+                );
                 eprintln!(
                     "SKIP: no live Kafka and Docker/testcontainers unavailable. \
                      Set $KAFKA_BROKERS or run Docker."
