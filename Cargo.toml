@@ -144,7 +144,6 @@ jemalloc = ["dep:tikv-jemallocator"]
 # pgo-driver: build the workload-driver bin used by scripts/pgo-workload.sh
 # during PGO instrumentation. NOT enabled in production builds.
 pgo-driver = ["dep:rdkafka"]
-transport-memory = ["scalo/transport-memory"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
 
@@ -155,6 +154,13 @@ tempfile = ">=3.20, <4"
 # Container is cleaned up via RAII Drop when the test ends.
 testcontainers = ">=0.27, <0.28"
 testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
+# MemoryTransport for the broker-free pipeline tests
+# (tests/integration/pipeline_memory.rs). A dev-dependency, NOT a crate
+# feature: an optional feature outside the default set gets compiled away by
+# hyperi-ci's `features: default`, which deletes those tests from CI instead of
+# failing. Here they always build, and the shipped binary still does not carry
+# the transport.
+scalo = { version = ">=2.10.4, <3", features = ["transport-memory"] }
 
 [lints.rust]
 unsafe_code = "forbid"

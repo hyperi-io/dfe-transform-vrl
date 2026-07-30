@@ -49,7 +49,10 @@ mod vrl_realworld;
 #[path = "integration/vrl_transforms.rs"]
 mod vrl_transforms;
 
-#[cfg(feature = "transport-memory")]
+// Not feature-gated. A `#[cfg(feature = ...)]` on a feature outside the
+// default set is compiled away by hyperi-ci's `features: default`, which
+// deletes these pipeline tests from every CI run rather than failing.
+// MemoryTransport arrives as a dev-dependency so the module always builds.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/pipeline_memory.rs"]
 mod pipeline_memory;
