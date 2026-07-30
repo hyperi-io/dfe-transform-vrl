@@ -102,7 +102,7 @@ fn seed_producer_config(kf: &common::KafkaTestConfig, topic: &str) -> KafkaConfi
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_pipeline_run_end_to_end_with_live_kafka() {
-    let env = ensure_kafka_or_skip!();
+    let env = ensure_kafka_or_skip!("pipeline-run-end-to-end");
     let kf = env.config();
 
     let source_topic = common::test_topic("cli-src");
