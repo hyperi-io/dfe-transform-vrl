@@ -28,8 +28,8 @@ pub fn contract() -> DeploymentContract {
         description: "Embedded VRL transform engine — Kafka-to-Kafka pipelines".into(),
         metrics_port: 9090,
         health: HealthContract {
-            liveness_path: "/health/live".into(),
-            readiness_path: "/health/ready".into(),
+            liveness_path: "/livez".into(),
+            readiness_path: "/readyz".into(),
             metrics_path: "/metrics".into(),
         },
         env_prefix: "DFE_TRANSFORM".into(),
@@ -101,8 +101,7 @@ pub fn contract() -> DeploymentContract {
             }
         })),
         depends_on: vec!["kafka".into()],
-        // `for_rustlib_features` is scalo's own (stable) API name -- keep it.
-        native_deps: NativeDepsContract::for_rustlib_features(&["transport-kafka"], &base_image),
+        native_deps: NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image),
         image_profile: ImageProfile::Production,
         // KedaContract is #[non_exhaustive] (scalo) -- build it from a
         // KedaConfig holding this app's real KEDA values and convert. The
@@ -214,8 +213,8 @@ mod tests {
     #[test]
     fn test_contract_health_paths() {
         let c = contract();
-        assert_eq!(c.health.liveness_path, "/health/live");
-        assert_eq!(c.health.readiness_path, "/health/ready");
+        assert_eq!(c.health.liveness_path, "/livez");
+        assert_eq!(c.health.readiness_path, "/readyz");
         assert_eq!(c.health.metrics_path, "/metrics");
     }
 

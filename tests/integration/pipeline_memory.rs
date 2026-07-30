@@ -10,16 +10,15 @@
 //! ([`pipeline::run_governed_pipeline`]) using in-memory channels instead of
 //! Kafka. These cover the hot path that normally requires a running broker.
 //!
-//! Uses the `transport-memory` feature to pull in scalo's MemoryTransport.
-//! Each test spins up a send-half (to simulate upstream producers) and a
-//! receive-half (to observe the pipeline's sink output).
+//! scalo's MemoryTransport arrives via the `scalo` DEV-dependency, so this
+//! module always compiles. Each test spins up a send-half (to simulate
+//! upstream producers) and a receive-half (to observe the pipeline's sink
+//! output).
 //!
 //! The engine carries NO byte budget (no governor here), so `run_governed`
 //! delegates to the whole-batch `run_workbatch` loop. Shutdown is driven by a
 //! [`CancellationToken`] (the driver returns cleanly on cancel). Sends pass
 //! owned [`Bytes`]; the sink output is read as `WorkBatch.records`.
-
-#![cfg(feature = "transport-memory")]
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

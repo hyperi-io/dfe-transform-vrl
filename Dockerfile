@@ -42,7 +42,7 @@ USER appuser
 EXPOSE 9090 9000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -sf http://localhost:9090/health/live > /dev/null || exit 1
+    CMD curl -sf http://localhost:9090/livez > /dev/null || exit 1
 
 ENTRYPOINT ["dfe-transform-vrl"]
 CMD ["--config", "/etc/dfe-transform-vrl/config.yaml"]
