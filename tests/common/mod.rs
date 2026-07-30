@@ -198,6 +198,132 @@ macro_rules! skip_if_no_kafka {
 pub(crate) use skip_if_no_kafka;
 
 // =============================================================================
+// Container naming and cleanup
+// =============================================================================
+//
+// Every container this suite starts carries a name that says which repo, which
+// suite and which backing service it is, so an operator looking at `docker ps`
+// can tell what left it behind. testcontainers' default is a random hex name,
+// which is untraceable the moment one survives.
+//
+// Naming: `dfe-transform-vrl-test-integration-<test>-<service>`, because every
+// container here is owned by exactly ONE test. nextest runs each test in its own
+// process, so nothing is shared even when it looks like it should be -- three
+// tests calling `ensure_kafka_or_skip!()` start three brokers. That was already
+// true with testcontainers' random names; the only thing a single shared name
+// would add is a collision, where the first test wins and the rest fail with
+// "name is already in use" and skip. `container_name` still takes `None` for a
+// container started once for a whole binary, but no suite does that today.
+//
+// Cleanup is belt AND braces, because `Drop` alone is not enough:
+//
+//   - Normal completion and a panic both unwind, so `Drop` stops the container.
+//   - A SIGKILL, an abort, or Ctrl-C on the test run does NOT. `Drop` never
+//     runs and the container survives.
+//
+// testcontainers-rs 0.27 has no resource reaper (no Ryuk), so the second case
+// is the one that leaves crap behind. A deterministic name would then make it
+// WORSE than a random one -- the leaked container holds the name and every
+// later run fails with "name already in use". `reap_stale` closes that: remove
+// any container already holding the name before starting, so a leak costs the
+// next run nothing and self-heals.
+//
+// The label goes on as well, so a sweep can find these regardless of name:
+//   docker rm -f $(docker ps -aq --filter label=io.hyperi.test.suite=dfe-transform-vrl-integration)
+
+/// Label marking every container this suite starts, for bulk cleanup.
+pub const TEST_SUITE_LABEL: (&str, &str) =
+    ("io.hyperi.test.suite", "dfe-transform-vrl-integration");
+
+/// Labels for a container this suite starts: what it is, and whose run owns it.
+///
+/// The name says what and why; these say WHO, which is what you need when
+/// several runs share a machine and one has left something behind. The pid is
+/// the owning test process -- `ps -p <pid>` answers "is that run still alive, or
+/// is this rubbish I can remove?".
+fn test_labels(service: &str) -> Vec<(String, String)> {
+    vec![
+        (
+            TEST_SUITE_LABEL.0.to_string(),
+            TEST_SUITE_LABEL.1.to_string(),
+        ),
+        (
+            "io.hyperi.test.repo".to_string(),
+            "dfe-transform-vrl".to_string(),
+        ),
+        ("io.hyperi.test.service".to_string(), service.to_string()),
+        (
+            "io.hyperi.test.owner-pid".to_string(),
+            std::process::id().to_string(),
+        ),
+    ]
+}
+
+/// Container name for a backing service in this suite.
+///
+/// Pass `Some(test)` -- the owning test -- for anything a test starts for itself,
+/// which is everything here. `None` is for a container started once for a whole
+/// test binary; nothing does that today, and using it from several tests would
+/// make them collide on the name rather than share the container.
+///
+/// Names are lowercased and non-alphanumerics collapse to `-`, because Docker
+/// only accepts `[a-zA-Z0-9][a-zA-Z0-9_.-]*`, and a Rust test path
+/// (`kafka::test_roundtrip`) has colons in it.
+#[must_use]
+pub fn container_name(test: Option<&str>, service: &str) -> String {
+    let slug = |s: &str| {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    };
+    test.map_or_else(
+        || format!("dfe-transform-vrl-test-integration-{}", slug(service)),
+        |t| {
+            format!(
+                "dfe-transform-vrl-test-integration-{}-{}",
+                slug(t),
+                slug(service)
+            )
+        },
+    )
+}
+
+/// Remove a DEAD container holding `name`, so a leak from a killed run cannot
+/// block this one.
+///
+/// Never touches a RUNNING container. Two concurrent runs of this suite on one
+/// machine share these names, and force-removing a live one would sabotage the
+/// other run -- a confusing mid-test failure in a process that did nothing
+/// wrong. Leaving it means the start below fails with "name is already in use",
+/// which says what actually happened.
+///
+/// Best-effort otherwise: no Docker, nothing to remove, or an already-gone
+/// container are all fine. A failure here must not fail the test -- the start
+/// that follows reports the real problem.
+pub fn reap_stale(name: &str) {
+    let running = std::process::Command::new("docker")
+        .args(["ps", "--quiet", "--filter", &format!("name=^{name}$")])
+        .output();
+    // Non-empty stdout means a container by this name is up. Leave it alone.
+    if let Ok(out) = &running
+        && !out.stdout.is_empty()
+    {
+        return;
+    }
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "--force", "--volumes", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+// =============================================================================
 // Live-or-Testcontainers Kafka helper
 // =============================================================================
 
@@ -213,7 +339,7 @@ pub(crate) use skip_if_no_kafka;
 ///
 /// Usage:
 /// ```ignore
-/// let env = KafkaTestEnv::ensure().await;
+/// let env = KafkaTestEnv::ensure("my-test-name").await;
 /// let kf = env.config();
 /// // ...use kf.brokers...
 /// // env drops here, container stops if one was spawned
@@ -221,30 +347,34 @@ pub(crate) use skip_if_no_kafka;
 #[allow(dead_code)]
 pub struct KafkaTestEnv {
     config: KafkaTestConfig,
-    // Kept alive for RAII; dropped (and container stopped) when KafkaTestEnv drops.
-    _container:
-        Option<testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>>,
+    // Kept alive for RAII; dropped (and container stopped) when KafkaTestEnv
+    // drops. Also read by `manages_container`, so it carries no underscore --
+    // that prefix would claim nothing looks at it.
+    container: Option<testcontainers::ContainerAsync<testcontainers_modules::kafka::apache::Kafka>>,
 }
 
 #[allow(dead_code)]
 impl KafkaTestEnv {
     /// Ensure a Kafka broker is available — either live or via testcontainers.
     ///
+    /// `test` names the calling test and goes into the container name, so
+    /// concurrent tests do not collide on it.
+    ///
     /// If Docker isn't available and no live broker is configured, returns `None`
     /// so callers can `return` (skip) the test.
-    pub async fn ensure() -> Option<Self> {
+    pub async fn ensure(test: &str) -> Option<Self> {
         let live = kafka_test_config();
         if live.is_reachable() {
             eprintln!("Using live Kafka at {}", live.brokers);
             return Some(Self {
                 config: live,
-                _container: None,
+                container: None,
             });
         }
 
         // No live broker — try to spawn a testcontainers Kafka.
         eprintln!("No live Kafka reachable — attempting to spawn testcontainers Kafka...");
-        match Self::spawn_container().await {
+        match Self::spawn_container(test).await {
             Ok(env) => {
                 eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
                 Some(env)
@@ -256,7 +386,7 @@ impl KafkaTestEnv {
         }
     }
 
-    async fn spawn_container() -> Result<Self, String> {
+    async fn spawn_container(test: &str) -> Result<Self, String> {
         use testcontainers::ImageExt;
         use testcontainers::runners::AsyncRunner;
         use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
@@ -268,8 +398,12 @@ impl KafkaTestEnv {
         // renovate: datasource=docker depName=apache/kafka-native
         const KAFKA_TAG: &str = "4.3.1";
 
+        let name = container_name(Some(test), "kafka");
+        reap_stale(&name);
         let container = Kafka::default()
             .with_tag(KAFKA_TAG)
+            .with_container_name(&name)
+            .with_labels(test_labels("kafka"))
             .start()
             .await
             .map_err(|e| format!("start Kafka container: {e}"))?;
@@ -292,12 +426,18 @@ impl KafkaTestEnv {
                 sasl_user: None,
                 sasl_password: None,
             },
-            _container: Some(container),
+            container: Some(container),
         })
     }
 
     pub const fn config(&self) -> &KafkaTestConfig {
         &self.config
+    }
+
+    /// Whether THIS env started a container, as opposed to pointing at a live
+    /// broker. The hygiene test has nothing to inspect in the live case.
+    pub const fn manages_container(&self) -> bool {
+        self.container.is_some()
     }
 }
 
@@ -320,10 +460,14 @@ pub fn require_service_in_ci(what: &str, detail: &str) {
 
 /// Skip the test (with eprintln explanation) if no Kafka can be made available.
 /// This is used when neither a live broker nor Docker is reachable in the env.
+///
+/// Takes the calling test's name, which names the container it may start. It is
+/// passed rather than derived because Rust has no way to read the current test's
+/// name, and a shared name would make concurrent tests collide.
 #[macro_export]
 macro_rules! ensure_kafka_or_skip {
-    () => {{
-        match $crate::common::KafkaTestEnv::ensure().await {
+    ($test:expr) => {{
+        match $crate::common::KafkaTestEnv::ensure($test).await {
             Some(env) => env,
             None => {
                 $crate::common::require_service_in_ci("Kafka", "no live broker and no Docker");

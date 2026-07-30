@@ -102,7 +102,7 @@ fn default_engine() -> Arc<BatchEngine> {
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_json_transform() {
-    let env = ensure_kafka_or_skip!();
+    let env = ensure_kafka_or_skip!("produce-consume-json-transform");
     let kf = env.config();
     let source_topic = common::test_topic("json-src");
     let sink_topic = common::test_topic("json-sink");
@@ -215,7 +215,7 @@ async fn test_produce_consume_json_transform() {
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_msgpack_transform() {
-    let env = ensure_kafka_or_skip!();
+    let env = ensure_kafka_or_skip!("produce-consume-msgpack-transform");
     let kf = env.config();
     let source_topic = common::test_topic("mp-src");
     let sink_topic = common::test_topic("mp-sink");
@@ -307,7 +307,7 @@ async fn test_produce_consume_msgpack_transform() {
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_vrl_abort_drops_events() {
-    let env = ensure_kafka_or_skip!();
+    let env = ensure_kafka_or_skip!("vrl-abort-drops-events");
     let kf = env.config();
     let source_topic = common::test_topic("abort-src");
     let sink_topic = common::test_topic("abort-sink");
@@ -335,7 +335,14 @@ async fn test_vrl_abort_drops_events() {
     let producer_config = producer_kafka_config(&kf, &sink_topic);
     let producer = KafkaTransport::new(&producer_config).await.unwrap();
 
-    let program = Arc::new(compile_vrl(r#"if !.keep { abort }"#, None).unwrap().program);
+    // `!.keep` does not compile: a path resolves to `any`, and VRL refuses to
+    // negate a non-boolean. Comparing against `true` carries the same intent
+    // (drop anything not explicitly kept) for any incoming type.
+    let program = Arc::new(
+        compile_vrl(r#"if .keep != true { abort }"#, None)
+            .unwrap()
+            .program,
+    );
 
     let hot = default_hot_config();
     let metrics = Arc::new(TransformMetrics::default());
