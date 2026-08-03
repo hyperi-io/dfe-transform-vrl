@@ -29,7 +29,7 @@
 #   - Starts single-node Kafka (KRaft, auto-create topics)
 #   - Writes ephemeral wrapper config + VRL transform fixture
 #   - Starts the passed-in wrapper binary in background
-#   - Waits for the wrapper's /health/ready to return 200
+#   - Waits for the wrapper's /readyz to return 200
 #   - Runs pgo-driver to produce messages to the source topic for the
 #     configured duration (wrapper consumes, transforms, produces to sink)
 #   - Cleans up (traps EXIT): kills wrapper, removes container
@@ -268,7 +268,7 @@ sink:
 transforms:
   dir: "TRANSFORMS_DIR_PLACEHOLDER"
 
-# Metrics: rustlib's CLI framework now owns the metrics server (default
+# Metrics: scalo's CLI framework now owns the metrics server (default
 # :9090, overridable via the `METRICS_ADDR` env var or `--metrics-addr`).
 # The duplicate per-app `MetricsManager` was removed in GH issue #11.
 # `config.metrics.address` is retained for backward-compat but ignored.
@@ -276,7 +276,7 @@ health:
   address: "127.0.0.1:9000"
 
 metrics:
-  address: "127.0.0.1:9090"  # ignored by app; rustlib uses METRICS_ADDR
+  address: "127.0.0.1:9090"  # ignored by app; scalo uses METRICS_ADDR
 
 logging:
   level: "warn"
@@ -309,7 +309,9 @@ for attempt in $(seq 1 60); do
         tail -100 "$WORK_DIR/wrapper.log" >&2
         exit 1
     fi
-    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9000/health/ready"; then
+    # /readyz, not the /health/ready alias scalo retired. The alias 404s, so
+    # this loop burned its full 60s against a wrapper that was already serving.
+    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9000/readyz"; then
         echo "pgo-workload: wrapper ready (attempt $attempt)"
         break
     fi
