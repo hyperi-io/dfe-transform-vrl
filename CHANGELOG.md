@@ -3,6 +3,8 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.14](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.13...v1.1.14) (2026-08-17)
+
 ## [1.1.13](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.12...v1.1.13) (2026-08-04)
 
 ## [1.1.12](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.11...v1.1.12) (2026-08-03)
