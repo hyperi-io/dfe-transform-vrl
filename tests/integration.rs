@@ -38,6 +38,10 @@ mod config;
 mod enrichment;
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "integration/filebeat_pipeline.rs"]
+mod filebeat_pipeline;
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/vrl_edge_cases.rs"]
 mod vrl_edge_cases;
 

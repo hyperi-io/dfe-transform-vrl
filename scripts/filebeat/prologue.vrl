@@ -1,0 +1,125 @@
+##############################################################################
+# dfe-transform-vrl bundled pipeline: filebeat-compat -- INTERIM
+#
+# Single-file port of the DFE 2.1 Vector filebeat transform templates
+# (dfe-vector-templates src/core_templates 14x family):
+#   140-transform-filebeat-cisco-meraki-logs
+#   141-transform-filebeat-cisco-ios-logs
+#   143..149-transform-filebeat-cisco-umbrella-*-logs (7 files, one body)
+#
+# The DFE 2.1 Vector deployment split this across per-module files to work
+# around Vector's large-VRL-file limits, and its route transform fanned
+# every {message,tags,timestamp} event to EVERY module transform, relying
+# on drop_on_abort to discard the wrong parses. Embedded VRL has no
+# file-size problem and runs one program per event, so this port detects
+# the module first and runs only that module's transform. The seven
+# umbrella templates differed only in the hardcoded .log.file.path seed;
+# they collapse to one body driven by the detected log type.
+#
+# INTERIM: this pipeline keeps DFE 2.1 filebeat feeds working on
+# dfe-transform-vrl. Elastic compatibility is being replaced by
+# dfe-transform-elastic (Rust-native, currently in beta); new integrations
+# should NOT build on this file.
+#
+# Deliberate departures from the 2.1 templates:
+#   - geoip enrichment is NOT ported: dfe-loader owns geoip enrichment in
+#     the current DFE pipeline layout.
+#   - unmatched events are tagged "filebeat_unmatched" and passed through
+#     instead of being silently dropped by the route fan-out.
+#
+# Requirements (matching the 2.1 deployment contract):
+#   - enrichment table "timezones" (bundled timezones.csv, key column
+#     "abbreviation") for cisco-ios and meraki timestamp resolution.
+#   - events MAY carry ._conf.tz_offset (abbreviation like "UTC" or offset
+#     like "-0600"); without it the ios/meraki @timestamp mapping is
+#     skipped, exactly as in DFE 2.1.
+##############################################################################
+
+_ingest = {}
+_ingest.timestamp = now()
+
+# --- module detection ------------------------------------------------------
+_module = "unknown"
+_umbrella_type = ""
+_msg = string(.message) ?? string(.event.original) ?? ""
+
+if match(_msg, r'^<134>1 \d{9,10}\.\d+ ') {
+    # Meraki syslog: <134>1 <epoch.frac> <host> <event_type> ...
+    # (DFE 2.1 routed on the <134> prefix alone; the epoch check keeps a
+    # local0.info Cisco IOS device out of the meraki branch.)
+    _module = "cisco_meraki_logs"
+} else if match(_msg, r'^<\d{1,3}>') {
+    # Any other syslog-priority-prefixed line is Cisco IOS (the only
+    # syslog module in the 14x family besides Meraki).
+    _module = "cisco_ios_logs"
+} else if match(_msg, r'%[A-Z][A-Z0-9_-]*-\d-[A-Z0-9_]+') && !match(_msg, r'^"?(\d{4}-\d{2}-\d{2} |\d+",")') {
+    # Cisco IOS %FACILITY-SEVERITY-MNEMONIC marker without a syslog
+    # header. The facility itself may carry dashes
+    # (e.g. %SNMP-SW1-3-RESPONSE_DELAYED). Umbrella CSV rows open with an
+    # ISO date (audit: a numeric id column), so a marker-lookalike inside
+    # a CSV field (a proxy URL, a dlp filename) must not steal the line
+    # from the CSV branch.
+    _module = "cisco_ios_logs"
+} else {
+    # Cisco Umbrella exports are CSV; DFE 2.1 carried the log type in the
+    # S3 object path. Honour an upstream-provided .log.file.path first,
+    # then fall back to column-shape detection (counts verified against
+    # the elastic/integrations pipeline test corpus).
+    _path = string(.log.file.path) ?? ""
+    if contains(_path, "auditlogs") {
+        _umbrella_type = "auditlogs"
+    } else if contains(_path, "firewalllogs") {
+        _umbrella_type = "cloudfirewalllogs"
+    } else if contains(_path, "dlplogs") {
+        _umbrella_type = "dlplogs"
+    } else if contains(_path, "dnslogs") {
+        _umbrella_type = "dnslogs"
+    } else if contains(_path, "intrusionlogs") {
+        _umbrella_type = "intrusionlogs"
+    } else if contains(_path, "iplogs") {
+        _umbrella_type = "iplogs"
+    } else if contains(_path, "proxylogs") {
+        _umbrella_type = "proxylogs"
+    }
+
+    if _umbrella_type == "" && _msg != "" {
+        # Same `", "` normalisation the umbrella body applies before
+        # parse_csv (the export quotes fields inconsistently).
+        _csv, _csv_err = parse_csv(replace(_msg, r'", "', s'","'))
+        if _csv_err == null {
+            _n = length(_csv)
+            _c0 = string(_csv[0]) ?? ""
+            _c1 = string(_csv[1]) ?? ""
+            _ts_re = r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'
+            if _n == 7 && match(_c0, _ts_re) {
+                _umbrella_type = "iplogs"
+            } else if _n == 9 && match(_c1, _ts_re) {
+                # v5 audit format: numeric event id, then the timestamp.
+                _umbrella_type = "auditlogs"
+            } else if _n == 13 && match(_c0, _ts_re) {
+                _umbrella_type = "dnslogs"
+            } else if _n >= 10 && _n <= 12 && match(_c0, _ts_re) && match(string(_csv[6]) ?? "", r'^\d+ \(') {
+                # Older dns export without the trailing policy columns;
+                # column 6 is the "<n> (TYPE)" dns query type.
+                _umbrella_type = "dnslogs"
+            } else if (_n == 14 || _n == 16) && match(_c0, _ts_re) {
+                # cloud firewall: 14 columns, or 16 with fqdns +
+                # destination list ids appended.
+                _umbrella_type = "cloudfirewalllogs"
+            } else if _n == 17 && match(_c0, _ts_re) {
+                # dlp and intrusion both carry 17 columns; intrusion has
+                # numeric gid/sid at columns 3 and 4.
+                if match(string(_csv[3]) ?? "", r'^\d+$') && match(string(_csv[4]) ?? "", r'^\d+$') {
+                    _umbrella_type = "intrusionlogs"
+                } else {
+                    _umbrella_type = "dlplogs"
+                }
+            } else if _n >= 20 && match(_c0, _ts_re) {
+                _umbrella_type = "proxylogs"
+            }
+        }
+    }
+    if _umbrella_type != "" {
+        _module = "cisco_umbrella"
+    }
+}

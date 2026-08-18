@@ -90,7 +90,10 @@ scalo = { version = ">=2.10.7, <3", features = [
 schemars = { version = ">=1.2.1, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # VRL — Vector Remap Language (embedded transform engine)
-vrl = ">=0.33.1, <0.34"
+vrl = ">=0.34.0, <0.35"
+# Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
+# same version range as vrl so cargo unifies to one chrono-tz.
+chrono-tz = ">=0.10.4, <0.11"
 
 # CLI (project-specific subcommands, not duplicating scalo CLI framework).
 # `derive` for #[derive(Parser)]; `env` not needed — we have no env-backed
@@ -149,6 +152,12 @@ enrichment-sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 tempfile = ">=3.20, <4"
+# Filebeat corpus fixtures: the committed tar.gz is read in-memory at test
+# time (tests/integration/filebeat_pipeline.rs); chrono compares pipeline
+# timestamps against the elastic golden outputs.
+flate2 = ">=1.1, <2"
+tar = ">=0.4.44, <0.5"
+chrono = ">=0.4.45, <0.5"
 # Testcontainers — auto-spawn Apache Kafka for e2e tests when no live broker
 # is available (live broker via $KAFKA_BROKERS / TEST_MODE=docker takes precedence).
 # Container is cleaned up via RAII Drop when the test ends.
