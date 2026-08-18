@@ -1,0 +1,16 @@
+# Project:   dfe-transform-vrl
+# File:      .gitleaks.toml
+# Purpose:   Secret-scan allowlist for bundled pipeline data
+#
+# License:   BUSL-1.1
+# Copyright: (c) 2026 HYPERI PTY LIMITED
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Bundled filebeat-compat pipeline data - ported public Vector templates and pinned elastic/integrations test fixtures, not credentials (e.g. the Meraki event subtype '8021x_eap_failure' pattern-matches a key rule)"
+paths = [
+    '''pipelines/filebeat/filebeat\.vrl''',
+    '''tests/fixtures/filebeat/filebeat-testdata\.tar\.gz''',
+]

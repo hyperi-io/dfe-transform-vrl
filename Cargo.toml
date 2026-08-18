@@ -31,7 +31,7 @@ path = "src/main.rs"
 # (PGO instrumentation phase). Default `cargo build` skips it entirely.
 [[bin]]
 name = "pgo-driver"
-path = "src/bin/pgo-driver.rs"
+path = "src/bin/pgo_driver.rs"
 required-features = ["pgo-driver"]
 
 [dependencies]
