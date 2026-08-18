@@ -26,7 +26,9 @@ pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
     let mut metadata = Value::Object(std::collections::BTreeMap::default());
     let mut secrets = Secrets::default();
     let mut state = RuntimeState::default();
-    let timezone = TimeZone::default();
+    // UTC, not the vrl host-local default: zone-less `parse_timestamp`
+    // output must not depend on node TZ.
+    let timezone = TimeZone::Named(chrono_tz::Tz::UTC);
 
     let mut target = TargetValueRef {
         value,

@@ -128,6 +128,23 @@ Files are loaded in sorted order (by filename) and concatenated into a single
 VRL program. This matches Vector's remap transform behaviour where multiple
 VRL statements execute sequentially.
 
+### Bundled Pipeline: filebeat-compat (INTERIM)
+
+`pipelines/filebeat/` ships a pre-canned, opt-in port of the DFE 2.1 Vector
+filebeat templates (Cisco Meraki logs, Cisco IOS, Cisco Umbrella) as one
+pure-VRL file plus its `timezones.csv` enrichment table. It is convenience
+data, not engine capability: opting in means pointing the standard
+`transforms.dir` and `enrichment_tables` config at those files. The engine
+carries no filebeat-specific code; the integration tests
+(`tests/integration/filebeat_pipeline.rs`) drive the bundle with the real
+elastic/integrations pipeline test corpus, which doubles as a full-engine
+workload.
+
+INTERIM: elastic compatibility is being replaced by `dfe-transform-elastic`
+(Rust-native, in beta). Wiring, routing behaviour, known limitations, and
+regeneration tooling (`scripts/filebeat/`) are documented in
+[pipelines/filebeat/README.md](../pipelines/filebeat/README.md).
+
 ## Memory Budget
 
 The wrapper controls all memory allocation:

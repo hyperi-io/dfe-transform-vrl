@@ -79,6 +79,19 @@ del(.message)
 .processed_at = now()
 ```
 
+### Bundled Pipelines (opt-in)
+
+`pipelines/filebeat/` ships a pre-canned, pure-VRL port of the DFE 2.1
+filebeat-compat templates (Cisco Meraki / IOS / Umbrella) plus its
+`timezones.csv` enrichment table. It is a convenience bundle, not engine
+capability: opt in by pointing `transforms.dir` and `enrichment_tables` at
+those files, exactly like any user-supplied transform.
+
+**INTERIM:** elastic compatibility is being replaced by
+`dfe-transform-elastic` (Rust-native, in beta). See
+[pipelines/filebeat/README.md](pipelines/filebeat/README.md) for wiring,
+routing behaviour, and known limitations.
+
 ### Environment Variable Overrides
 
 All config fields have flat env var overrides for K8s big-dial configuration:

@@ -77,6 +77,19 @@ pipeline:
 #   #   - "/etc/dfe-transform-vrl/transforms/02_enrich.vrl"
 #   #   - "/etc/dfe-transform-vrl/transforms/03_filter.vrl"
 
+# --- OPTIONAL: bundled DFE 2.1 filebeat-compat pipeline (INTERIM) ------------
+# Pre-canned pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki /
+# IOS / Umbrella). Being replaced by dfe-transform-elastic (beta) - see
+# pipelines/filebeat/README.md before adopting. The stock image ships no
+# pipelines/ directory - copy or mount the two files from the repo's
+# pipelines/filebeat/ first, then point the generic knobs at them:
+# transforms:
+#   dir: "/etc/dfe-transform-vrl/pipelines/filebeat/"
+# enrichment_tables:
+#   - name: "timezones"
+#     path: "/etc/dfe-transform-vrl/pipelines/filebeat/timezones.csv"
+#     key_columns: ["abbreviation"]
+
 # -----------------------------------------------------------------------------
 # Health endpoint
 # -----------------------------------------------------------------------------
