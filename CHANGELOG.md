@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.17](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.16...v1.1.17) (2026-08-23)
+
+### Bug Fixes
+
+* **deps:** adopt scalo 2.10.13 ([#33](https://github.com/hyperi-io/dfe-transform-vrl/issues/33)) ([2ec86b7](https://github.com/hyperi-io/dfe-transform-vrl/commit/2ec86b7d6f1d4a6aa7e41e6634f54eafa0d3153d))
+
 ## [1.1.16](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.15...v1.1.16) (2026-08-18)
 
 ## [1.1.15](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.14...v1.1.15) (2026-08-18)
