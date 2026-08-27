@@ -199,6 +199,17 @@ async fn run_transform_service(
         "startup config"
     );
 
+    // Fire-and-forget startup version check; no-op unless the cascade
+    // sets version_check.enabled + api_url.
+    {
+        use scalo::version_check::{VersionCheck, VersionCheckConfig};
+        let checker = VersionCheck::new(VersionCheckConfig::from_cascade(
+            "dfe-transform-vrl",
+            env!("CARGO_PKG_VERSION"),
+        ));
+        checker.check_on_startup();
+    }
+
     // Compile VRL programs (fail-fast before any async work)
     // Compile VRL programs and load enrichment tables
     let vrl_source = compiler::load_vrl_source(&config.transforms)
