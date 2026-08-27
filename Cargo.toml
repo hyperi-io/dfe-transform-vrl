@@ -66,7 +66,7 @@ bytes = ">=1.7, <2"
 # owns the inbound pause-partitions brake + AIMD byte budget over the shared
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
-scalo = { version = ">=2.10.7, <3", features = [
+scalo = { version = ">=2.10.14, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -81,6 +81,7 @@ scalo = { version = ">=2.10.7, <3", features = [
     "service-metrics",
     "transport",
     "transport-kafka",
+    "version-check",
     "worker-batch",
     "worker-pool",
 ] }
@@ -169,7 +170,7 @@ testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = ">=2.10.7, <3", features = ["transport-memory"] }
+scalo = { version = ">=2.10.14, <3", features = ["transport-memory"] }
 
 [lints.rust]
 unsafe_code = "forbid"
