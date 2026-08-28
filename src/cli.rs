@@ -120,6 +120,15 @@ impl ServiceApp for App {
     fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }
+
+    fn version_check_defaults(&self) -> scalo::version_check::VersionCheckConfig {
+        // The runtime overlays the version_check cascade keys on this, so a
+        // deployment's explicit enabled: false always wins.
+        scalo::version_check::VersionCheckConfig {
+            api_url: "https://releases.hyperi.io/api/v1/check".into(),
+            ..Default::default()
+        }
+    }
 }
 
 /// Handle emit subcommands that bypass the normal `ServiceApp` lifecycle.
@@ -198,17 +207,6 @@ async fn run_transform_service(
         enrichment_tables = config.enrichment_tables.len(),
         "startup config"
     );
-
-    // Fire-and-forget startup version check; no-op unless the cascade
-    // sets version_check.enabled + api_url.
-    {
-        use scalo::version_check::{VersionCheck, VersionCheckConfig};
-        let checker = VersionCheck::new(VersionCheckConfig::from_cascade(
-            "dfe-transform-vrl",
-            env!("CARGO_PKG_VERSION"),
-        ));
-        checker.check_on_startup();
-    }
 
     // Compile VRL programs (fail-fast before any async work)
     // Compile VRL programs and load enrichment tables

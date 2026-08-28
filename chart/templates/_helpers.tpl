@@ -61,7 +61,7 @@ Service account name.
 {{- end }}
 
 {{/*
-kafka secret name — use existing or generate from fullname.
+kafka secret name -- use existing or generate from fullname.
 */}}
 {{- define "dfe-transform-vrl.kafkaSecretName" -}}
 {{- if .Values.kafka.existingSecret }}
