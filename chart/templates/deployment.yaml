@@ -24,32 +24,23 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- else }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- end }}
       serviceAccountName: {{ include "dfe-transform-vrl.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-      {{- with .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.initContainers }}
-      initContainers:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - "--config"
             - "/etc/dfe-transform-vrl/config.yaml"
@@ -61,6 +52,33 @@ spec:
               containerPort: 9000
               protocol: TCP
           env:
+            - name: OTEL_SERVICE_NAME
+              value: "dfe-transform-vrl"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME)
+            {{- if (.Values.otel).endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.otel.protocol | quote }}
+            {{- end }}
+            # kafka credentials via Secret (figment env cascade overrides file config)
             - name: KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -73,31 +91,28 @@ spec:
                   key: {{ .Values.kafka.secretKeys.password }}
           livenessProbe:
             httpGet:
-              path: /health/live
-              port: health
+              path: /livez
+              port: metrics
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health/ready
-              port: health
+              path: /readyz
+              port: metrics
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 2
           startupProbe:
             httpGet:
-              path: /health/live
-              port: health
+              path: /livez
+              port: metrics
             failureThreshold: 30
             periodSeconds: 5
           volumeMounts:
             - name: config
-              mountPath: /etc/dfe
+              mountPath: /etc/dfe-transform-vrl
               readOnly: true
-            {{- with .Values.extraVolumeMounts }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -106,9 +121,6 @@ spec:
         - name: config
           configMap:
             name: {{ include "dfe-transform-vrl.fullname" . }}-config
-        {{- with .Values.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
