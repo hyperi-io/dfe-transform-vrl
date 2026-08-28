@@ -1,7 +1,16 @@
-dfe-transform-vrl deployed.
+dfe-transform-vrl has been deployed.
 
-Health:  http://{{ include "dfe-transform-vrl.fullname" . }}:9000/health/live
-Metrics: http://{{ include "dfe-transform-vrl.fullname" . }}:{{ .Values.service.port }}/metrics
+1. Get the metrics/health endpoint:
+   kubectl port-forward svc/{{ include "dfe-transform-vrl.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+   curl http://localhost:{{ .Values.service.port }}/livez
+   curl http://localhost:{{ .Values.service.port }}/metrics
 
-Config mounted at /etc/dfe-transform-vrl/config.yaml from ConfigMap.
-VRL transform files at {{ .Values.config.transforms.dir }}.
+{{- if .Values.keda.enabled }}
+
+2. Check KEDA autoscaling status:
+   kubectl get scaledobject {{ include "dfe-transform-vrl.fullname" . }}
+   kubectl get hpa
+{{- end }}
+
+3. View logs:
+   kubectl logs -l app.kubernetes.io/name={{ include "dfe-transform-vrl.name" . }} -f
