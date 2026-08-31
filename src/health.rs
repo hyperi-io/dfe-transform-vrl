@@ -8,9 +8,10 @@
 
 //! Health endpoint server using scalo `http-server` module.
 //!
-//! Serves `/health/live` and `/health/ready` endpoints on the configured
-//! address (default :9000). The scalo `HttpServer` provides these endpoints
-//! automatically when `enable_health_endpoints` is true.
+//! Serves `/livez` and `/readyz` on the configured address (default :9000).
+//! The scalo `HttpServer` provides them when `enable_health_endpoints` is
+//! true, and mounts no aliases: the retired `/health/live` and `/health/ready`
+//! paths answer 404.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

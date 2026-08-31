@@ -35,7 +35,7 @@ flowchart TB
     end
     subgraph OPS["Operational endpoints (same process)"]
         direction LR
-        HS["Health :9000<br/>/health/live + /health/ready"]
+        HS["Health :9000<br/>/livez + /readyz"]
         MS["Metrics :9090<br/>/metrics (prometheus)"]
     end
 ```
