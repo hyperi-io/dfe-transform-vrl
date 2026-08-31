@@ -133,9 +133,12 @@ fn reload_table(
     let elapsed = start.elapsed().as_secs_f64();
 
     match result {
+        // Only the rows are swapped. The column list stays as loaded at
+        // startup, because the compile-time condition check already ran
+        // against it and a running program cannot be re-validated.
         Ok(new_data) => {
             if let Some(table) = registry.get_table(table_name) {
-                if let Err(e) = table.swap_hashmap(new_data) {
+                if let Err(e) = table.swap_hashmap(new_data.rows) {
                     error!(table = %table_name, error = %e, "enrichment swap failed");
                     metrics.record_enrichment_reload(table_name, elapsed, false);
                     return;

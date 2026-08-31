@@ -14,7 +14,7 @@ use vrl::value::{KeyString, ObjectMap, Value};
 
 /// Materialised rows of a hash-map-backed table.
 ///
-/// A key maps to *every* row carrying it, not just the last one loaded —
+/// A key maps to *every* row carrying it, not just the last one loaded --
 /// duplicate key values are legitimate data (the shipped `timezones.csv` has
 /// 12 duplicated abbreviations) and Vector reports them as an ambiguous match
 /// rather than silently picking one.
@@ -291,6 +291,13 @@ pub struct EnrichmentTable {
     refresh_config: Option<crate::config::RefreshConfig>,
     /// Compiled column type coercions, reused by the refresh loop.
     schema: Arc<crate::enrichment::loader::ColumnSchema>,
+    /// Column names the source declared, for compile-time condition checking.
+    ///
+    /// Empty means "not knowable" rather than "no columns" -- an MMDB table
+    /// has no column list at all, and a JSON or STIX source with no rows
+    /// declares none. The check is skipped in that case rather than rejecting
+    /// every condition.
+    columns: Arc<[KeyString]>,
 }
 
 impl EnrichmentTable {
@@ -302,6 +309,7 @@ impl EnrichmentTable {
         source_config: Option<crate::config::EnrichmentSourceConfig>,
         refresh_config: Option<crate::config::RefreshConfig>,
         schema: Arc<crate::enrichment::loader::ColumnSchema>,
+        columns: Arc<[KeyString]>,
     ) -> Self {
         Self {
             name: Arc::from(name),
@@ -310,6 +318,7 @@ impl EnrichmentTable {
             source_config,
             refresh_config,
             schema,
+            columns,
         }
     }
 
@@ -328,6 +337,9 @@ impl EnrichmentTable {
             source_config,
             refresh_config,
             schema: Arc::default(),
+            // A geo database has no column list to check a condition against;
+            // arity is enforced instead, in `mmdb_find_rows`.
+            columns: Arc::from(Vec::new()),
         }
     }
 
@@ -344,6 +356,41 @@ impl EnrichmentTable {
         let cols = self.key_columns.as_deref().unwrap_or(&[]);
         self.data
             .find_rows(conditions, case_sensitive, wildcard, select, cols)
+    }
+
+    /// Column names the source declared, empty when not knowable.
+    pub fn columns(&self) -> &[KeyString] {
+        &self.columns
+    }
+
+    /// Reject condition fields naming a column this table does not have.
+    ///
+    /// Vector does this at compile time: `add_index` hands every non-date
+    /// condition field to the table, and the file table's
+    /// `normalize_index_fields` raises `MissingDatasetFields` when one is not
+    /// a header. Without it a typo in a condition is not an error at all, it
+    /// is a lookup that silently never matches for the life of the process --
+    /// the same failure this function's caller already prevents for the table
+    /// name itself.
+    ///
+    /// `fields` should exclude date-range conditions, which Vector also
+    /// excludes because they are not indexed. Returns the offending names,
+    /// sorted, so the diagnostic is stable.
+    pub fn missing_columns(&self, fields: &[&str]) -> Vec<String> {
+        // No declared columns means the source could not tell us what it has,
+        // so there is nothing to check against and every field is allowed.
+        if self.columns.is_empty() {
+            return Vec::new();
+        }
+
+        let mut missing: Vec<String> = fields
+            .iter()
+            .filter(|field| !self.columns.iter().any(|col| col.as_str() == **field))
+            .map(|field| (*field).to_string())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        missing
     }
 
     /// The table name as configured.
@@ -436,8 +483,12 @@ impl std::fmt::Debug for EnrichmentTable {
 
 /// Returns `true` if `row` satisfies every condition.
 ///
-/// A condition naming a field the row does not carry never matches, which is
-/// Vector's behaviour for a column outside the dataset.
+/// A condition naming a field this row does not carry never matches. That is
+/// a per-row test, not the dataset check: a condition on a column the *table*
+/// does not have is rejected at compile time (see
+/// `EnrichmentTable::validate_condition_fields`), so reaching here with an
+/// unknown field means the column exists but this row omits it, which is
+/// possible for JSON and STIX sources whose rows need not agree.
 fn row_matches(
     row: &ObjectMap,
     conditions: &[Condition],
@@ -580,11 +631,21 @@ mod tests {
         rows: Vec<ObjectMap>,
     ) -> EnrichmentTable {
         let mut hm = RowMap::default();
+        let mut columns: Vec<KeyString> = Vec::new();
         for row in rows {
+            crate::enrichment::loader::union_columns(&mut columns, &row);
             let key = CompactKey::from_row(&row, &key_columns);
             hm.entry(key).or_default().push(Arc::new(row));
         }
-        EnrichmentTable::new_hashmap(name, hm, key_columns, None, None, Arc::default())
+        EnrichmentTable::new_hashmap(
+            name,
+            hm,
+            key_columns,
+            None,
+            None,
+            Arc::default(),
+            Arc::from(columns),
+        )
     }
 
     /// All rows matching `conditions`, case sensitive, no wildcard, no select.
@@ -837,8 +898,40 @@ mod tests {
     fn find_rows_missing_key_column_falls_back_to_scan() {
         let row = make_row(&[("country", bytes_value("AU"))]);
         let table = make_hashmap_table("t", vec!["country".to_string()], vec![row]);
-        // "city" is not a column of the row, so nothing matches.
+        // Reached only when the row omits a column the table declares; the
+        // VRL path rejects an undeclared column at compile time instead.
         assert!(find(&table, &eq(&[("city", bytes_value("Brisbane"))])).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // missing_columns -- the compile-time dataset check
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn missing_columns_reports_only_undeclared_fields() {
+        let row = make_row(&[("id", bytes_value("1")), ("name", bytes_value("Bob"))]);
+        let table = make_hashmap_table("t", vec!["id".to_string()], vec![row]);
+        assert!(table.missing_columns(&["id", "name"]).is_empty());
+        assert_eq!(table.missing_columns(&["nope"]), vec!["nope".to_string()]);
+    }
+
+    #[test]
+    fn missing_columns_sorts_and_dedups() {
+        let row = make_row(&[("id", bytes_value("1"))]);
+        let table = make_hashmap_table("t", vec!["id".to_string()], vec![row]);
+        assert_eq!(
+            table.missing_columns(&["zeta", "alpha", "zeta"]),
+            vec!["alpha".to_string(), "zeta".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_columns_allows_everything_when_columns_are_unknown() {
+        // An MMDB table declares no columns, so there is nothing to check
+        // against and a condition on any field must be allowed through.
+        let table = make_hashmap_table("t", vec!["id".to_string()], vec![]);
+        assert!(table.columns().is_empty());
+        assert!(table.missing_columns(&["anything"]).is_empty());
     }
 
     #[test]

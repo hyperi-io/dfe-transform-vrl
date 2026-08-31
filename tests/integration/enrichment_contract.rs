@@ -356,6 +356,121 @@ fn find_records_validates_the_table_name_too() {
     );
 }
 
+// =========================================================================
+// Bug 8 -- a condition on a column the table does not have
+// =========================================================================
+
+#[test]
+fn a_condition_on_an_unknown_column_is_a_compile_error() {
+    // vector rejects this at compile time, via add_index ->
+    // normalize_index_fields -> MissingDatasetFields. Returning no rows
+    // instead turns a typo into a lookup that never matches for the life of
+    // the process.
+    let dir = tempfile::tempdir().unwrap();
+    let err = compile_error(
+        r#".x = get_enrichment_table_record!("users", {"nosuchcol": "1"})"#,
+        Some(users_registry(dir.path())),
+    );
+    assert!(
+        err.contains("no field called") && err.contains("nosuchcol"),
+        "unexpected diagnostic: {err}"
+    );
+}
+
+#[test]
+fn the_diagnostic_names_every_unknown_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = compile_error(
+        r#".x = find_enrichment_table_records!("users", {"id": "1", "alpha": "x", "beta": "y"})"#,
+        Some(users_registry(dir.path())),
+    );
+    assert!(err.contains("alpha"), "unexpected diagnostic: {err}");
+    assert!(err.contains("beta"), "unexpected diagnostic: {err}");
+    // "id" is a real column, so it must not be reported.
+    assert!(
+        !err.contains(r#""id""#),
+        "a known column must not be listed: {err}"
+    );
+}
+
+#[test]
+fn a_known_column_still_compiles() {
+    // Guards the check against rejecting valid programs.
+    let dir = tempfile::tempdir().unwrap();
+    let event = run(
+        r#".rows = find_enrichment_table_records!("users", {"status": "active"})"#,
+        users_registry(dir.path()),
+    )
+    .unwrap();
+    assert_eq!(field(&event, "rows").unwrap().as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_date_range_condition_is_exempt_from_the_column_check() {
+    // vector excludes date-range fields from the index, so they are not
+    // checked against the dataset either. Mirror that rather than being
+    // stricter than the oracle.
+    let dir = tempfile::tempdir().unwrap();
+    let event = run(
+        r#".rows = find_enrichment_table_records!("users", {"nosuchcol": {"from": t'1980-01-01T00:00:00Z'}})"#,
+        users_registry(dir.path()),
+    )
+    .unwrap();
+    assert_eq!(field(&event, "rows").unwrap().as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn a_json_source_checks_against_the_union_of_its_keys() {
+    // JSON rows need not agree, so the column set is their union: a field
+    // only some rows carry is still a legitimate condition.
+    let dir = tempfile::tempdir().unwrap();
+    let registry = registry_for(EnrichmentTableConfig {
+        name: "mixed".into(),
+        path: write_file(
+            dir.path(),
+            "mixed.json",
+            r#"[{"id": "1", "only_here": "yes"}, {"id": "2"}]"#,
+        ),
+        key_columns: vec!["id".into()],
+        ..Default::default()
+    });
+
+    let event = run(
+        r#".rows = find_enrichment_table_records!("mixed", {"only_here": "yes"})"#,
+        registry,
+    )
+    .unwrap();
+    assert_eq!(field(&event, "rows").unwrap().as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_csv_with_headers_and_no_rows_still_knows_its_columns() {
+    // The reason columns come from the source rather than from the loaded
+    // rows: an empty table must still reject an unknown column, and still
+    // accept a real one.
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_file(dir.path(), "empty.csv", "id,name,status\n");
+    let table = || EnrichmentTableConfig {
+        name: "empty".into(),
+        path: path.clone(),
+        key_columns: vec!["id".into()],
+        ..Default::default()
+    };
+
+    let err = compile_error(
+        r#".x = find_enrichment_table_records!("empty", {"nosuchcol": "1"})"#,
+        Some(registry_for(table())),
+    );
+    assert!(err.contains("nosuchcol"), "unexpected diagnostic: {err}");
+
+    let event = run(
+        r#".rows = find_enrichment_table_records!("empty", {"name": "Bob"})"#,
+        registry_for(table()),
+    )
+    .unwrap();
+    assert_eq!(field(&event, "rows").unwrap().as_array().unwrap().len(), 0);
+}
+
 #[test]
 fn no_registry_is_a_compile_error() {
     let err = compile_error(

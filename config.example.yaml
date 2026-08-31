@@ -103,8 +103,12 @@ pipeline:
 # it just does not use the index.
 #
 # schema coerces text columns, which is what makes a numeric comparison or a
-# date range able to match. Accepted: string, int, integer, float, bool,
-# boolean, date, date|<format>, timestamp, timestamp|<format>.
+# date range able to match. Accepted: asis, bytes, string, int, integer,
+# float, bool, boolean, date, date|<format>, timestamp, timestamp|<format>.
+# asis, bytes and string all leave the cell as text.
+#
+# A condition naming a column the table does not have is a compile error, so
+# a typo fails at startup rather than never matching.
 # enrichment_tables:
 #   - name: "services"
 #     path: "/etc/dfe-transform-vrl/enrichment/services.csv"

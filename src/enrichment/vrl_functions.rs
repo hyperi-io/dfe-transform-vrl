@@ -121,6 +121,23 @@ fn compile_args(
     })?;
 
     let condition = arguments.required_object("condition")?;
+
+    // Vector rejects a condition naming a column the table does not have, at
+    // compile time, via add_index -> normalize_index_fields. Do the same here
+    // so a typo fails at startup rather than silently never matching.
+    let checked: Vec<&str> = condition
+        .iter()
+        .filter(|(_, value)| !is_date_range(value))
+        .map(|(field, _)| field.as_ref())
+        .collect();
+    let missing = data.missing_columns(&checked);
+    if !missing.is_empty() {
+        return Err(Box::new(EnrichmentError::MissingDatasetFields {
+            table: data.name().to_string(),
+            fields: missing,
+        }) as Box<dyn DiagnosticMessage>);
+    }
+
     let select = arguments.optional("select");
     let case_sensitive = arguments
         .optional_literal("case_sensitive", state)?
@@ -135,6 +152,22 @@ fn compile_args(
         case_sensitive,
         wildcard,
     })
+}
+
+/// Whether a condition entry is syntactically a date range.
+///
+/// Mirrors the filter in Vector's `add_index`: an object literal carrying
+/// `from` and/or `to` is a date comparison, and is excluded from the dataset
+/// column check because it is not indexed. The test is on the *expression*,
+/// so it happens at compile time; `evaluate_condition` makes the same
+/// decision at run time on the resolved value.
+fn is_date_range(value: &expression::Expr) -> bool {
+    matches!(
+        value,
+        expression::Expr::Container(expression::Container {
+            variant: expression::Variant::Object(map),
+        }) if map.contains_key("from") || map.contains_key("to")
+    )
 }
 
 /// Turn one resolved condition entry into a matching rule.
@@ -433,6 +466,13 @@ enum EnrichmentError {
     TableNotUtf8,
     /// The registry lost the table between validation and lookup.
     UnknownTable(String),
+    /// The condition names columns the table does not have.
+    MissingDatasetFields {
+        /// Table the condition was written against.
+        table: String,
+        /// Condition fields that are not columns of it.
+        fields: Vec<String>,
+    },
 }
 
 impl fmt::Display for EnrichmentError {
@@ -441,6 +481,15 @@ impl fmt::Display for EnrichmentError {
             Self::TablesNotLoaded => write!(f, "enrichment tables not loaded"),
             Self::TableNotUtf8 => write!(f, "enrichment table name must be valid UTF-8"),
             Self::UnknownTable(name) => write!(f, "unknown enrichment table {name:?}"),
+            Self::MissingDatasetFields { table, fields } => write!(
+                f,
+                "enrichment table {table:?} has no field called {}",
+                fields
+                    .iter()
+                    .map(|field| format!("{field:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }

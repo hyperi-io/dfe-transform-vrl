@@ -415,7 +415,7 @@
           "default": null
         },
         "schema": {
-          "description": "Per-column type coercion, matching Vector's file enrichment table\n`schema`. Without an entry a CSV cell stays a string, so\n`status_code: integer` is what makes `{\"status_code\": 1}` match, and a\n`timestamp` column is what makes a `{\"from\": ..., \"to\": ...}` date\nrange able to match at all. Accepted values: `string`, `int`,\n`integer`, `float`, `bool`, `boolean`, `date`, `date|<format>`,\n`timestamp`, `timestamp|<format>`.",
+          "description": "Per-column type coercion, matching Vector's file enrichment table\n`schema`. Without an entry a CSV cell stays a string, so\n`status_code: integer` is what makes `{\"status_code\": 1}` match, and a\n`timestamp` column is what makes a `{\"from\": ..., \"to\": ...}` date\nrange able to match at all. Accepted values: `asis`, `bytes`,\n`string`, `int`, `integer`, `float`, `bool`, `boolean`, `date`,\n`date|<format>`, `timestamp`, `timestamp|<format>`. `asis` and\n`bytes` leave the cell alone.",
           "type": "object",
           "additionalProperties": {
             "type": "string"

@@ -97,7 +97,7 @@ vrl = ">=0.34.0, <0.35"
 chrono-tz = ">=0.10.4, <0.11"
 # `Value::Timestamp` is a `chrono::DateTime<Utc>`, so enrichment date-range
 # conditions and the `date` column schema need chrono named directly. Already
-# in the graph via vrl — same version range so cargo unifies to one chrono.
+# in the graph via vrl -- same version range so cargo unifies to one chrono.
 chrono = ">=0.4.45, <0.5"
 
 # CLI (project-specific subcommands, not duplicating scalo CLI framework).
