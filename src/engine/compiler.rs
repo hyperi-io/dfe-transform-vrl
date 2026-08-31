@@ -96,9 +96,15 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
 
 /// Compile VRL source code into an executable program.
 ///
-/// Uses the full VRL stdlib plus custom enrichment functions. If an
-/// `EnrichmentRegistry` is provided, it's injected into the compile config
-/// so enrichment functions can validate table names at compile time.
+/// Uses the full VRL stdlib plus custom enrichment functions.
+///
+/// The `EnrichmentRegistry` is injected into the compile config, and the
+/// enrichment functions use it to resolve the table named in each call. The
+/// table name must be a compile-time literal naming a registered table, so a
+/// typo fails here rather than on the millionth event, and a VRL program can
+/// never compute a table name. Passing `None` therefore makes any call to
+/// `get_enrichment_table_record` or `find_enrichment_table_records` a
+/// compile error.
 ///
 /// The compiled `Program` is reused for every event — zero per-event
 /// compilation cost.

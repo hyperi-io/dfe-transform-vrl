@@ -46,6 +46,7 @@ pub fn start_refresh_tasks(
         let key_columns: Vec<String> = table
             .key_columns()
             .map_or_else(Vec::new, <[String]>::to_vec);
+        let schema = Arc::clone(table.schema());
         let reg = Arc::clone(registry);
         let m = Arc::clone(metrics);
         let mut rx = shutdown_rx.clone();
@@ -66,9 +67,10 @@ pub fn start_refresh_tasks(
                         let name = table_name.clone();
                         let src = source.clone();
                         let cols = key_columns.clone();
+                        let sch = Arc::clone(&schema);
                         let metrics = Arc::clone(&m);
                         let _ = tokio::task::spawn_blocking(move || {
-                            reload_table(&reg, &name, &src, &cols, &metrics);
+                            reload_table(&reg, &name, &src, &cols, &sch, &metrics);
                         }).await;
                     }
                 }
@@ -89,6 +91,7 @@ fn reload_table(
     table_name: &str,
     source: &EnrichmentSourceConfig,
     key_columns: &[String],
+    schema: &loader::ColumnSchema,
     metrics: &TransformMetrics,
 ) {
     let start = std::time::Instant::now();
@@ -124,15 +127,18 @@ fn reload_table(
                 "table '{table_name}': MMDB refresh not yet supported"
             )))
         }
-        _ => loader::load_from_source(source, table_name, key_columns),
+        _ => loader::load_from_source(source, table_name, key_columns, schema),
     };
 
     let elapsed = start.elapsed().as_secs_f64();
 
     match result {
+        // Only the rows are swapped. The column list stays as loaded at
+        // startup, because the compile-time condition check already ran
+        // against it and a running program cannot be re-validated.
         Ok(new_data) => {
             if let Some(table) = registry.get_table(table_name) {
-                if let Err(e) = table.swap_hashmap(new_data) {
+                if let Err(e) = table.swap_hashmap(new_data.rows) {
                     error!(table = %table_name, error = %e, "enrichment swap failed");
                     metrics.record_enrichment_reload(table_name, elapsed, false);
                     return;
@@ -165,6 +171,10 @@ mod tests {
     use super::*;
     use crate::config::loader::{EnrichmentTableConfig, RefreshConfig};
     use std::io::Write;
+
+    /// The refresh tests declare no column types.
+    static NO_SCHEMA: std::sync::LazyLock<loader::ColumnSchema> =
+        std::sync::LazyLock::new(loader::ColumnSchema::default);
 
     /// Build a temp CSV file we can reload against.
     fn write_csv(dir: &std::path::Path, name: &str, content: &str) -> std::path::PathBuf {
@@ -211,6 +221,7 @@ mod tests {
             "geo",
             &table_cfg.source.clone().unwrap(),
             &table_cfg.key_columns,
+            &NO_SCHEMA,
             &metrics,
         );
 
@@ -242,7 +253,7 @@ mod tests {
         let mmdb_source = EnrichmentSourceConfig::Mmdb {
             path: "/nonexistent/geo.mmdb".to_string(),
         };
-        reload_table(&reg_arc, "trap", &mmdb_source, &[], &metrics);
+        reload_table(&reg_arc, "trap", &mmdb_source, &[], &NO_SCHEMA, &metrics);
 
         // Table is still there with its original CSV data
         let table = reg_arc.get_table("trap").unwrap();
@@ -273,7 +284,7 @@ mod tests {
             collection: None,
             auth: None,
         };
-        reload_table(&reg_arc, "stix", &stix_no_path, &[], &metrics);
+        reload_table(&reg_arc, "stix", &stix_no_path, &[], &NO_SCHEMA, &metrics);
 
         // Existing CSV data preserved
         let table = reg_arc.get_table("stix").unwrap();
@@ -303,7 +314,14 @@ mod tests {
             path: "/nonexistent/path/data.csv".to_string(),
             format: None,
         };
-        reload_table(&reg_arc, "data", &bad_source, &["k".to_string()], &metrics);
+        reload_table(
+            &reg_arc,
+            "data",
+            &bad_source,
+            &["k".to_string()],
+            &NO_SCHEMA,
+            &metrics,
+        );
 
         let table = reg_arc.get_table("data").unwrap();
         assert_eq!(table.len(), 1, "reload failure must not wipe existing data");
@@ -336,7 +354,14 @@ mod tests {
             path: csv2.to_string_lossy().to_string(),
             format: None,
         };
-        reload_table(&reg_arc, "swap", &new_source, &["k".to_string()], &metrics);
+        reload_table(
+            &reg_arc,
+            "swap",
+            &new_source,
+            &["k".to_string()],
+            &NO_SCHEMA,
+            &metrics,
+        );
 
         let table = reg_arc.get_table("swap").unwrap();
         assert_eq!(table.len(), 3, "table should reflect new rows post-reload");

@@ -15,12 +15,12 @@
 
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
 use serde::Deserialize;
 use vrl::value::{KeyString, ObjectMap, Value};
 
 use crate::config::StixAuthConfig;
-use crate::enrichment::table::CompactKey;
+use crate::enrichment::loader::LoadedTable;
+use crate::enrichment::table::{CompactKey, RowMap};
 
 // ---------------------------------------------------------------------------
 // STIX 2.1 model (minimal — just what we need for indicator extraction)
@@ -77,7 +77,7 @@ pub fn load_stix(
     _auth: Option<&StixAuthConfig>,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+) -> crate::Result<LoadedTable> {
     let json_bytes = if let Some(path) = path {
         std::fs::read(path).map_err(|e| {
             crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
@@ -105,12 +105,13 @@ pub fn materialise_stix(
     json_bytes: &[u8],
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+) -> crate::Result<LoadedTable> {
     let bundle: StixBundle = serde_json::from_slice(json_bytes).map_err(|e| {
         crate::Error::Enrichment(format!("table '{table_name}': invalid STIX JSON: {e}"))
     })?;
 
-    let mut rows = FxHashMap::default();
+    let mut rows = RowMap::default();
+    let mut columns: Vec<KeyString> = Vec::new();
 
     for obj in &bundle.objects {
         if obj.object_type != "indicator" {
@@ -178,11 +179,13 @@ pub fn materialise_stix(
             row.insert(KeyString::from("tlp"), Value::from(tlp));
         }
 
+        crate::enrichment::loader::union_columns(&mut columns, &row);
+
         let key = CompactKey::from_row(&row, key_columns);
-        rows.insert(key, Arc::new(row));
+        rows.entry(key).or_default().push(Arc::new(row));
     }
 
-    Ok(rows)
+    Ok(LoadedTable { rows, columns })
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +266,16 @@ fn extract_tlp_from_markings(markings: &[String]) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// The single row materialised for `indicator`.
+    fn indicator_row(rows: &RowMap, indicator: &str) -> Arc<ObjectMap> {
+        let mut probe = ObjectMap::new();
+        probe.insert("indicator".into(), Value::from(indicator));
+        let key = CompactKey::from_row(&probe, &["indicator".to_string()]);
+        let bucket = rows.get(&key).unwrap();
+        assert_eq!(bucket.len(), 1);
+        Arc::clone(&bucket[0])
+    }
+
     fn sample_stix_bundle() -> &'static str {
         r#"{
             "type": "bundle",
@@ -310,7 +323,8 @@ mod tests {
             "threats",
             &["indicator".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
 
         // 3 indicators (malware object is skipped)
         assert_eq!(rows.len(), 3);
@@ -323,12 +337,10 @@ mod tests {
             "threats",
             &["indicator".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
 
-        let mut cond = ObjectMap::new();
-        cond.insert("indicator".into(), Value::from("203.0.113.50"));
-        let key = CompactKey::from_condition(&cond, &["indicator".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let row = indicator_row(&rows, "203.0.113.50");
 
         assert_eq!(row.get("name"), Some(&Value::from("Malicious IP")));
         assert_eq!(row.get("confidence"), Some(&Value::Integer(85)));
@@ -343,12 +355,10 @@ mod tests {
             "threats",
             &["indicator".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
 
-        let mut cond = ObjectMap::new();
-        cond.insert("indicator".into(), Value::from("evil.example.com"));
-        let key = CompactKey::from_condition(&cond, &["indicator".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let row = indicator_row(&rows, "evil.example.com");
 
         assert_eq!(row.get("indicator_type"), Some(&Value::from("domain")));
     }
@@ -360,13 +370,11 @@ mod tests {
             "threats",
             &["indicator".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
 
         let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let mut cond = ObjectMap::new();
-        cond.insert("indicator".into(), Value::from(hash));
-        let key = CompactKey::from_condition(&cond, &["indicator".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let row = indicator_row(&rows, hash);
 
         assert_eq!(row.get("indicator_type"), Some(&Value::from("hash")));
         assert_eq!(row.get("confidence"), Some(&Value::Integer(95)));
@@ -380,14 +388,18 @@ mod tests {
     #[test]
     fn materialise_stix_empty_bundle() {
         let bundle = r#"{"type": "bundle", "objects": []}"#;
-        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()]).unwrap();
+        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()])
+            .unwrap()
+            .rows;
         assert!(rows.is_empty());
     }
 
     #[test]
     fn materialise_stix_no_indicators() {
         let bundle = r#"{"type": "bundle", "objects": [{"type": "malware", "name": "x"}]}"#;
-        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()]).unwrap();
+        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()])
+            .unwrap()
+            .rows;
         assert!(rows.is_empty());
     }
 
@@ -395,7 +407,9 @@ mod tests {
     fn materialise_stix_indicator_without_pattern_skipped() {
         let bundle =
             r#"{"type": "bundle", "objects": [{"type": "indicator", "name": "no pattern"}]}"#;
-        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()]).unwrap();
+        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()])
+            .unwrap()
+            .rows;
         assert!(rows.is_empty());
     }
 
@@ -486,7 +500,8 @@ mod tests {
             "threats",
             &["indicator".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
         assert_eq!(rows.len(), 3);
     }
 

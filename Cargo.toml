@@ -95,6 +95,10 @@ vrl = ">=0.34.0, <0.35"
 # Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
 # same version range as vrl so cargo unifies to one chrono-tz.
 chrono-tz = ">=0.10.4, <0.11"
+# `Value::Timestamp` is a `chrono::DateTime<Utc>`, so enrichment date-range
+# conditions and the `date` column schema need chrono named directly. Already
+# in the graph via vrl -- same version range so cargo unifies to one chrono.
+chrono = ">=0.4.45, <0.5"
 
 # CLI (project-specific subcommands, not duplicating scalo CLI framework).
 # `derive` for #[derive(Parser)]; `env` not needed — we have no env-backed
@@ -158,7 +162,6 @@ tempfile = ">=3.20, <4"
 # timestamps against the elastic golden outputs.
 flate2 = ">=1.1, <2"
 tar = ">=0.4.44, <0.5"
-chrono = ">=0.4.45, <0.5"
 # Testcontainers — auto-spawn Apache Kafka for e2e tests when no live broker
 # is available (live broker via $KAFKA_BROKERS / TEST_MODE=docker takes precedence).
 # Container is cleaned up via RAII Drop when the test ends.
