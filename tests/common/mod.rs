@@ -386,6 +386,26 @@ impl KafkaTestEnv {
         }
     }
 
+    /// Ensure a Kafka broker this test OWNS — always a fresh container,
+    /// never a broker that was already there.
+    ///
+    /// `ensure` prefers a live broker, which is wrong for a test that uses
+    /// the real DFE topic names: `filebeat_land` on a shared broker is
+    /// somebody else's data. Returns `None` when no container can be
+    /// started, so callers can skip.
+    pub async fn hermetic(test: &str) -> Option<Self> {
+        match Self::spawn_container(test).await {
+            Ok(env) => {
+                eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
+                Some(env)
+            }
+            Err(e) => {
+                eprintln!("Could not spawn testcontainers Kafka: {e}");
+                None
+            }
+        }
+    }
+
     async fn spawn_container(test: &str) -> Result<Self, String> {
         use testcontainers::ImageExt;
         use testcontainers::runners::AsyncRunner;
