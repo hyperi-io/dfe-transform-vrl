@@ -24,7 +24,9 @@ use crate::enrichment::table::EnrichmentTable;
 /// via `ArcSwap` (see `EnrichmentTable::swap_hashmap`).
 #[derive(Debug)]
 pub struct EnrichmentRegistry {
-    tables: FxHashMap<String, EnrichmentTable>,
+    /// One `Arc` per table so a compiled VRL program can hold the table it
+    /// resolved at compile time without a per-event registry lookup.
+    tables: FxHashMap<String, Arc<EnrichmentTable>>,
 }
 
 impl EnrichmentRegistry {
@@ -57,7 +59,7 @@ impl EnrichmentRegistry {
                 key_columns = ?config.key_columns,
                 "loaded enrichment table"
             );
-            tables.insert(config.name.clone(), table);
+            tables.insert(config.name.clone(), Arc::new(table));
         }
 
         Ok(Self { tables })
@@ -65,17 +67,30 @@ impl EnrichmentRegistry {
 
     /// Look up a table by name.
     pub fn get_table(&self, name: &str) -> Option<&EnrichmentTable> {
-        self.tables.get(name)
+        self.tables.get(name).map(AsRef::as_ref)
     }
 
-    /// Check if a table exists (used at VRL compile time for validation).
+    /// Look up a table by name, returning a handle that keeps it alive.
+    ///
+    /// The VRL functions resolve the table once at compile time and hold this
+    /// handle, so the runtime never takes a registry lookup per event.
+    pub fn table_handle(&self, name: &str) -> Option<Arc<EnrichmentTable>> {
+        self.tables.get(name).map(Arc::clone)
+    }
+
+    /// Whether a table with this name is registered.
+    ///
+    /// Compile-time validation goes through `table_names` and `table_handle`,
+    /// which produce the diagnostic and hand the program its table.
     pub fn has_table(&self, name: &str) -> bool {
         self.tables.contains_key(name)
     }
 
-    /// Table names (for error messages).
+    /// Table names, sorted, so a compile diagnostic listing them is stable.
     pub fn table_names(&self) -> Vec<&str> {
-        self.tables.keys().map(String::as_str).collect()
+        let mut names: Vec<&str> = self.tables.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
     }
 
     /// Number of tables.
@@ -90,7 +105,7 @@ impl EnrichmentRegistry {
 
     /// Iterator over all tables (for refresh task to find refreshable tables).
     pub fn tables(&self) -> impl Iterator<Item = &EnrichmentTable> {
-        self.tables.values()
+        self.tables.values().map(AsRef::as_ref)
     }
 
     /// Wrap in Arc for sharing between VRL compiler and runtime.
@@ -104,6 +119,7 @@ fn load_table_from_source(
     config: &EnrichmentTableConfig,
     source: &EnrichmentSourceConfig,
 ) -> crate::Result<EnrichmentTable> {
+    let schema = Arc::new(loader::ColumnSchema::compile(&config.schema, &config.name)?);
     match source {
         EnrichmentSourceConfig::Mmdb { path: mmdb_path } => {
             #[cfg(feature = "enrichment-mmdb")]
@@ -146,6 +162,7 @@ fn load_table_from_source(
                     config.key_columns.clone(),
                     config.source.clone(),
                     config.refresh.clone(),
+                    schema,
                 ))
             } else {
                 // URL-based STIX requires async — cannot load here
@@ -157,13 +174,14 @@ fn load_table_from_source(
         }
         _ => {
             // File, SQLite — all dispatched through load_from_source
-            let map = loader::load_from_source(source, &config.name, &config.key_columns)?;
+            let map = loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
             Ok(EnrichmentTable::new_hashmap(
                 &config.name,
                 map,
                 config.key_columns.clone(),
                 config.source.clone(),
                 config.refresh.clone(),
+                schema,
             ))
         }
     }
@@ -173,9 +191,28 @@ fn load_table_from_source(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::enrichment::table::Condition;
     use std::fs;
     use std::path::Path;
-    use vrl::value::{ObjectMap, Value};
+    use vrl::value::Value;
+
+    /// Equality conditions, the shape these tests use.
+    fn eq(pairs: &[(&str, &str)]) -> Vec<Condition> {
+        pairs
+            .iter()
+            .map(|(k, v)| Condition::Equals {
+                field: (*k).into(),
+                value: Value::from(*v),
+            })
+            .collect()
+    }
+
+    /// The single row matching `conditions`.
+    fn one_row(table: &EnrichmentTable, conditions: &[Condition]) -> vrl::value::ObjectMap {
+        let mut rows = table.find_rows(conditions, true, None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        rows.pop().unwrap()
+    }
 
     fn write_file(dir: &Path, name: &str, content: &str) -> String {
         let path = dir.join(name);
@@ -206,9 +243,7 @@ mod tests {
         let table = registry.get_table("services").unwrap();
         assert_eq!(table.len(), 2);
 
-        let mut cond = ObjectMap::new();
-        cond.insert("service_id".into(), Value::from("svc-001"));
-        let row = table.get_record(&cond).unwrap();
+        let row = one_row(table, &eq(&[("service_id", "svc-001")]));
         assert_eq!(row.get("name"), Some(&Value::from("auth")));
     }
 
@@ -232,9 +267,7 @@ mod tests {
         assert_eq!(registry.len(), 1);
 
         let table = registry.get_table("geo").unwrap();
-        let mut cond = ObjectMap::new();
-        cond.insert("cc".into(), Value::from("AU"));
-        let row = table.get_record(&cond).unwrap();
+        let row = one_row(table, &eq(&[("cc", "AU")]));
         assert_eq!(row.get("name"), Some(&Value::from("Australia")));
     }
 
@@ -316,9 +349,7 @@ mod tests {
         let table = registry.get_table("threats").unwrap();
         assert_eq!(table.len(), 1);
 
-        let mut cond = ObjectMap::new();
-        cond.insert("indicator".into(), Value::from("10.0.0.1"));
-        let row = table.get_record(&cond).unwrap();
+        let row = one_row(table, &eq(&[("indicator", "10.0.0.1")]));
         assert_eq!(row.get("name"), Some(&Value::from("Test IOC")));
     }
 
@@ -435,9 +466,9 @@ mod tests {
         let registry = EnrichmentRegistry::load(&configs).unwrap();
         let table = registry.get_table("cities").unwrap();
 
-        let mut cond = ObjectMap::new();
-        cond.insert("country".into(), Value::from("AU"));
-        let matches = table.find_records(&cond);
+        let matches = table
+            .find_rows(&eq(&[("country", "AU")]), true, None, None)
+            .unwrap();
         assert_eq!(matches.len(), 2);
     }
 

@@ -38,6 +38,16 @@ mod config;
 mod enrichment;
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "integration/enrichment_contract.rs"]
+mod enrichment_contract;
+
+// Only the MMDB contract tests use it, and those are feature-gated.
+#[cfg(feature = "enrichment-mmdb")]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "integration/mmdb_fixture.rs"]
+mod mmdb_fixture;
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/filebeat_pipeline.rs"]
 mod filebeat_pipeline;
 

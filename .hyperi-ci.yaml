@@ -18,6 +18,12 @@ quality:
 test:
   enabled: true
   coverage: true
+  rust:
+    # Added to the default set, so the MMDB enrichment tests are compiled in.
+    features: enrichment-mmdb
+    # Require process-per-test isolation rather than taking whatever the
+    # runner has installed.
+    nextest: true
 
 # Building
 build:
@@ -26,6 +32,10 @@ build:
   strategies:
     - native
   rust:
+    # The shipped binary needs this too, not just the test stage - the
+    # Dockerfile only COPYs the built binary, so a default build leaves the
+    # container rejecting `type: mmdb` tables at startup.
+    features: enrichment-mmdb
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
@@ -52,11 +62,9 @@ publish:
   binaries: both
   container:
     enabled: true
-    registry: jfrog
     dockerfile: Dockerfile
     platforms:
       - linux/amd64
       - linux/arm64
   helm:
     enabled: true
-    registry: jfrog
