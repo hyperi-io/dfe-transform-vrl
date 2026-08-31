@@ -300,7 +300,10 @@ pub fn load_csv(
 
     Ok(LoadedTable {
         rows,
-        columns: headers.iter().map(|h| KeyString::from(h.as_str())).collect(),
+        columns: headers
+            .iter()
+            .map(|h| KeyString::from(h.as_str()))
+            .collect(),
     })
 }
 
