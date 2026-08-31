@@ -37,6 +37,13 @@ mod config;
 #[path = "integration/enrichment.rs"]
 mod enrichment;
 
+// Shared with the e2e binary, which grades the same corpus through a real
+// broker. Declared here rather than under `common/mod.rs` so the integration
+// binary does not pull in the container helpers it never uses.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "common/filebeat.rs"]
+mod filebeat_corpus;
+
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/filebeat_pipeline.rs"]
 mod filebeat_pipeline;

@@ -119,11 +119,11 @@ Some configuration fields are hot-reloaded without pod restart:
 
 ## API Endpoints
 
-### GET /health/live
+### GET /livez
 
 Kubernetes liveness probe. Returns `200 OK` when the process is running.
 
-### GET /health/ready
+### GET /readyz
 
 Kubernetes readiness probe. Returns `503` if Kafka connections are unhealthy.
 
