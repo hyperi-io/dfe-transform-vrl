@@ -91,6 +91,41 @@ pipeline:
 #     key_columns: ["abbreviation"]
 
 # -----------------------------------------------------------------------------
+# Enrichment tables
+# -----------------------------------------------------------------------------
+# Reached from VRL as get_enrichment_table_record("name", condition, ...) and
+# find_enrichment_table_records("name", condition, ...), following Vector's
+# contract: every condition field must match, a get with no match or more than
+# one match errors, and the table name must be a literal naming a table listed
+# here or the program fails to compile.
+#
+# key_columns index the lookup; a condition on any other column still filters,
+# it just does not use the index.
+#
+# schema coerces text columns, which is what makes a numeric comparison or a
+# date range able to match. Accepted: asis, bytes, string, int, integer,
+# float, bool, boolean, date, date|<format>, timestamp, timestamp|<format>.
+# asis, bytes and string all leave the cell as text.
+#
+# A condition naming a column the table does not have is a compile error, so
+# a typo fails at startup rather than never matching.
+# enrichment_tables:
+#   - name: "services"
+#     path: "/etc/dfe-transform-vrl/enrichment/services.csv"
+#     key_columns: ["service_id"]
+#     schema:
+#       status_code: "integer"
+#       commissioned: "date"
+#     refresh:
+#       interval_secs: 300
+#   # MaxMind GeoIP2/GeoLite2, requires the enrichment-mmdb build feature.
+#   # The condition takes exactly one field, whose value is the IP address.
+#   - name: "geoip"
+#     source:
+#       type: "mmdb"
+#       path: "/etc/dfe-transform-vrl/enrichment/GeoLite2-City.mmdb"
+
+# -----------------------------------------------------------------------------
 # Health endpoint
 # -----------------------------------------------------------------------------
 # health:
