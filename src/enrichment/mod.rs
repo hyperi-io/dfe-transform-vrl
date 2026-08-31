@@ -23,5 +23,6 @@ pub mod stix;
 pub mod table;
 pub mod vrl_functions;
 
+pub use loader::ColumnSchema;
 pub use registry::EnrichmentRegistry;
-pub use table::EnrichmentTable;
+pub use table::{Condition, EnrichmentTable};

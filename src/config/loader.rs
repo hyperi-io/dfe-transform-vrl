@@ -120,6 +120,15 @@ pub struct EnrichmentTableConfig {
     /// Source definition (new tagged format). Takes precedence over `path`.
     #[serde(default)]
     pub source: Option<EnrichmentSourceConfig>,
+    /// Per-column type coercion, matching Vector's file enrichment table
+    /// `schema`. Without an entry a CSV cell stays a string, so
+    /// `status_code: integer` is what makes `{"status_code": 1}` match, and a
+    /// `timestamp` column is what makes a `{"from": ..., "to": ...}` date
+    /// range able to match at all. Accepted values: `string`, `int`,
+    /// `integer`, `float`, `bool`, `boolean`, `date`, `date|<format>`,
+    /// `timestamp`, `timestamp|<format>`.
+    #[serde(default)]
+    pub schema: BTreeMap<String, String>,
     /// Optional periodic refresh.
     #[serde(default)]
     pub refresh: Option<RefreshConfig>,
@@ -721,6 +730,41 @@ enrichment_tables:
         assert_eq!(table.path, "/data/services.csv");
         let source = table.resolved_source().unwrap();
         assert!(matches!(source, EnrichmentSourceConfig::File { .. }));
+    }
+
+    #[test]
+    fn enrichment_config_schema_column_types() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "services"
+    path: "/data/services.csv"
+    key_columns: ["service_id"]
+    schema:
+      status_code: "integer"
+      commissioned: "date|%d/%m/%Y"
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let table = &config.enrichment_tables[0];
+        assert_eq!(
+            table.schema.get("status_code").map(String::as_str),
+            Some("integer")
+        );
+        assert_eq!(
+            table.schema.get("commissioned").map(String::as_str),
+            Some("date|%d/%m/%Y")
+        );
+    }
+
+    #[test]
+    fn enrichment_config_schema_absent_is_empty() {
+        let yaml = r#"
+enrichment_tables:
+  - name: "services"
+    path: "/data/services.csv"
+    key_columns: ["service_id"]
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(config.enrichment_tables[0].schema.is_empty());
     }
 
     #[test]

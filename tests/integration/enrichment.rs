@@ -70,7 +70,9 @@ fn test_csv_lookup_hit() {
 }
 
 #[test]
-fn test_csv_lookup_miss_returns_null() {
+fn test_csv_lookup_miss_errors() {
+    // Vector errors "No rows found" on a miss; it does not return null. The
+    // old assertion here locked in the divergence -- see issue #38.
     let dir = tempfile::tempdir().unwrap();
     let csv_path = write_file(
         dir.path(),
@@ -92,10 +94,12 @@ fn test_csv_lookup_miss_returns_null() {
         registry,
     );
 
-    let result = run_transform(&program, serde_json::json!({"service_id": "svc-999"}));
-
-    let obj = result.as_object().unwrap();
-    assert_eq!(obj.get("service"), Some(&Value::Null));
+    let mut value = Value::from(serde_json::json!({"service_id": "svc-999"}));
+    let err = run_vrl(&program, &mut value).expect_err("a miss must abort the program");
+    assert!(
+        err.to_string().contains("No rows found"),
+        "unexpected error: {err}"
+    );
 }
 
 // =========================================================================
@@ -348,7 +352,7 @@ fn test_missing_enrichment_file_fails_load() {
 // =========================================================================
 
 #[test]
-fn test_lookup_with_null_field_returns_null() {
+fn test_lookup_with_missing_field_errors() {
     let dir = tempfile::tempdir().unwrap();
     let csv_path = write_file(dir.path(), "svc.csv", "service_id,name\nsvc-001,auth\n");
 
@@ -361,17 +365,19 @@ fn test_lookup_with_null_field_returns_null() {
     .unwrap()
     .into_arc();
 
-    // When .service_id is null, the condition object has a null value
-    // which won't match any key — should return null
+    // When .service_id is absent the condition value is null, which matches no
+    // row, so the lookup errors exactly as any other miss does.
     let program = compile_with_registry(
         r#".result = get_enrichment_table_record!("svc", {"service_id": .service_id})"#,
         registry,
     );
 
-    let result = run_transform(&program, serde_json::json!({"other_field": "value"}));
-
-    let obj = result.as_object().unwrap();
-    assert_eq!(obj.get("result"), Some(&Value::Null));
+    let mut value = Value::from(serde_json::json!({"other_field": "value"}));
+    let err = run_vrl(&program, &mut value).expect_err("a null condition matches nothing");
+    assert!(
+        err.to_string().contains("No rows found"),
+        "unexpected error: {err}"
+    );
 }
 
 // =========================================================================

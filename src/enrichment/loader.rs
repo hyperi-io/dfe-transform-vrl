@@ -12,14 +12,117 @@
 //! The `load_from_source()` dispatcher is the single entry point used by both
 //! `EnrichmentRegistry::load()` (startup) and the refresh loop (runtime).
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use vrl::compiler::TimeZone;
+use vrl::compiler::conversion::Conversion;
 use vrl::value::{KeyString, ObjectMap, Value};
 
 use crate::config::{EnrichmentSourceConfig, FileFormat};
-use crate::enrichment::table::CompactKey;
+use crate::enrichment::table::{CompactKey, RowMap};
+
+// ---------------------------------------------------------------------------
+// Column schema
+// ---------------------------------------------------------------------------
+
+/// Per-column type coercion for text-valued sources.
+///
+/// Mirrors Vector's file enrichment table `schema`: without it every CSV cell
+/// loads as a string, so a `status_code` column compares as `"1"` and never
+/// as `1`, and a date-range condition can never match because the cell is not
+/// a timestamp.
+///
+/// Conversion names come from VRL's own `Conversion`, so they are exactly
+/// Vector's: `string`, `int`/`integer`, `float`, `bool`/`boolean`,
+/// `timestamp`, `timestamp|<format>`. `date` and `date|<format>` are handled
+/// here, matching Vector's file table, and parse to midnight UTC.
+#[derive(Debug, Clone, Default)]
+pub struct ColumnSchema {
+    /// Column name -> how its text is converted.
+    columns: BTreeMap<String, ColumnType>,
+}
+
+/// A single column's declared conversion.
+#[derive(Debug, Clone)]
+enum ColumnType {
+    /// A date with no time part, parsed at midnight UTC with this format.
+    Date(String),
+    /// Any conversion VRL's own `Conversion` understands.
+    Vrl(Conversion),
+}
+
+impl ColumnSchema {
+    /// Compile a `column -> type name` map, failing on an unknown type name.
+    pub fn compile(spec: &BTreeMap<String, String>, table_name: &str) -> crate::Result<Self> {
+        let mut columns = BTreeMap::new();
+        for (column, type_name) in spec {
+            let mut parts = type_name.splitn(2, '|').map(str::trim);
+            let column_type = match (parts.next(), parts.next()) {
+                (Some("date"), None) => ColumnType::Date("%Y-%m-%d".to_string()),
+                (Some("date"), Some(format)) => ColumnType::Date(format.to_string()),
+                _ => {
+                    ColumnType::Vrl(Conversion::parse(type_name, TimeZone::Local).map_err(|e| {
+                        crate::Error::Enrichment(format!(
+                            "table '{table_name}': column '{column}': {e}"
+                        ))
+                    })?)
+                }
+            };
+            columns.insert(column.clone(), column_type);
+        }
+        Ok(Self { columns })
+    }
+
+    /// Whether any column declares a conversion.
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+
+    /// Convert one cell, returning it unchanged when the column is undeclared.
+    pub fn coerce(&self, table_name: &str, column: &str, raw: &str) -> crate::Result<Value> {
+        let Some(column_type) = self.columns.get(column) else {
+            return Ok(Value::from(raw));
+        };
+        match column_type {
+            ColumnType::Date(format) => {
+                let date = chrono::NaiveDate::parse_from_str(raw, format).map_err(|e| {
+                    crate::Error::Enrichment(format!(
+                        "table '{table_name}': column '{column}': cannot parse date '{raw}': {e}"
+                    ))
+                })?;
+                Ok(Value::Timestamp(
+                    date.and_time(chrono::NaiveTime::MIN).and_utc(),
+                ))
+            }
+            ColumnType::Vrl(conversion) => conversion
+                .convert::<Value>(bytes::Bytes::copy_from_slice(raw.as_bytes()))
+                .map_err(|e| {
+                    crate::Error::Enrichment(format!(
+                        "table '{table_name}': column '{column}': cannot convert '{raw}': {e}"
+                    ))
+                }),
+        }
+    }
+
+    /// Convert a already-typed value, coercing only strings.
+    ///
+    /// JSON and YAML sources carry their own types, so only a string cell is a
+    /// candidate for a declared conversion.
+    fn coerce_value(&self, table_name: &str, column: &str, value: Value) -> crate::Result<Value> {
+        if self.is_empty() {
+            return Ok(value);
+        }
+        match &value {
+            Value::Bytes(bytes) => {
+                let raw = String::from_utf8_lossy(bytes).into_owned();
+                self.coerce(table_name, column, &raw)
+            }
+            _ => Ok(value),
+        }
+    }
+}
 
 /// Dispatch to the correct loader based on source config.
 ///
@@ -29,20 +132,21 @@ pub fn load_from_source(
     source: &EnrichmentSourceConfig,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+    schema: &ColumnSchema,
+) -> crate::Result<RowMap> {
     match source {
         EnrichmentSourceConfig::File { path, format } => {
             let detected = format.unwrap_or_else(|| detect_format(path));
             match detected {
-                FileFormat::Csv => load_csv(Path::new(path), table_name, key_columns),
-                FileFormat::Json => load_json(Path::new(path), table_name, key_columns),
-                FileFormat::Yaml => load_yaml(Path::new(path), table_name, key_columns),
+                FileFormat::Csv => load_csv(Path::new(path), table_name, key_columns, schema),
+                FileFormat::Json => load_json(Path::new(path), table_name, key_columns, schema),
+                FileFormat::Yaml => load_yaml(Path::new(path), table_name, key_columns, schema),
                 FileFormat::Auto => {
                     let ext_format = detect_format(path);
                     if ext_format == FileFormat::Auto {
                         // Unknown extension — try JSON first, then CSV
-                        load_json(Path::new(path), table_name, key_columns)
-                            .or_else(|_| load_csv(Path::new(path), table_name, key_columns))
+                        load_json(Path::new(path), table_name, key_columns, schema)
+                            .or_else(|_| load_csv(Path::new(path), table_name, key_columns, schema))
                     } else {
                         load_from_source(
                             &EnrichmentSourceConfig::File {
@@ -51,6 +155,7 @@ pub fn load_from_source(
                             },
                             table_name,
                             key_columns,
+                            schema,
                         )
                     }
                 }
@@ -100,7 +205,8 @@ pub fn load_csv(
     path: &Path,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+    schema: &ColumnSchema,
+) -> crate::Result<RowMap> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -130,7 +236,7 @@ pub fn load_csv(
 
     validate_key_columns(&headers, key_columns, table_name)?;
 
-    let mut rows = FxHashMap::default();
+    let mut rows = RowMap::default();
 
     for (row_idx, result) in reader.records().enumerate() {
         let record = result.map_err(|e| {
@@ -148,11 +254,12 @@ pub fn load_csv(
 
         let mut row = ObjectMap::new();
         for (header, value) in headers.iter().zip(record.iter()) {
-            row.insert(KeyString::from(header.as_str()), Value::from(value));
+            let cell = schema.coerce(table_name, header, value)?;
+            row.insert(KeyString::from(header.as_str()), cell);
         }
 
         let key = CompactKey::from_row(&row, key_columns);
-        rows.insert(key, Arc::new(row));
+        rows.entry(key).or_default().push(Arc::new(row));
     }
 
     Ok(rows)
@@ -167,7 +274,8 @@ pub fn load_json(
     path: &Path,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+    schema: &ColumnSchema,
+) -> crate::Result<RowMap> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -186,7 +294,7 @@ pub fn load_json(
         crate::Error::Enrichment(format!("table '{table_name}': invalid JSON: {e}"))
     })?;
 
-    json_objects_to_map(&json_array, table_name, key_columns)
+    json_objects_to_map(&json_array, table_name, key_columns, schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +306,8 @@ pub fn load_yaml(
     path: &Path,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+    schema: &ColumnSchema,
+) -> crate::Result<RowMap> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -218,7 +327,7 @@ pub fn load_yaml(
         crate::Error::Enrichment(format!("table '{table_name}': invalid YAML: {e}"))
     })?;
 
-    json_objects_to_map(&yaml_array, table_name, key_columns)
+    json_objects_to_map(&yaml_array, table_name, key_columns, schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +341,7 @@ pub fn load_sqlite(
     query: &str,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
+) -> crate::Result<RowMap> {
     let conn = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -256,7 +365,7 @@ pub fn load_sqlite(
 
     validate_key_columns(&column_names, key_columns, table_name)?;
 
-    let mut rows = FxHashMap::default();
+    let mut rows = RowMap::default();
 
     let row_iter = stmt
         .query_map([], |row| {
@@ -276,7 +385,7 @@ pub fn load_sqlite(
             crate::Error::Enrichment(format!("table '{table_name}': read row: {e}"))
         })?;
         let key = CompactKey::from_row(&obj, key_columns);
-        rows.insert(key, Arc::new(obj));
+        rows.entry(key).or_default().push(Arc::new(obj));
     }
 
     Ok(rows)
@@ -324,8 +433,9 @@ fn json_objects_to_map(
     items: &[serde_json::Value],
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<FxHashMap<CompactKey, Arc<ObjectMap>>> {
-    let mut rows = FxHashMap::default();
+    schema: &ColumnSchema,
+) -> crate::Result<RowMap> {
+    let mut rows = RowMap::default();
 
     for (idx, item) in items.iter().enumerate() {
         let obj = item.as_object().ok_or_else(|| {
@@ -342,13 +452,14 @@ fn json_objects_to_map(
             }
         }
 
-        let row: ObjectMap = obj
-            .iter()
-            .map(|(k, v)| (KeyString::from(k.as_str()), json_to_vrl_value(v)))
-            .collect();
+        let mut row = ObjectMap::new();
+        for (k, v) in obj {
+            let cell = schema.coerce_value(table_name, k, json_to_vrl_value(v))?;
+            row.insert(KeyString::from(k.as_str()), cell);
+        }
 
         let key = CompactKey::from_row(&row, key_columns);
-        rows.insert(key, Arc::new(row));
+        rows.entry(key).or_default().push(Arc::new(row));
     }
 
     Ok(rows)
@@ -380,17 +491,19 @@ fn json_to_vrl_value(v: &serde_json::Value) -> Value {
 /// Counts key bytes + approximate `ObjectMap` overhead per entry.
 /// Used for `max_bytes` enforcement.
 #[allow(clippy::cast_precision_loss, clippy::implicit_hasher)]
-pub fn estimate_table_bytes(map: &FxHashMap<CompactKey, Arc<ObjectMap>>) -> u64 {
+pub fn estimate_table_bytes(map: &RowMap) -> u64 {
     let mut total: u64 = 0;
     // FxHashMap bucket overhead: ~48 bytes per entry
     total += (map.len() as u64) * 48;
-    for (key, value) in map {
+    for (key, bucket) in map {
         // CompactKey: Box<[u8]> pointer + data
         total += 16 + key.as_bytes().len() as u64;
-        // Arc<ObjectMap>: pointer + refcount + map overhead
-        total += 16;
-        for (k, v) in value.as_ref() {
-            total += k.len() as u64 + estimate_value_bytes(v);
+        for value in bucket {
+            // Arc<ObjectMap>: pointer + refcount + map overhead
+            total += 16;
+            for (k, v) in value.as_ref() {
+                total += k.len() as u64 + estimate_value_bytes(v);
+            }
         }
     }
     total
@@ -425,6 +538,10 @@ fn estimate_value_bytes(v: &Value) -> u64 {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::LazyLock;
+
+    /// Most loader tests declare no column types.
+    static NO_SCHEMA: LazyLock<ColumnSchema> = LazyLock::new(ColumnSchema::default);
 
     fn write_file(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
         let path = dir.join(name);
@@ -445,13 +562,13 @@ mod tests {
             "service_id,name,tier\nsvc-001,auth,critical\nsvc-002,web,standard\n",
         );
 
-        let rows = load_csv(&path, "services", &["service_id".into()]).unwrap();
+        let rows = load_csv(&path, "services", &["service_id".into()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
 
         let mut cond = ObjectMap::new();
         cond.insert("service_id".into(), Value::from("svc-001"));
-        let key = CompactKey::from_condition(&cond, &["service_id".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let key = CompactKey::from_row(&cond, &["service_id".into()]);
+        let row = &rows.get(&key).unwrap()[0];
         assert_eq!(row.get("name"), Some(&Value::from("auth")));
     }
 
@@ -465,14 +582,14 @@ mod tests {
         );
 
         let keys = vec!["country".into(), "city".into()];
-        let rows = load_csv(&path, "geo", &keys).unwrap();
+        let rows = load_csv(&path, "geo", &keys, &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 3);
 
         let mut cond = ObjectMap::new();
         cond.insert("country".into(), Value::from("AU"));
         cond.insert("city".into(), Value::from("Sydney"));
-        let key = CompactKey::from_condition(&cond, &keys).unwrap();
-        let row = rows.get(&key).unwrap();
+        let key = CompactKey::from_row(&cond, &keys);
+        let row = &rows.get(&key).unwrap()[0];
         assert_eq!(row.get("tz"), Some(&Value::from("AEST")));
     }
 
@@ -480,26 +597,34 @@ mod tests {
     fn load_csv_missing_key_column() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.csv", "a,b\n1,2\n");
-        assert!(load_csv(&path, "bad", &["missing".into()]).is_err());
+        assert!(load_csv(&path, "bad", &["missing".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
     fn load_csv_empty_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "empty.csv", "");
-        assert!(load_csv(&path, "empty", &["id".into()]).is_err());
+        assert!(load_csv(&path, "empty", &["id".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
     fn load_csv_mismatched_columns() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.csv", "a,b,c\n1,2\n");
-        assert!(load_csv(&path, "bad", &["a".into()]).is_err());
+        assert!(load_csv(&path, "bad", &["a".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
     fn load_csv_file_not_found() {
-        assert!(load_csv(Path::new("/nonexistent.csv"), "t", &["id".into()]).is_err());
+        assert!(
+            load_csv(
+                Path::new("/nonexistent.csv"),
+                "t",
+                &["id".into()],
+                &NO_SCHEMA
+            )
+            .is_err()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -518,7 +643,7 @@ mod tests {
             ]"#,
         );
 
-        let rows = load_json(&path, "services", &["service_id".into()]).unwrap();
+        let rows = load_json(&path, "services", &["service_id".into()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -526,21 +651,21 @@ mod tests {
     fn load_json_missing_key_column() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.json", r#"[{"a": 1}]"#);
-        assert!(load_json(&path, "bad", &["missing".into()]).is_err());
+        assert!(load_json(&path, "bad", &["missing".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
     fn load_json_not_array() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.json", r#"{"not": "array"}"#);
-        assert!(load_json(&path, "bad", &["id".into()]).is_err());
+        assert!(load_json(&path, "bad", &["id".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
     fn load_json_element_not_object() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.json", "[1, 2, 3]");
-        assert!(load_json(&path, "bad", &["id".into()]).is_err());
+        assert!(load_json(&path, "bad", &["id".into()], &NO_SCHEMA).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -562,13 +687,13 @@ mod tests {
 "#,
         );
 
-        let rows = load_yaml(&path, "routes", &["route_id".into()]).unwrap();
+        let rows = load_yaml(&path, "routes", &["route_id".into()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
 
         let mut cond = ObjectMap::new();
         cond.insert("route_id".into(), Value::from("SYD-MEL"));
-        let key = CompactKey::from_condition(&cond, &["route_id".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let key = CompactKey::from_row(&cond, &["route_id".into()]);
+        let row = &rows.get(&key).unwrap()[0];
         assert_eq!(row.get("origin"), Some(&Value::from("YSSY")));
     }
 
@@ -576,7 +701,7 @@ mod tests {
     fn load_yaml_missing_key_column() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_file(dir.path(), "bad.yaml", "- a: 1\n");
-        assert!(load_yaml(&path, "bad", &["missing".into()]).is_err());
+        assert!(load_yaml(&path, "bad", &["missing".into()], &NO_SCHEMA).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -610,8 +735,8 @@ mod tests {
 
         let mut condition = ObjectMap::new();
         condition.insert("msisdn".into(), Value::from("61400000001"));
-        let key = CompactKey::from_condition(&condition, &["msisdn".into()]).unwrap();
-        let row = rows.get(&key).unwrap();
+        let key = CompactKey::from_row(&condition, &["msisdn".to_string()]);
+        let row = &rows.get(&key).unwrap()[0];
         assert_eq!(row.get("plan"), Some(&Value::from("premium")));
     }
 
@@ -651,7 +776,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "geo", &["ip".to_string()]).unwrap();
+        let rows = load_from_source(&src, "geo", &["ip".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -664,7 +789,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "table", &["k".to_string()]).unwrap();
+        let rows = load_from_source(&src, "table", &["k".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -677,7 +802,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "ext", &["k".to_string()]).unwrap();
+        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -691,7 +816,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "ext", &["k".to_string()]).unwrap();
+        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -705,7 +830,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: Some(FileFormat::Csv),
         };
-        let rows = load_from_source(&src, "t", &["k".to_string()]).unwrap();
+        let rows = load_from_source(&src, "t", &["k".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -718,7 +843,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "y", &["k".to_string()]).unwrap();
+        let rows = load_from_source(&src, "y", &["k".to_string()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -751,7 +876,7 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: Some(FileFormat::Csv),
         };
-        let rows = load_from_source(&source, "svc", &["id".into()]).unwrap();
+        let rows = load_from_source(&source, "svc", &["id".into()], &NO_SCHEMA).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -763,7 +888,7 @@ mod tests {
             collection: None,
             auth: None,
         };
-        assert!(load_from_source(&source, "t", &["id".into()]).is_err());
+        assert!(load_from_source(&source, "t", &["id".into()], &NO_SCHEMA).is_err());
     }
 
     #[test]
@@ -771,7 +896,7 @@ mod tests {
         let source = EnrichmentSourceConfig::Mmdb {
             path: "/data/geo.mmdb".into(),
         };
-        assert!(load_from_source(&source, "t", &["id".into()]).is_err());
+        assert!(load_from_source(&source, "t", &["id".into()], &NO_SCHEMA).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -780,17 +905,17 @@ mod tests {
 
     #[test]
     fn estimate_table_bytes_empty() {
-        let map: FxHashMap<CompactKey, Arc<ObjectMap>> = FxHashMap::default();
+        let map = RowMap::default();
         assert_eq!(estimate_table_bytes(&map), 0);
     }
 
     #[test]
     fn estimate_table_bytes_nonzero() {
-        let mut map = FxHashMap::default();
+        let mut map = RowMap::default();
         let mut row = ObjectMap::new();
         row.insert("id".into(), Value::from("test"));
         let key = CompactKey::from_row(&row, &["id".into()]);
-        map.insert(key, Arc::new(row));
+        map.insert(key, vec![Arc::new(row)]);
         assert!(estimate_table_bytes(&map) > 0);
     }
 }
