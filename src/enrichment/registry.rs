@@ -149,7 +149,7 @@ fn load_table_from_source(
         } => {
             // File-based STIX: load synchronously
             if let Some(file_path) = path {
-                let map = crate::enrichment::stix::load_stix(
+                let loaded = crate::enrichment::stix::load_stix(
                     Some(file_path.as_str()),
                     None,
                     None,
@@ -158,11 +158,12 @@ fn load_table_from_source(
                 )?;
                 Ok(EnrichmentTable::new_hashmap(
                     &config.name,
-                    map,
+                    loaded.rows,
                     config.key_columns.clone(),
                     config.source.clone(),
                     config.refresh.clone(),
                     schema,
+                    Arc::from(loaded.columns),
                 ))
             } else {
                 // URL-based STIX requires async — cannot load here
@@ -174,14 +175,16 @@ fn load_table_from_source(
         }
         _ => {
             // File, SQLite — all dispatched through load_from_source
-            let map = loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
+            let loaded =
+                loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
             Ok(EnrichmentTable::new_hashmap(
                 &config.name,
-                map,
+                loaded.rows,
                 config.key_columns.clone(),
                 config.source.clone(),
                 config.refresh.clone(),
                 schema,
+                Arc::from(loaded.columns),
             ))
         }
     }

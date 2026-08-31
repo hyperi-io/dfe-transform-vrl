@@ -124,9 +124,10 @@ pub struct EnrichmentTableConfig {
     /// `schema`. Without an entry a CSV cell stays a string, so
     /// `status_code: integer` is what makes `{"status_code": 1}` match, and a
     /// `timestamp` column is what makes a `{"from": ..., "to": ...}` date
-    /// range able to match at all. Accepted values: `string`, `int`,
-    /// `integer`, `float`, `bool`, `boolean`, `date`, `date|<format>`,
-    /// `timestamp`, `timestamp|<format>`.
+    /// range able to match at all. Accepted values: `asis`, `bytes`,
+    /// `string`, `int`, `integer`, `float`, `bool`, `boolean`, `date`,
+    /// `date|<format>`, `timestamp`, `timestamp|<format>`. `asis` and
+    /// `bytes` leave the cell alone.
     #[serde(default)]
     pub schema: BTreeMap<String, String>,
     /// Optional periodic refresh.

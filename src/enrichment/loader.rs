@@ -35,9 +35,10 @@ use crate::enrichment::table::{CompactKey, RowMap};
 /// a timestamp.
 ///
 /// Conversion names come from VRL's own `Conversion`, so they are exactly
-/// Vector's: `string`, `int`/`integer`, `float`, `bool`/`boolean`,
-/// `timestamp`, `timestamp|<format>`. `date` and `date|<format>` are handled
-/// here, matching Vector's file table, and parse to midnight UTC.
+/// Vector's: `asis`/`bytes`/`string` (all no-ops), `int`/`integer`, `float`,
+/// `bool`/`boolean`, `timestamp`, `timestamp|<format>`. `date` and
+/// `date|<format>` are handled here, matching Vector's file table, and parse
+/// to midnight UTC.
 #[derive(Debug, Clone, Default)]
 pub struct ColumnSchema {
     /// Column name -> how its text is converted.
@@ -124,6 +125,41 @@ impl ColumnSchema {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Loaded table
+// ---------------------------------------------------------------------------
+
+/// The rows of a table plus the column names the source declares.
+///
+/// The columns are what makes a condition on a column the table does not have
+/// a compile-time error rather than a lookup that silently never matches, so
+/// they have to come from the source rather than from the rows: a CSV with
+/// headers and no data rows still has columns.
+///
+/// Column order is the source's own (CSV header order, SQLite projection
+/// order, first-seen key order for JSON and YAML), so a diagnostic listing
+/// them reads the way the file does.
+#[derive(Debug, Default)]
+pub struct LoadedTable {
+    /// Rows, bucketed by key.
+    pub rows: RowMap,
+    /// Column names the source declares.
+    pub columns: Vec<KeyString>,
+}
+
+/// Collect column names in first-seen order, for sources that declare none.
+///
+/// JSON, YAML and STIX rows carry their own keys and need not agree, so the
+/// column set is their union. An empty source therefore yields no columns,
+/// which is indistinguishable from "unknown" and disables the check.
+pub(crate) fn union_columns(seen: &mut Vec<KeyString>, row: &ObjectMap) {
+    for key in row.keys() {
+        if !seen.iter().any(|k| k == key) {
+            seen.push(key.clone());
+        }
+    }
+}
+
 /// Dispatch to the correct loader based on source config.
 ///
 /// Used by both `EnrichmentRegistry::load()` (startup) and the refresh loop.
@@ -133,7 +169,7 @@ pub fn load_from_source(
     table_name: &str,
     key_columns: &[String],
     schema: &ColumnSchema,
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     match source {
         EnrichmentSourceConfig::File { path, format } => {
             let detected = format.unwrap_or_else(|| detect_format(path));
@@ -206,7 +242,7 @@ pub fn load_csv(
     table_name: &str,
     key_columns: &[String],
     schema: &ColumnSchema,
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -262,7 +298,10 @@ pub fn load_csv(
         rows.entry(key).or_default().push(Arc::new(row));
     }
 
-    Ok(rows)
+    Ok(LoadedTable {
+        rows,
+        columns: headers.iter().map(|h| KeyString::from(h.as_str())).collect(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +314,7 @@ pub fn load_json(
     table_name: &str,
     key_columns: &[String],
     schema: &ColumnSchema,
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -307,7 +346,7 @@ pub fn load_yaml(
     table_name: &str,
     key_columns: &[String],
     schema: &ColumnSchema,
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     if !path.is_file() {
         return Err(crate::Error::Enrichment(format!(
             "table '{table_name}': file not found: {}",
@@ -341,7 +380,7 @@ pub fn load_sqlite(
     query: &str,
     table_name: &str,
     key_columns: &[String],
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     let conn = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -388,7 +427,13 @@ pub fn load_sqlite(
         rows.entry(key).or_default().push(Arc::new(obj));
     }
 
-    Ok(rows)
+    Ok(LoadedTable {
+        rows,
+        columns: column_names
+            .iter()
+            .map(|c| KeyString::from(c.as_str()))
+            .collect(),
+    })
 }
 
 /// Convert a `SQLite` column value to VRL `Value`.
@@ -434,8 +479,9 @@ fn json_objects_to_map(
     table_name: &str,
     key_columns: &[String],
     schema: &ColumnSchema,
-) -> crate::Result<RowMap> {
+) -> crate::Result<LoadedTable> {
     let mut rows = RowMap::default();
+    let mut columns: Vec<KeyString> = Vec::new();
 
     for (idx, item) in items.iter().enumerate() {
         let obj = item.as_object().ok_or_else(|| {
@@ -458,11 +504,13 @@ fn json_objects_to_map(
             row.insert(KeyString::from(k.as_str()), cell);
         }
 
+        union_columns(&mut columns, &row);
+
         let key = CompactKey::from_row(&row, key_columns);
         rows.entry(key).or_default().push(Arc::new(row));
     }
 
-    Ok(rows)
+    Ok(LoadedTable { rows, columns })
 }
 
 /// Validate that all key columns exist in the header/column list.
@@ -562,7 +610,9 @@ mod tests {
             "service_id,name,tier\nsvc-001,auth,critical\nsvc-002,web,standard\n",
         );
 
-        let rows = load_csv(&path, "services", &["service_id".into()], &NO_SCHEMA).unwrap();
+        let rows = load_csv(&path, "services", &["service_id".into()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
 
         let mut cond = ObjectMap::new();
@@ -582,7 +632,7 @@ mod tests {
         );
 
         let keys = vec!["country".into(), "city".into()];
-        let rows = load_csv(&path, "geo", &keys, &NO_SCHEMA).unwrap();
+        let rows = load_csv(&path, "geo", &keys, &NO_SCHEMA).unwrap().rows;
         assert_eq!(rows.len(), 3);
 
         let mut cond = ObjectMap::new();
@@ -643,7 +693,9 @@ mod tests {
             ]"#,
         );
 
-        let rows = load_json(&path, "services", &["service_id".into()], &NO_SCHEMA).unwrap();
+        let rows = load_json(&path, "services", &["service_id".into()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
     }
 
@@ -687,7 +739,9 @@ mod tests {
 "#,
         );
 
-        let rows = load_yaml(&path, "routes", &["route_id".into()], &NO_SCHEMA).unwrap();
+        let rows = load_yaml(&path, "routes", &["route_id".into()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
 
         let mut cond = ObjectMap::new();
@@ -730,7 +784,8 @@ mod tests {
             "subscribers",
             &["msisdn".into()],
         )
-        .unwrap();
+        .unwrap()
+        .rows;
         assert_eq!(rows.len(), 2);
 
         let mut condition = ObjectMap::new();
@@ -776,7 +831,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "geo", &["ip".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "geo", &["ip".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
     }
 
@@ -789,7 +846,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "table", &["k".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "table", &["k".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
     }
 
@@ -802,7 +861,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 1);
     }
 
@@ -816,7 +877,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "ext", &["k".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 1);
     }
 
@@ -830,7 +893,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: Some(FileFormat::Csv),
         };
-        let rows = load_from_source(&src, "t", &["k".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "t", &["k".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 1);
     }
 
@@ -843,7 +908,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: None,
         };
-        let rows = load_from_source(&src, "y", &["k".to_string()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&src, "y", &["k".to_string()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 2);
     }
 
@@ -876,7 +943,9 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             format: Some(FileFormat::Csv),
         };
-        let rows = load_from_source(&source, "svc", &["id".into()], &NO_SCHEMA).unwrap();
+        let rows = load_from_source(&source, "svc", &["id".into()], &NO_SCHEMA)
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 1);
     }
 
