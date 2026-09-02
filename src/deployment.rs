@@ -313,12 +313,19 @@ mod tests {
 
     /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
     /// next regen -- which is how the Kafka SASL env names shipped broken.
-    /// `templates/keda-scaledobject.yaml` is the one deliberate exception: the
-    /// generator emits a `.Values.config.kafka.*` path this app's values do not
-    /// have, so a regenerated copy will not render at all.
+    /// Two deliberate exceptions, both KEDA and both waiting on the generator:
+    /// `templates/keda-scaledobject.yaml`, where the generator emits a
+    /// `.Values.config.kafka.*` path this app's values do not have, so a
+    /// regenerated copy will not render at all; and
+    /// `templates/keda-triggerauth.yaml`, where it binds the username to
+    /// `sasl`, which KEDA reads as the mechanism enum, leaving the scaler with
+    /// no username and no lag metric.
     #[test]
     fn test_committed_chart_matches_the_generator() {
-        const HAND_FIXED: &[&str] = &["templates/keda-scaledobject.yaml"];
+        const HAND_FIXED: &[&str] = &[
+            "templates/keda-scaledobject.yaml",
+            "templates/keda-triggerauth.yaml",
+        ];
 
         let generated = tempfile::tempdir().expect("temp dir");
         scalo::deployment::generate_chart(&contract(), generated.path(), None)
