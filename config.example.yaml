@@ -36,11 +36,15 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     # This file is NOT interpolated -- a ${VAR} here reaches the broker as a
+#     # literal. Supply credentials by environment instead:
+#     #   DFE_TRANSFORM_SOURCE_SASL_USERNAME
+#     #   DFE_TRANSFORM_SOURCE_SASL_PASSWORD
+#     username: ""
+#     password: ""
 #   tls:
 #     enabled: true
-#   # librdkafka overrides — production defaults baked in, override here
+#   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
 
@@ -58,8 +62,11 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     # Not interpolated -- see the source block above. Sink credentials come from
+#     #   DFE_TRANSFORM_SINK_SASL_USERNAME
+#     #   DFE_TRANSFORM_SINK_SASL_PASSWORD
+#     username: ""
+#     password: ""
 #   tls:
 #     enabled: true
 #   # librdkafka overrides

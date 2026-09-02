@@ -407,7 +407,8 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
-/// Env var names are the contract with dfe-engine — do not rename.
+/// These names are the deployment contract -- the chart's Secret wiring sets
+/// them verbatim, so renaming one silently stops the credential being read.
 /// Uses scalo `flat_env_*` helpers for consistent parsing and logging.
 impl ApplyFlatEnv for Config {
     fn apply_flat_env(&mut self, prefix: &str) {
