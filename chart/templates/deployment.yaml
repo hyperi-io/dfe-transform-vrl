@@ -78,25 +78,13 @@ spec:
             - name: OTEL_EXPORTER_OTLP_PROTOCOL
               value: {{ .Values.otel.protocol | quote }}
             {{- end }}
-            # Kafka credentials via Secret. The app reads the flat DFE_TRANSFORM_*
-            # names (apply_flat_env), and configures source and sink separately,
-            # so one credential is projected to both endpoints.
-            - name: DFE_TRANSFORM_SOURCE_SASL_USERNAME
+            # kafka credentials via Secret (figment env cascade overrides file config)
+            - name: DFE_TRANSFORM_KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}
                   key: {{ .Values.kafka.secretKeys.username }}
-            - name: DFE_TRANSFORM_SOURCE_SASL_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}
-                  key: {{ .Values.kafka.secretKeys.password }}
-            - name: DFE_TRANSFORM_SINK_SASL_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}
-                  key: {{ .Values.kafka.secretKeys.username }}
-            - name: DFE_TRANSFORM_SINK_SASL_PASSWORD
+            - name: DFE_TRANSFORM_KAFKA_SASL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}

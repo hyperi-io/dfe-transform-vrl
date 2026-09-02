@@ -94,17 +94,34 @@ routing behaviour, and known limitations.
 
 ### Environment Variable Overrides
 
-All config fields have flat env var overrides for K8s big-dial configuration:
+The big dials have flat env var overrides for K8s configuration. This is the
+whole list -- any other field takes figment's nested form instead
+(`DFE_TRANSFORM_PIPELINE__BATCH_SIZE`).
 
 | Env Var | Config Field |
 |---------|-------------|
 | `DFE_TRANSFORM_PIPELINE_NAME` | `pipeline.name` |
+| `DFE_TRANSFORM_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
+| `DFE_TRANSFORM_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
 | `DFE_TRANSFORM_SOURCE_GROUP_ID` | `source.group_id` |
+| `DFE_TRANSFORM_SOURCE_FORMAT` | `source.format` |
+| `DFE_TRANSFORM_SOURCE_SASL_USERNAME` | `source.sasl.username` |
+| `DFE_TRANSFORM_SOURCE_SASL_PASSWORD` | `source.sasl.password` |
+| `DFE_TRANSFORM_SINK_BROKERS` | `sink.brokers` |
 | `DFE_TRANSFORM_SINK_TOPIC` | `sink.topic` |
 | `DFE_TRANSFORM_SINK_KEY_FIELD` | `sink.key_field` |
-| `DFE_TRANSFORM_BATCH_SIZE` | `pipeline.batch_size` |
+| `DFE_TRANSFORM_SINK_COMPRESSION` | `sink.compression` |
+| `DFE_TRANSFORM_SINK_SASL_USERNAME` | `sink.sasl.username` |
+| `DFE_TRANSFORM_SINK_SASL_PASSWORD` | `sink.sasl.password` |
+| `DFE_TRANSFORM_TRANSFORMS_DIR` | `transforms.dir` |
+| `DFE_TRANSFORM_HEALTH_ADDRESS` | `health.address` |
+| `DFE_TRANSFORM_METRICS_ADDRESS` | `metrics.address` |
+
+The chart mounts the Kafka Secret into the `KAFKA_SASL_*` pair, which reaches
+both endpoints. The `SOURCE_`/`SINK_` names override it per endpoint when the
+two are different clusters.
 
 ### Hot-Reload
 

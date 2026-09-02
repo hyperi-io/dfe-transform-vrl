@@ -38,6 +38,9 @@ pipeline:
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
 #     # This file is NOT interpolated -- a ${VAR} here reaches the broker as a
 #     # literal. Supply credentials by environment instead:
+#     #   DFE_TRANSFORM_KAFKA_SASL_USERNAME   (feeds source and sink)
+#     #   DFE_TRANSFORM_KAFKA_SASL_PASSWORD
+#     # Only when source and sink are different clusters:
 #     #   DFE_TRANSFORM_SOURCE_SASL_USERNAME
 #     #   DFE_TRANSFORM_SOURCE_SASL_PASSWORD
 #     username: ""
@@ -62,7 +65,9 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
-#     # Not interpolated -- see the source block above. Sink credentials come from
+#     # Not interpolated -- see the source block above. The shared
+#     # DFE_TRANSFORM_KAFKA_SASL_* pair covers this too; override it only for a
+#     # separate sink cluster:
 #     #   DFE_TRANSFORM_SINK_SASL_USERNAME
 #     #   DFE_TRANSFORM_SINK_SASL_PASSWORD
 #     username: ""
