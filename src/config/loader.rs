@@ -963,10 +963,12 @@ enrichment_tables:
     }
 
     /// Two clusters: the endpoint-specific name overrides the shared one, and
-    /// the endpoint left unset still gets the shared credential.
+    /// the endpoint left unset still gets the shared credential. Both
+    /// directions, because the shared block only sits above BOTH per-endpoint
+    /// blocks -- checking one direction lets it slide between them unnoticed.
     #[test]
     fn flat_env_endpoint_sasl_overrides_shared() {
-        let config = temp_env::with_vars(
+        let sink_specific = temp_env::with_vars(
             [
                 ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
                 ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
@@ -980,9 +982,28 @@ enrichment_tables:
             },
         );
 
-        assert_eq!(config.source.sasl.username, "shared-user");
-        assert_eq!(config.source.sasl.password, "shared-pass");
-        assert_eq!(config.sink.sasl.username, "sink-user");
-        assert_eq!(config.sink.sasl.password, "sink-pass");
+        assert_eq!(sink_specific.source.sasl.username, "shared-user");
+        assert_eq!(sink_specific.source.sasl.password, "shared-pass");
+        assert_eq!(sink_specific.sink.sasl.username, "sink-user");
+        assert_eq!(sink_specific.sink.sasl.password, "sink-pass");
+
+        let source_specific = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
+                ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(source_specific.source.sasl.username, "src-user");
+        assert_eq!(source_specific.source.sasl.password, "src-pass");
+        assert_eq!(source_specific.sink.sasl.username, "shared-user");
+        assert_eq!(source_specific.sink.sasl.password, "shared-pass");
     }
 }

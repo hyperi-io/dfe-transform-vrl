@@ -311,6 +311,65 @@ mod tests {
         }
     }
 
+    /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
+    /// next regen -- which is how the Kafka SASL env names shipped broken.
+    /// `templates/keda-scaledobject.yaml` is the one deliberate exception: the
+    /// generator emits a `.Values.config.kafka.*` path this app's values do not
+    /// have, so a regenerated copy will not render at all.
+    #[test]
+    fn test_committed_chart_matches_the_generator() {
+        const HAND_FIXED: &[&str] = &["templates/keda-scaledobject.yaml"];
+
+        let generated = tempfile::tempdir().expect("temp dir");
+        scalo::deployment::generate_chart(&contract(), generated.path(), None)
+            .expect("chart generates");
+
+        let want = read_chart(generated.path());
+        let got = read_chart(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart"));
+
+        assert_eq!(
+            want.keys().collect::<Vec<_>>(),
+            got.keys().collect::<Vec<_>>(),
+            "chart/ holds a different set of files from `emit-chart`"
+        );
+
+        for (rel, from_generator) in &want {
+            if HAND_FIXED.contains(&rel.as_str()) {
+                assert_ne!(
+                    got[rel], *from_generator,
+                    "chart/{rel} is listed as hand-fixed but now matches the \
+                     generator -- drop it from HAND_FIXED"
+                );
+                continue;
+            }
+            assert_eq!(
+                got[rel], *from_generator,
+                "chart/{rel} has drifted from `emit-chart` -- fix contract() and \
+                 regenerate, never hand-edit the output"
+            );
+        }
+    }
+
+    /// Relative path -> contents for a chart directory (root files plus
+    /// `templates/`, which is the whole shape the generator emits).
+    fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for sub in [None, Some("templates")] {
+            let here = sub.map_or_else(|| dir.to_path_buf(), |s| dir.join(s));
+            for entry in std::fs::read_dir(&here).expect("chart directory readable") {
+                let entry = entry.expect("chart directory entry");
+                if !entry.file_type().expect("file type").is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rel = sub.map_or_else(|| name.clone(), |s| format!("{s}/{name}"));
+                let body = std::fs::read_to_string(entry.path()).expect("chart file readable");
+                out.insert(rel, body);
+            }
+        }
+        out
+    }
+
     #[test]
     fn test_contract_default_config_present() {
         let c = contract();

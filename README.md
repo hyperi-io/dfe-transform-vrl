@@ -120,8 +120,9 @@ whole list -- any other field takes figment's nested form instead
 | `DFE_TRANSFORM_METRICS_ADDRESS` | `metrics.address` |
 
 The chart mounts the Kafka Secret into the `KAFKA_SASL_*` pair, which reaches
-both endpoints. The `SOURCE_`/`SINK_` names override it per endpoint when the
-two are different clusters.
+both endpoints and beats whatever the config file set for either. The
+`SOURCE_`/`SINK_` names override it back, per endpoint -- but `chart/` injects
+only the shared pair, so a two-cluster deployment has to add them to the chart.
 
 ### Hot-Reload
 
@@ -172,6 +173,23 @@ RUST_LOG=debug cargo run -- --config config.yaml
 # Check config without running
 cargo run -- config-check --config config.yaml
 ```
+
+### Helm chart
+
+`chart/` is generated. `cargo run --bin dfe-transform-vrl -- emit-chart chart`
+rewrites it from `src/deployment.rs::contract()`, so a hand edit under `chart/`
+is reverted the next time anyone regenerates. Fix the contract, not the output.
+
+One file is a deliberate exception. `chart/templates/keda-scaledobject.yaml` is
+hand-fixed: the generator emits `.Values.config.kafka.*`, this app's values have
+`config.source` and `config.sink` and no `config.kafka` block, so a regenerated
+copy fails to render at all with `nil pointer evaluating interface {}.brokers`.
+Re-apply that one diff after every `emit-chart`, until the generator is fixed
+upstream in scalo.
+
+`test_committed_chart_matches_the_generator` holds both halves of that: it fails
+if any other chart file drifts from `emit-chart`, and fails the other way if the
+KEDA file stops diverging, so the exception cannot outlive the generator bug.
 
 ## Documentation
 
