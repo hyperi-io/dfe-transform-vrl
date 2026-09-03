@@ -152,7 +152,7 @@ The wrapper controls all memory allocation:
 | Component | Configuration | Default |
 |-----------|--------------|---------|
 | Consumer prefetch | `source.max_buffer_bytes` | 64 MiB |
-| Transform batch | `pipeline.batch_size` | 1000 events |
+| Transform chunk | `batch_processing.max_chunk_size` (env only) | 10 000 events |
 | Producer queue | `sink.max_buffer_bytes` | 64 MiB |
 | Total pod memory | K8s resource limit | 256 MiB |
 
@@ -167,8 +167,6 @@ Same big-dial pattern as `dfe-transform-vector`, minus Vector subprocess config:
 ```yaml
 pipeline:
   name: "my-pipeline"
-  batch_size: 1000                  # events per transform batch
-  batch_timeout_ms: 100             # max wait for full batch
 
 source:
   brokers: ["kafka:9092"]
@@ -183,15 +181,17 @@ transforms:
 sink:
   brokers: ["kafka:9092"]
   topic: "enriched_events"
-  key_field: ".org_id"
   max_buffer_bytes: 67108864        # 64 MiB producer buffer
 
 health:
   address: "0.0.0.0:9000"
-
-metrics:
-  address: "0.0.0.0:9090"
 ```
+
+That is the whole file. `metrics`, `logger`, `scaling`, `worker_pool`,
+`batch_processing`, `self_regulation` and `version_check` belong to scalo's
+cascade, which finds files by fixed base name and so never reads this one --
+they are set through the env layer (`METRICS_ADDR`, `LOG_LEVEL`,
+`DFE_TRANSFORM_SCALING__*`, ...) and the wrapper warns if one appears here.
 
 ## Comparison: dfe-transform-vrl vs dfe-transform-vector
 
@@ -214,21 +214,25 @@ metrics:
 - **dfe-transform-vector**: Pipelines needing Vector-native transforms (`lua`,
   `aggregate`, `dedupe`, `throttle`, `sample`), or complex multi-source/sink routing
 
-## Hot-Reload
+## Reload
 
-Configuration changes are split into two categories:
+### Carried in the reloadable subset
 
-### Hot-reloaded (takes effect on next batch)
+`ConfigReloader` (file polling + SIGHUP) re-reads and re-validates the file and
+swaps `SharedConfig<HotConfig>`, so a bad edit is caught without a restart.
 
-These fields are read from `SharedConfig<HotConfig>` at the start of each batch
-iteration. Changes propagate via scalo's `ConfigReloader` (file polling + SIGHUP).
+| Field | What it would control | State |
+|-------|----------------------|-------|
+| `pipeline.batch_size` | Events per transform chunk | not applied -- see below |
+| `pipeline.batch_timeout_ms` | Max wait before flushing partial batch | not applied -- no such timer |
+| `sink.key_field` | Kafka partition key path | not applied -- scalo-rs#37 |
 
-| Field | What it controls |
-|-------|-----------------|
-| `pipeline.batch_size` | Events per transform batch |
-| `pipeline.batch_timeout_ms` | Max wait before flushing partial batch |
-| `sink.key_field` | Kafka partition key path (e.g. `.org_id`) |
-| `scaling.pressure_threshold` | KEDA scaling pressure threshold |
+### Accepted but not applied
+
+The pipeline holds the reloadable subset but reads none of it yet, so a reload
+changes no pipeline behaviour today. `config::INERT_SETTINGS` is the list, and
+the wrapper warns at startup for each one a deployment has set. The dial that
+does size a chunk is `batch_processing.max_chunk_size`, set via the env layer.
 
 ### Requires pod restart
 
@@ -249,5 +253,3 @@ standard K8s pattern — ConfigMap changes trigger rolling restart via the
 | `sink.librdkafka_options` | librdkafka `ClientConfig` |
 | `transforms.*` | VRL programs compiled at startup |
 | `health.address` | HTTP server socket bind |
-| `metrics.address` | Metrics server socket bind |
-| `logging.*` | Tracing subscriber |

@@ -3,15 +3,19 @@ title: Config
 description: |-
   Main configuration.
 
-  ## Hot-reload classification
+  ## This struct is the whole of the `--config` file
 
-  **Hot-reloaded** (takes effect on next batch, via `SharedConfig<HotConfig>`):
-  - `pipeline.batch_size`
-  - `pipeline.batch_timeout_ms`
-  - `sink.key_field`
-  - `scaling.pressure_threshold`
+  It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
+  `health`, and nothing else belongs in that file. scalo's own sections --
+  `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
+  `self_regulation`, `version_check` -- resolve from scalo's cascade, which
+  discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and so
+  never reads a file named `config.yaml`. They are set through the env layer
+  instead; [`SCALO_CASCADE_SECTIONS`] carries the mapping and
+  [`warn_unreachable_scalo_settings`] says so when one turns up here.
 
-  **Requires pod restart** (bound at startup):
+  ## Requires pod restart (bound at startup)
+
   - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
   - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
   - `sink.brokers` — rdkafka producer connection established at startup
@@ -22,8 +26,11 @@ description: |-
   - `sink.librdkafka_options` — passed to `ClientConfig` at creation
   - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
   - `health.address` — HTTP server binds to socket at startup
-  - `metrics.address` — metrics server binds to socket at startup
-  - `logging.*` — tracing subscriber configured at startup
+
+  ## Accepted but not applied
+
+  [`Config::inert_settings`] is the list, and the wrapper warns at startup for
+  each one a deployment has actually set.
 type: object
 properties:
   pipeline:
@@ -94,19 +101,6 @@ properties:
     $ref: '#/$defs/HealthConfig'
     default:
       address: 0.0.0.0:9000
-  metrics:
-    $ref: '#/$defs/MetricsConfig'
-    default:
-      address: 0.0.0.0:9090
-  logging:
-    $ref: '#/$defs/LoggingConfig'
-    default:
-      level: info
-      format: json
-  scaling:
-    $ref: '#/$defs/ScalingConfig'
-    default:
-      pressure_threshold: 0.8
 $defs:
   PipelineConfig:
     description: Pipeline identity and processing settings.
@@ -493,28 +487,3 @@ $defs:
       address:
         type: string
         default: 0.0.0.0:9000
-  MetricsConfig:
-    description: Metrics endpoint configuration.
-    type: object
-    properties:
-      address:
-        type: string
-        default: 0.0.0.0:9090
-  LoggingConfig:
-    description: Logging configuration.
-    type: object
-    properties:
-      level:
-        type: string
-        default: info
-      format:
-        type: string
-        default: json
-  ScalingConfig:
-    description: KEDA scaling pressure configuration.
-    type: object
-    properties:
-      pressure_threshold:
-        type: number
-        format: double
-        default: 0.8

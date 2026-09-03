@@ -6,19 +6,24 @@
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Hot-reloadable configuration subset.
+//! Reloadable configuration subset.
 //!
-//! Only fields that can safely change at runtime without restarting the process
-//! live here. The pipeline reads these via `SharedConfig<HotConfig>` each batch.
+//! The fields that could safely change at runtime without restarting the
+//! process. `ConfigReloader` re-reads and re-validates the file on a change or
+//! a SIGHUP and swaps this struct through `SharedConfig<HotConfig>`.
 //!
-//! ## Hot-reloaded (takes effect on next batch):
+//! ## Carried here
 //!
 //! - `batch_size` — events per transform batch
 //! - `batch_timeout_ms` — max wait for a full batch before flushing partial
 //! - `key_field` — sink partition key path (e.g. `.org_id`, `.host.name`)
-//! - `scaling_pressure_threshold` — KEDA pressure threshold
 //!
-//! ## Requires pod restart (bound at startup):
+//! All three are on [`crate::config::INERT_SETTINGS`]: the pipeline holds this
+//! struct but reads none of them yet, so a reload today re-validates the file
+//! and changes no behaviour. The wrapper warns at startup for each one a
+//! deployment has set rather than implying otherwise.
+//!
+//! ## Requires pod restart (bound at startup)
 //!
 //! - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
 //! - `source.*` — rdkafka consumer connection, subscription, auth, TLS, buffer sizes
@@ -30,8 +35,8 @@
 //! - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 //! - `transforms.*` — VRL programs compiled at startup (immutable for process lifetime)
 //! - `health.address` — HTTP server binds to socket at startup
-//! - `metrics.address` — metrics server binds to socket at startup
-//! - `logging.*` — tracing subscriber configured at startup
+//! - `metrics.address` — scalo binds the metrics server before `run_service`
+//! - `logger.*` — tracing subscriber built once, before the runtime
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +46,7 @@ use super::loader::Config;
 ///
 /// Read via `SharedConfig<HotConfig>` by the pipeline on each batch iteration.
 /// Updated by `ConfigReloader` when the config file changes (or on SIGHUP).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HotConfig {
     /// Events per transform batch.
     pub batch_size: usize,
@@ -51,9 +56,6 @@ pub struct HotConfig {
 
     /// Event field path for Kafka partition key (e.g. `.org_id`, `.host.name`).
     pub key_field: String,
-
-    /// KEDA scaling pressure threshold (0.0–1.0).
-    pub scaling_pressure_threshold: f64,
 }
 
 impl HotConfig {
@@ -64,7 +66,6 @@ impl HotConfig {
             batch_size: config.pipeline.batch_size,
             batch_timeout_ms: config.pipeline.batch_timeout_ms,
             key_field: config.sink.key_field.clone(),
-            scaling_pressure_threshold: config.scaling.pressure_threshold,
         }
     }
 }
@@ -87,13 +88,11 @@ mod tests {
         config.pipeline.batch_size = 5000;
         config.pipeline.batch_timeout_ms = 250;
         config.sink.key_field = ".tenant_id".to_string();
-        config.scaling.pressure_threshold = 0.6;
 
         let hot = HotConfig::from_config(&config);
         assert_eq!(hot.batch_size, 5000);
         assert_eq!(hot.batch_timeout_ms, 250);
         assert_eq!(hot.key_field, ".tenant_id");
-        assert!((hot.scaling_pressure_threshold - 0.6).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -138,7 +137,6 @@ mod tests {
             batch_size: 2000,
             batch_timeout_ms: 500,
             key_field: ".org_id".to_string(),
-            scaling_pressure_threshold: 0.9,
         };
         let yaml = serde_yaml_ng::to_string(&hot).unwrap();
         let deserialized: HotConfig = serde_yaml_ng::from_str(&yaml).unwrap();

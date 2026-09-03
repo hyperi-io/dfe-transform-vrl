@@ -84,6 +84,16 @@ impl ServiceApp for App {
     }
 
     fn load_config(&self, path: Option<&str>) -> Result<Config, CliError> {
+        // Seed scalo's cascade. While `try_get()` is None every runtime
+        // `from_cascade()` -- metrics.address, logger.*, scaling.*,
+        // worker_pool.*, batch_processing.*, self_regulation.*,
+        // version_check.* -- resolves to its hard-coded default, and no env
+        // var moves it. Must run before the logger and the ServiceRuntime.
+        if let Err(e) = scalo::config::setup(self.common.to_config_options(self.env_prefix())) {
+            // The cascade is a OnceLock; a second load keeps the first seed.
+            debug!(error = %e, "scalo config cascade already seeded");
+        }
+
         let config =
             Config::load(path).map_err(|e| CliError::Config(format!("failed to load: {e}")))?;
         config
@@ -175,6 +185,10 @@ async fn run_transform_service(
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vrl"
     );
+
+    // Say so for every dial this deployment has turned that reaches nothing.
+    config.warn_inert_settings();
+    crate::config::warn_unreachable_scalo_settings(config_path.as_deref());
 
     // Log derived DFE topology — operators rely on this to confirm the
     // wrapper joined the right consumer group and resolves the right
@@ -289,10 +303,9 @@ async fn run_transform_service(
     // the global recorder; we just wire our app-specific metrics + readiness
     // into the running manager.
     //
-    // `config.metrics.address` is intentionally ignored — scalo's
-    // `--metrics-addr` (env `METRICS_ADDR`, default `0.0.0.0:9090`) is the
-    // single source of truth. Charts / deployments override that env var,
-    // not the YAML field, to relocate the endpoint.
+    // The listener is already bound by then, on the address `load_config` fed
+    // the cascade: `--metrics-addr`/`METRICS_ADDR` first, else `metrics.address`
+    // from the config file, else `0.0.0.0:9090`.
     let commit_hash = option_env!("GIT_COMMIT").unwrap_or("unknown");
     let transform_metrics =
         metrics::TransformMetrics::new(&runtime.metrics, env!("CARGO_PKG_VERSION"), commit_hash);
@@ -306,13 +319,15 @@ async fn run_transform_service(
     });
     info!("readiness check wired into scalo metrics server");
 
-    // Hot-reloadable config subset (read by pipeline each batch)
+    // Reloadable config subset. Every field in it is on `INERT_SETTINGS`, so a
+    // reload re-validates the file and changes no pipeline behaviour. Logged at
+    // debug: `warn_inert_settings` above is what an operator needs to see.
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
-    info!(
+    debug!(
         batch_size = config.pipeline.batch_size,
         batch_timeout_ms = config.pipeline.batch_timeout_ms,
         key_field = %config.sink.key_field,
-        "hot-reloadable config initialised"
+        "reloadable config subset initialised"
     );
 
     // Config reloader: file polling + SIGHUP → reload hot-config subset

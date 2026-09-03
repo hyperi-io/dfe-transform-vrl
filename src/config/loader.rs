@@ -8,8 +8,9 @@
 
 //! Configuration structures and loading.
 //!
-//! Big-dial config schema for Kafka source/sink (wrapper-controlled),
-//! VRL transform files, health/metrics endpoints, and scaling pressure.
+//! Big-dial config schema for Kafka source/sink (wrapper-controlled), VRL
+//! transform files, enrichment tables and the health endpoint. scalo's own
+//! sections are not in here -- see [`SCALO_CASCADE_SECTIONS`].
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -65,15 +66,19 @@ pub struct TlsConfig {
 
 /// Main configuration.
 ///
-/// ## Hot-reload classification
+/// ## This struct is the whole of the `--config` file
 ///
-/// **Hot-reloaded** (takes effect on next batch, via `SharedConfig<HotConfig>`):
-/// - `pipeline.batch_size`
-/// - `pipeline.batch_timeout_ms`
-/// - `sink.key_field`
-/// - `scaling.pressure_threshold`
+/// It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
+/// `health`, and nothing else belongs in that file. scalo's own sections --
+/// `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
+/// `self_regulation`, `version_check` -- resolve from scalo's cascade, which
+/// discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and so
+/// never reads a file named `config.yaml`. They are set through the env layer
+/// instead; [`SCALO_CASCADE_SECTIONS`] carries the mapping and
+/// [`warn_unreachable_scalo_settings`] says so when one turns up here.
 ///
-/// **Requires pod restart** (bound at startup):
+/// ## Requires pod restart (bound at startup)
+///
 /// - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
 /// - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
 /// - `sink.brokers` — rdkafka producer connection established at startup
@@ -84,9 +89,12 @@ pub struct TlsConfig {
 /// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 /// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
 /// - `health.address` — HTTP server binds to socket at startup
-/// - `metrics.address` — metrics server binds to socket at startup
-/// - `logging.*` — tracing subscriber configured at startup
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+///
+/// ## Accepted but not applied
+///
+/// [`Config::inert_settings`] is the list, and the wrapper warns at startup for
+/// each one a deployment has actually set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     pub pipeline: PipelineConfig,
@@ -96,9 +104,6 @@ pub struct Config {
     #[serde(default)]
     pub enrichment_tables: Vec<EnrichmentTableConfig>,
     pub health: HealthConfig,
-    pub metrics: MetricsConfig,
-    pub logging: LoggingConfig,
-    pub scaling: ScalingConfig,
 }
 
 /// Enrichment table configuration.
@@ -348,52 +353,120 @@ impl Default for HealthConfig {
     }
 }
 
-/// Metrics endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct MetricsConfig {
-    pub address: String,
-}
+// =============================================================================
+// scalo's own config sections
+// =============================================================================
 
-impl Default for MetricsConfig {
-    fn default() -> Self {
-        Self {
-            address: "0.0.0.0:9090".to_string(),
+/// Top-level sections that belong to scalo's cascade, not to [`Config`].
+///
+/// `scalo::config` discovers files by fixed base name -- `defaults.yaml`,
+/// `settings.yaml`, `settings.{env}.yaml` -- in the working directory,
+/// `config/`, `/config/`, `~/.config/{app}/` and any extra directory. There is
+/// no way to point it at a file called `config.yaml`, so a section listed here
+/// reaches nothing when it is written into the `--config` file. The env layer
+/// does reach it, hence the paired variable.
+pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
+    ("metrics", "METRICS_ADDR, or DFE_TRANSFORM_METRICS__*"),
+    (
+        "logger",
+        "LOG_LEVEL / LOG_FORMAT, or DFE_TRANSFORM_LOGGER__*",
+    ),
+    ("scaling", "DFE_TRANSFORM_SCALING__*"),
+    ("worker_pool", "DFE_TRANSFORM_WORKER_POOL__*"),
+    ("batch_processing", "DFE_TRANSFORM_BATCH_PROCESSING__*"),
+    ("self_regulation", "DFE_TRANSFORM_SELF_REGULATION__*"),
+    ("version_check", "DFE_TRANSFORM_VERSION_CHECK__*"),
+];
+
+/// Warn for each [`SCALO_CASCADE_SECTIONS`] entry a deployment has aimed at
+/// and missed.
+///
+/// The two ways to miss are writing the section into the `--config` file, and
+/// spelling its env var with one underscore where the cascade splits on two.
+/// Re-reads the file rather than threading the raw YAML through [`Config`]:
+/// once, at startup, and only to report.
+pub fn warn_unreachable_scalo_settings(config_path: Option<&str>) {
+    if let Some(path) = config_path
+        && let Ok(content) = std::fs::read_to_string(path)
+        && let Ok(serde_yaml_ng::Value::Mapping(map)) = serde_yaml_ng::from_str(&content)
+    {
+        for (section, instead) in SCALO_CASCADE_SECTIONS {
+            if map.contains_key(serde_yaml_ng::Value::String((*section).to_string())) {
+                tracing::warn!(
+                    section = section,
+                    instead = instead,
+                    path = path,
+                    "config section belongs to the scalo cascade, which cannot \
+                     read this file -- the values in it are not applied"
+                );
+            }
+        }
+    }
+
+    // `Env::prefixed("DFE_TRANSFORM_").split("__")` strips the prefix and then
+    // needs a DOUBLE underscore to nest, so DFE_TRANSFORM_METRICS_ADDRESS
+    // becomes the flat key `metrics_address` and matches no section.
+    for (name, _) in std::env::vars() {
+        for (section, instead) in SCALO_CASCADE_SECTIONS {
+            let single = format!("{ENV_PREFIX}_{}_", section.to_uppercase());
+            let double = format!("{single}_");
+            if name.starts_with(&single) && !name.starts_with(&double) {
+                tracing::warn!(
+                    env_var = name,
+                    instead = instead,
+                    "env var needs a double underscore after the section to \
+                     nest into the scalo cascade -- as spelled it is not applied"
+                );
+            }
         }
     }
 }
 
-/// Logging configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub format: String,
+// =============================================================================
+// Settings the wrapper accepts but does not apply
+// =============================================================================
+
+/// A setting the config schema accepts, that parses, and that reaches nothing.
+///
+/// An entry here makes the wrapper warn at startup when a deployment sets it,
+/// and gives `every_inert_setting_is_detectable` a surface to walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InertSetting {
+    /// Dotted key, spelled as a deployment writes it.
+    pub key: &'static str,
+    /// What it fails to reach.
+    pub why: &'static str,
+    /// The key that does the job, where one exists.
+    pub instead: Option<&'static str>,
 }
 
-impl Default for LoggingConfig {
-    fn default() -> Self {
-        Self {
-            level: "info".to_string(),
-            format: "json".to_string(),
-        }
-    }
-}
-
-/// KEDA scaling pressure configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct ScalingConfig {
-    pub pressure_threshold: f64,
-}
-
-impl Default for ScalingConfig {
-    fn default() -> Self {
-        Self {
-            pressure_threshold: 0.8,
-        }
-    }
-}
+/// Every setting in that state. See [`Config::inert_settings`].
+pub const INERT_SETTINGS: &[InertSetting] = &[
+    InertSetting {
+        key: "pipeline.batch_size",
+        why: "the batch engine is built by the scalo runtime before run_service, \
+              and takes its chunk size from batch_processing.max_chunk_size",
+        instead: Some("batch_processing.max_chunk_size"),
+    },
+    InertSetting {
+        key: "pipeline.batch_timeout_ms",
+        why: "the governed engine driver has no partial-batch timer -- it blocks \
+              on the consumer and processes whatever the fetch returned",
+        instead: None,
+    },
+    InertSetting {
+        key: "sink.key_field",
+        why: "the producer's key argument carries the destination topic, not a \
+              partition key, so no key is derived from the event (scalo-rs#37)",
+        instead: None,
+    },
+    InertSetting {
+        key: "source.commit_interval_ms",
+        why: "the production profile disables librdkafka auto-commit -- the \
+              engine commits at the at-least-once barrier after each sink ack",
+        instead: None,
+    },
+];
 
 // =============================================================================
 // Config loading cascade — uses scalo flat_env helpers
@@ -460,9 +533,6 @@ impl ApplyFlatEnv for Config {
         // Infra
         if let Some(v) = flat_env_string(prefix, "HEALTH_ADDRESS") {
             self.health.address = v;
-        }
-        if let Some(v) = flat_env_string(prefix, "METRICS_ADDRESS") {
-            self.metrics.address = v;
         }
     }
 }
@@ -554,6 +624,46 @@ impl Config {
         Ok(config)
     }
 
+    /// The [`INERT_SETTINGS`] this config has actually moved off their defaults.
+    ///
+    /// A deployment that leaves one alone is not told about it; one that has
+    /// turned the dial is.
+    #[must_use]
+    pub fn inert_settings(&self) -> Vec<InertSetting> {
+        let default = Self::default();
+        INERT_SETTINGS
+            .iter()
+            .copied()
+            .filter(|setting| match setting.key {
+                "pipeline.batch_size" => self.pipeline.batch_size != default.pipeline.batch_size,
+                "pipeline.batch_timeout_ms" => {
+                    self.pipeline.batch_timeout_ms != default.pipeline.batch_timeout_ms
+                }
+                "sink.key_field" => !self.sink.key_field.is_empty(),
+                "source.commit_interval_ms" => {
+                    self.source.commit_interval_ms != default.source.commit_interval_ms
+                }
+                // An entry with no arm here is unreportable;
+                // `every_inert_setting_is_detectable` fails on it at test time.
+                _ => false,
+            })
+            .collect()
+    }
+
+    /// Warn once per inert setting a deployment has set.
+    pub fn warn_inert_settings(&self) {
+        for setting in self.inert_settings() {
+            tracing::warn!(
+                key = setting.key,
+                instead = setting
+                    .instead
+                    .unwrap_or("nothing -- the capability is absent"),
+                "config setting is accepted but not applied: {}",
+                setting.why
+            );
+        }
+    }
+
     /// Register all config sections in the global config registry.
     ///
     /// Enables redacted config dump via `registry::dump_effective()` and
@@ -566,16 +676,68 @@ impl Config {
         registry::register("sink", &self.sink);
         registry::register("transforms", &self.transforms);
         registry::register("health", &self.health);
-        registry::register("metrics", &self.metrics);
-        registry::register("logging", &self.logging);
-        registry::register("scaling", &self.scaling);
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// Turn each dial in turn and confirm the setting is reported.
+    ///
+    /// Walks [`INERT_SETTINGS`] rather than naming the keys, so an entry added
+    /// without a matching arm in [`Config::inert_settings`] fails here rather
+    /// than going unreported at runtime.
+    #[test]
+    fn every_inert_setting_is_detectable() {
+        for setting in INERT_SETTINGS {
+            let mut config = Config::default();
+            match setting.key {
+                "pipeline.batch_size" => config.pipeline.batch_size += 1,
+                "pipeline.batch_timeout_ms" => config.pipeline.batch_timeout_ms += 1,
+                "sink.key_field" => config.sink.key_field = ".org_id".to_string(),
+                "source.commit_interval_ms" => config.source.commit_interval_ms += 1,
+                other => panic!(
+                    "INERT_SETTINGS carries `{other}` but this test does not know \
+                     how to set it -- add an arm here and in Config::inert_settings"
+                ),
+            }
+            let reported = config.inert_settings();
+            assert!(
+                reported.contains(setting),
+                "setting `{}` was turned but inert_settings() did not report it; \
+                 reported: {:?}",
+                setting.key,
+                reported.iter().map(|s| s.key).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn inert_settings_are_silent_on_an_untouched_config() {
+        assert!(
+            Config::default().inert_settings().is_empty(),
+            "a deployment that has not turned an inert dial must not be warned"
+        );
+    }
+
+    /// No [`SCALO_CASCADE_SECTIONS`] name may also be a [`Config`] field.
+    ///
+    /// The two are read by different cascades. A name in both puts the
+    /// wrapper's copy in the derived schema while scalo resolves its own, so
+    /// the documented field and the effective one drift apart unnoticed.
+    #[test]
+    fn scalo_sections_do_not_collide_with_config_fields() {
+        let config = serde_json::to_value(Config::default()).unwrap();
+        let fields = config.as_object().unwrap();
+        for (section, _) in SCALO_CASCADE_SECTIONS {
+            assert!(
+                !fields.contains_key(*section),
+                "`{section}` is both a Config field and a scalo cascade section"
+            );
+        }
+    }
 
     #[test]
     fn default_config_has_sensible_defaults() {
@@ -586,8 +748,6 @@ mod tests {
         assert_eq!(config.source.format, "auto");
         assert_eq!(config.sink.compression, "zstd");
         assert_eq!(config.health.address, "0.0.0.0:9000");
-        assert_eq!(config.metrics.address, "0.0.0.0:9090");
-        assert!((config.scaling.pressure_threshold - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]

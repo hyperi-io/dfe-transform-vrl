@@ -58,9 +58,6 @@ fn test_sasl_config_validates() {
 fn test_default_config_fields() {
     let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
     assert_eq!(config.health.address, "0.0.0.0:9000");
-    assert_eq!(config.metrics.address, "0.0.0.0:9090");
-    assert_eq!(config.logging.level, "info");
-    assert_eq!(config.logging.format, "json");
     assert!(!config.source.sasl.enabled);
     assert!(!config.source.tls.enabled);
 }

@@ -94,7 +94,8 @@ routing behaviour, and known limitations.
 
 ### Environment Variable Overrides
 
-All config fields have flat env var overrides for K8s big-dial configuration:
+The big dials have flat env var overrides for K8s. This is the whole list --
+anything not here is not read:
 
 | Env Var | Config Field |
 |---------|-------------|
@@ -102,20 +103,54 @@ All config fields have flat env var overrides for K8s big-dial configuration:
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
 | `DFE_TRANSFORM_SOURCE_GROUP_ID` | `source.group_id` |
+| `DFE_TRANSFORM_SOURCE_FORMAT` | `source.format` |
+| `DFE_TRANSFORM_SOURCE_SASL_USERNAME` | `source.sasl.username` |
+| `DFE_TRANSFORM_SOURCE_SASL_PASSWORD` | `source.sasl.password` |
+| `DFE_TRANSFORM_SINK_BROKERS` | `sink.brokers` |
 | `DFE_TRANSFORM_SINK_TOPIC` | `sink.topic` |
 | `DFE_TRANSFORM_SINK_KEY_FIELD` | `sink.key_field` |
-| `DFE_TRANSFORM_BATCH_SIZE` | `pipeline.batch_size` |
+| `DFE_TRANSFORM_SINK_COMPRESSION` | `sink.compression` |
+| `DFE_TRANSFORM_SINK_SASL_USERNAME` | `sink.sasl.username` |
+| `DFE_TRANSFORM_SINK_SASL_PASSWORD` | `sink.sasl.password` |
+| `DFE_TRANSFORM_TRANSFORMS_DIR` | `transforms.dir` |
+| `DFE_TRANSFORM_HEALTH_ADDRESS` | `health.address` |
 
-### Hot-Reload
+### scalo's own settings are not in the config file
 
-Some configuration fields are hot-reloaded without pod restart:
+`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
+`self_regulation` and `version_check` are resolved by scalo, from a cascade
+that discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and
+therefore never reads the mounted `config.yaml`. Writing one of those sections
+into that file parses cleanly and changes nothing; the wrapper warns at startup
+when it finds one. Set them through the env layer, where the section nests on a
+**double** underscore:
 
-| Hot-reloaded | Requires restart |
-|-------------|-----------------|
-| `pipeline.batch_size` | `source.*` (Kafka connections) |
-| `pipeline.batch_timeout_ms` | `sink.brokers`, `sink.topic` |
-| `sink.key_field` | `transforms.*` (compiled at startup) |
-| `scaling.pressure_threshold` | `health.address`, `metrics.address` |
+```bash
+METRICS_ADDR=0.0.0.0:9090          # or DFE_TRANSFORM_METRICS__ADDRESS
+LOG_LEVEL=debug                    # or DFE_TRANSFORM_LOGGER__LEVEL
+LOG_FORMAT=json                    # or DFE_TRANSFORM_LOGGER__FORMAT
+DFE_TRANSFORM_SCALING__MEMORY_GATE_THRESHOLD=0.8
+DFE_TRANSFORM_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+```
+
+A single underscore (`DFE_TRANSFORM_METRICS_ADDRESS`) produces a flat key that
+matches no section and is ignored; that spelling also warns.
+
+### Accepted but not applied
+
+These parse, validate, and reach nothing. Setting one logs a warning at
+startup naming the replacement. See `config::INERT_SETTINGS`.
+
+| Setting | Why | Use instead |
+|---------|-----|-------------|
+| `pipeline.batch_size` | the batch engine is built by the scalo runtime before `run_service` | `batch_processing.max_chunk_size` |
+| `pipeline.batch_timeout_ms` | the governed driver has no partial-batch timer | -- |
+| `sink.key_field` | the producer's key argument carries the destination topic, not a partition key (scalo-rs#37) | -- |
+| `source.commit_interval_ms` | auto-commit is off; the engine commits at the at-least-once barrier | -- |
+
+`ConfigReloader` still re-reads and re-validates the file on a change or a
+SIGHUP, so a bad edit is caught, but every field it carries is on that list --
+no pipeline behaviour changes on reload today.
 
 ## API Endpoints
 
