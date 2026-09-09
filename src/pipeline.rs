@@ -49,8 +49,11 @@ use scalo::logger::{log_sampled, security};
 use scalo::memory::MemoryGuard;
 use scalo::metrics::TransportKind;
 use scalo::scaling::ScalingPressure;
+use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
 use scalo::transport::kafka::{KafkaTransport, total_consumer_lag};
-use scalo::transport::{PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch};
+use scalo::transport::{
+    AnySender, PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch,
+};
 use scalo::worker::AdaptiveWorkerPool;
 use scalo::worker::BatchEngine;
 use scalo::worker::engine::{CommitMode, EngineError};
@@ -106,18 +109,48 @@ pub async fn run(
     scaling: Option<Arc<ScalingPressure>>,
     memory_guard: Arc<MemoryGuard>,
 ) -> crate::Result<()> {
-    let consumer_config = kafka::build_consumer_config(&config.source);
-    let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
     let payload_format = kafka::parse_format(&config.source.format);
 
     info!(
         pipeline = %config.pipeline.name,
+        source_transport = ?config.source.transport,
         source_topics = ?config.source.topics,
+        sink_transport = ?config.sink.transport,
         sink_topic = %config.sink.topic,
         format = %config.source.format,
         self_regulation = governor.is_some(),
         "initialising pipeline"
     );
+
+    // Sink: the bus producer, or a client to the downstream Push listener.
+    // Never gated -- gating the outbound drain deadlocks the pipeline.
+    let producer = build_sender(config).await?;
+
+    // The direct transport has no consumer group and no lag, so the Kafka gate
+    // and the lag ticker belong to the bus form alone.
+    if config.source.transport.is_direct() {
+        let listener = GrpcTransport::new(&GrpcConfig::server(&config.source.listen))
+            .await
+            .map_err(|e| crate::Error::Kafka(format!("failed to start Push listener: {e}")))?;
+        info!(listen = %config.source.listen, "Push listener started");
+        return run_governed_pipeline(
+            &engine,
+            &listener,
+            &producer,
+            program,
+            hot_config,
+            payload_format,
+            &transform_metrics,
+            ready_flag,
+            shutdown,
+            worker_pool,
+            config.sink.topic.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+    }
+
+    let consumer_config = kafka::build_consumer_config(&config.source);
 
     // Consumer: attach the self-regulation inbound gate so intake pauses the
     // ASSIGNED partitions under memory pressure (member stays in the group,
@@ -134,11 +167,6 @@ pub async fn run(
     // it away from the engine's recv loop. `KafkaTransport` is not `Clone`, and
     // every method we use takes `&self`, so an `Arc` serves both readers.
     let consumer = Arc::new(consumer);
-
-    // Producer: NEVER gated -- gating the outbound drain deadlocks the pipeline.
-    let producer = KafkaTransport::new(&producer_config)
-        .await
-        .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))?;
 
     // Outbound circuit latch. The sink closure opens it on a fatal produce
     // failure and closes it on the next successful send; the scaling-signal
@@ -214,6 +242,27 @@ pub async fn run(
     }
 
     result
+}
+
+/// Build the sink for this deployment's transport.
+///
+/// `AnySender` keeps the driver one code path across both, and delegates
+/// `send_batch` to the backend's native batch RPC.
+async fn build_sender(config: &Config) -> crate::Result<AnySender> {
+    if config.sink.transport.is_direct() {
+        let grpc = GrpcConfig::client(&config.sink.endpoint);
+        let transport = GrpcTransport::new(&grpc)
+            .await
+            .map_err(|e| crate::Error::Kafka(format!("failed to create gRPC sink: {e}")))?;
+        info!(endpoint = %config.sink.endpoint, "gRPC sink initialised");
+        return Ok(AnySender::Grpc(transport));
+    }
+
+    let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
+    let transport = KafkaTransport::new(&producer_config)
+        .await
+        .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))?;
+    Ok(AnySender::Kafka(transport))
 }
 
 /// Drive the mid-tier transform via [`BatchEngine::run_governed`].

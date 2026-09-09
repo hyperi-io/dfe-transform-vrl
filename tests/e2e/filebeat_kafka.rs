@@ -116,7 +116,7 @@ fn free_port() -> u16 {
 
 /// The config file the app runs from: the bundled pipeline, its timezones
 /// table, and the source-bound topics.
-fn write_config(dir: &std::path::Path, brokers: &str, health_port: u16) -> std::path::PathBuf {
+fn write_config(dir: &std::path::Path, brokers: &str) -> std::path::PathBuf {
     let pipeline_dir = fb::repo_path("pipelines/filebeat");
     // JSON is valid YAML 1.2, so serialising sidesteps quoting the paths.
     let config = serde_json::json!({
@@ -143,7 +143,6 @@ fn write_config(dir: &std::path::Path, brokers: &str, health_port: u16) -> std::
             "path": pipeline_dir.join("timezones.csv").to_string_lossy(),
             "key_columns": ["abbreviation"],
         }],
-        "health": { "address": format!("127.0.0.1:{health_port}") },
         "logging": { "level": "info", "format": "text" },
         "scaling": { "enabled": false },
     });
@@ -323,8 +322,9 @@ async fn filebeat_corpus_round_trips_through_kafka() {
     );
 
     let work = tempfile::tempdir().expect("work dir");
-    let health_port = free_port();
-    let config_path = write_config(work.path(), &kf.brokers, health_port);
+    let config_path = write_config(work.path(), &kf.brokers);
+    // The probes are served by the metrics server, so readiness is polled there.
+    let metrics = format!("127.0.0.1:{}", free_port());
 
     // kill_on_drop reaps the app on every exit path, assertion failures
     // included.
@@ -332,7 +332,7 @@ async fn filebeat_corpus_round_trips_through_kafka() {
         .arg("--config")
         .arg(&config_path)
         .arg("--metrics-addr")
-        .arg(format!("127.0.0.1:{}", free_port()))
+        .arg(&metrics)
         .arg("run")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::inherit())
@@ -340,14 +340,13 @@ async fn filebeat_corpus_round_trips_through_kafka() {
         .spawn()
         .expect("spawn dfe-transform-vrl");
 
-    let health = format!("127.0.0.1:{health_port}");
     let deadline = Instant::now() + READY_TIMEOUT;
     let mut ready = false;
     while Instant::now() < deadline {
         if let Ok(Some(status)) = app.try_wait() {
             panic!("dfe-transform-vrl exited before becoming ready: {status}");
         }
-        if http_status(&health, "/readyz").await == Some(200) {
+        if http_status(&metrics, "/readyz").await == Some(200) {
             ready = true;
             break;
         }
@@ -355,7 +354,7 @@ async fn filebeat_corpus_round_trips_through_kafka() {
     }
     assert!(
         ready,
-        "dfe-transform-vrl did not report ready on {health} within {READY_TIMEOUT:?}"
+        "dfe-transform-vrl did not report ready on {metrics} within {READY_TIMEOUT:?}"
     );
 
     let outputs = drain(kf, LOAD_TOPIC, "ws21-verify", inputs.len(), DRAIN_TIMEOUT).await;

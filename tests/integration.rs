@@ -81,3 +81,8 @@ mod pipeline_memory;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/vrl_deep.rs"]
 mod vrl_deep;
+
+// The direct transport: a Push listener in, a gRPC sink out, no broker.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "integration/direct_transport.rs"]
+mod direct_transport;

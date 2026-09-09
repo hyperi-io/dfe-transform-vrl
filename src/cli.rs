@@ -9,11 +9,12 @@
 //! CLI definition and service lifecycle orchestrator.
 //!
 //! Implements the `ServiceApp` trait from scalo, wiring together config
-//! loading, VRL compilation, health/metrics servers, pipeline, and graceful
-//! shutdown.
+//! loading, VRL compilation, the metrics server that also serves the probes,
+//! pipeline, and graceful shutdown.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -27,7 +28,7 @@ use tracing::{debug, error, info};
 use crate::config::Config;
 use crate::config::hot::HotConfig;
 use crate::engine::compiler;
-use crate::{deployment, health, metrics, pipeline};
+use crate::{deployment, metrics, pipeline};
 
 #[derive(Parser, Debug)]
 #[command(name = "dfe-transform-vrl")]
@@ -90,6 +91,10 @@ impl ServiceApp for App {
             .validate()
             .map_err(|e| CliError::Config(format!("validation failed: {e}")))?;
         Ok(config)
+    }
+
+    fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
+        config.work_state()
     }
 
     async fn run_service(
@@ -254,9 +259,8 @@ async fn run_transform_service(
     // Shutdown coordination. The runtime installs the signal handler and
     // cancels `runtime.shutdown` on SIGTERM (K8s) / SIGINT (Ctrl+C). That token
     // is the single source of truth: the engine driver stops on cancel, and we
-    // bridge it to a local `watch` channel for the two collaborators that still
-    // take a watch receiver (the health server and the enrichment refresh
-    // tasks) -- no second signal handler.
+    // bridge it to a local `watch` channel for the enrichment refresh tasks,
+    // which still take a watch receiver -- no second signal handler.
     let shutdown_token = runtime.shutdown.clone();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     {
@@ -276,10 +280,10 @@ async fn run_transform_service(
         "memory guard initialised (runtime shared)"
     );
 
-    // Health server
-    let ready_flag = health::start_health_server(&config.health.address, shutdown_rx.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
+    // Readiness flag. The probes are served by the runtime's metrics server on
+    // the metrics port, which is what the chart probes; this service starts no
+    // second HTTP listener for them.
+    let ready_flag = Arc::new(AtomicBool::new(false));
 
     // Metrics: reuse the MetricsManager that scalo's ServiceApp framework has
     // already constructed and started for us (`runtime.metrics`). NEVER
