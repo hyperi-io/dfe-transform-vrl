@@ -3,6 +3,19 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.21](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.20...v1.1.21) (2026-09-09)
+
+### Bug Fixes
+
+* **deps:** rkyv 0.8.18 clears the three August RUSTSECs ([7995392](https://github.com/hyperi-io/dfe-transform-vrl/commit/7995392b7a9f9b64b32cd37fb936f57374e2e602))
+* direct transport with a push listener and grpc sink ([dc0204b](https://github.com/hyperi-io/dfe-transform-vrl/commit/dc0204b878d48cb86f78522eb8a55669c2ae0dfa))
+* **enrichment:** reject a condition on an unknown column at compile time ([0259c48](https://github.com/hyperi-io/dfe-transform-vrl/commit/0259c485f07a2fbec176a5936f836c7d6e9b56bc))
+* **enrichment:** seven contract bugs found against the vector 0.58.0 oracle ([3d2f6fa](https://github.com/hyperi-io/dfe-transform-vrl/commit/3d2f6fa851271c55054f07118f4fc9e5b3bfff8f))
+* keda scaler reads the source config, not a kafka block ([fc9f11a](https://github.com/hyperi-io/dfe-transform-vrl/commit/fc9f11adc848bef5ab61b440fb1e525e7efbb6e3))
+* rebuild on scalo 2.12.1 ([671368f](https://github.com/hyperi-io/dfe-transform-vrl/commit/671368f5adcb63ac765d6ba8d53f01f8c27fdb1e))
+* the filebeat corpus proved through the app and a real broker ([7884446](https://github.com/hyperi-io/dfe-transform-vrl/commit/7884446659ae819d46be6b91659fb3549953287e))
+* the pgo workload probes readiness on the metrics server ([5d1cea4](https://github.com/hyperi-io/dfe-transform-vrl/commit/5d1cea4a9703c6728615ff16fd71352b9a39ab67))
+
 ## [1.1.20](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.19...v1.1.20) (2026-08-28)
 
 ### Bug Fixes
