@@ -9,8 +9,8 @@
 //! CLI definition and service lifecycle orchestrator.
 //!
 //! Implements the `ServiceApp` trait from scalo, wiring together config
-//! loading, VRL compilation, health/metrics servers, pipeline, and graceful
-//! shutdown.
+//! loading, VRL compilation, the metrics server that also serves the probes,
+//! pipeline, and graceful shutdown.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -259,9 +259,8 @@ async fn run_transform_service(
     // Shutdown coordination. The runtime installs the signal handler and
     // cancels `runtime.shutdown` on SIGTERM (K8s) / SIGINT (Ctrl+C). That token
     // is the single source of truth: the engine driver stops on cancel, and we
-    // bridge it to a local `watch` channel for the two collaborators that still
-    // take a watch receiver (the health server and the enrichment refresh
-    // tasks) -- no second signal handler.
+    // bridge it to a local `watch` channel for the enrichment refresh tasks,
+    // which still take a watch receiver -- no second signal handler.
     let shutdown_token = runtime.shutdown.clone();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     {
