@@ -70,14 +70,10 @@ resources:
     cpu: "2"
     memory: 1Gi
 
-# -- Metrics service; the probes are on this port too
+# -- Metrics and health endpoint service
 service:
   type: ClusterIP
   port: 9090
-
-# -- Push listener service, rendered only when config.source.transport is direct
-pushService:
-  port: 6000
 
 # -- Application configuration (mounted as /etc/dfe-transform-vrl/config.yaml)
 config:
@@ -86,7 +82,6 @@ config:
     batch_size: 1000
     batch_timeout_ms: 100
   source:
-    # bus consumes topics; direct accepts pushes on listen
     transport: bus
     listen: 0.0.0.0:6000
     brokers:
@@ -101,7 +96,6 @@ config:
     tls:
       enabled: false
   sink:
-    # bus produces to topic; direct pushes to endpoint
     transport: bus
     endpoint: http://dfe-loader:6000
     brokers:
