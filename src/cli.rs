@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -27,7 +28,7 @@ use tracing::{debug, error, info};
 use crate::config::Config;
 use crate::config::hot::HotConfig;
 use crate::engine::compiler;
-use crate::{deployment, health, metrics, pipeline};
+use crate::{deployment, metrics, pipeline};
 
 #[derive(Parser, Debug)]
 #[command(name = "dfe-transform-vrl")]
@@ -90,6 +91,10 @@ impl ServiceApp for App {
             .validate()
             .map_err(|e| CliError::Config(format!("validation failed: {e}")))?;
         Ok(config)
+    }
+
+    fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
+        config.work_state()
     }
 
     async fn run_service(
@@ -276,10 +281,10 @@ async fn run_transform_service(
         "memory guard initialised (runtime shared)"
     );
 
-    // Health server
-    let ready_flag = health::start_health_server(&config.health.address, shutdown_rx.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("health server failed: {e}"))?;
+    // Readiness flag. The probes are served by the runtime's metrics server on
+    // the metrics port, which is what the chart probes; this service starts no
+    // second HTTP listener for them.
+    let ready_flag = Arc::new(AtomicBool::new(false));
 
     // Metrics: reuse the MetricsManager that scalo's ServiceApp framework has
     // already constructed and started for us (`runtime.metrics`). NEVER

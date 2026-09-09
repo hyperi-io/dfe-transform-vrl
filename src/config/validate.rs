@@ -35,35 +35,49 @@ impl Config {
             )));
         }
 
-        // Source
-        if self.source.brokers.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.brokers must have at least one broker".into(),
-            ));
-        }
-        if self.source.topics.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.topics must have at least one topic".into(),
-            ));
-        }
-        if self.source.group_id.is_empty() {
-            return Err(crate::Error::Validation(
-                "source.group_id must not be empty".into(),
-            ));
+        // Source. Structural problems refuse; a valid config with no topics is
+        // a transform whose source has not been written yet, which idles
+        // instead (see `work_state`).
+        if self.source.transport.is_direct() {
+            if self.source.listen.parse::<std::net::SocketAddr>().is_err() {
+                return Err(crate::Error::Validation(format!(
+                    "source.listen must be a bind address on the direct transport (got '{}')",
+                    self.source.listen
+                )));
+            }
+        } else {
+            if self.source.brokers.is_empty() {
+                return Err(crate::Error::Validation(
+                    "source.brokers must have at least one broker".into(),
+                ));
+            }
+            if self.source.group_id.is_empty() {
+                return Err(crate::Error::Validation(
+                    "source.group_id must not be empty".into(),
+                ));
+            }
         }
         validate_format(&self.source.format)?;
         validate_sasl("source.sasl", &self.source.sasl)?;
 
         // Sink
-        if self.sink.brokers.is_empty() {
-            return Err(crate::Error::Validation(
-                "sink.brokers must have at least one broker".into(),
-            ));
-        }
-        if self.sink.topic.is_empty() {
-            return Err(crate::Error::Validation(
-                "sink.topic must not be empty".into(),
-            ));
+        if self.sink.transport.is_direct() {
+            if self.sink.endpoint.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.endpoint must not be empty on the direct transport".into(),
+                ));
+            }
+        } else {
+            if self.sink.brokers.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.brokers must have at least one broker".into(),
+                ));
+            }
+            if self.sink.topic.is_empty() {
+                return Err(crate::Error::Validation(
+                    "sink.topic must not be empty".into(),
+                ));
+            }
         }
         validate_sasl("sink.sasl", &self.sink.sasl)?;
 
@@ -75,6 +89,19 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    /// Does this configuration give the transform work?
+    ///
+    /// On the bus a transform with no topics has nothing to consume: it starts,
+    /// stays Ready, holds no consumer group, and picks up the first config that
+    /// names a topic. On the direct transport the listener IS the work.
+    #[must_use]
+    pub fn work_state(&self) -> scalo::lifecycle::WorkState {
+        scalo::lifecycle::WorkState::idle_if(
+            !self.source.transport.is_direct() && self.source.topics.is_empty(),
+            "no source topics configured",
+        )
     }
 }
 
