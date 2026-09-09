@@ -48,9 +48,11 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            - name: health
-              containerPort: 9000
+            {{- if eq (default "bus" ((.Values.config).source).transport) "direct" }}
+            - name: push
+              containerPort: {{ .Values.pushService.port | default 6000 }}
               protocol: TCP
+            {{- end }}
           env:
             - name: OTEL_SERVICE_NAME
               value: "dfe-transform-vrl"
