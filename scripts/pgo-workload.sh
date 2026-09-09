@@ -272,9 +272,6 @@ transforms:
 # :9090, overridable via the `METRICS_ADDR` env var or `--metrics-addr`).
 # The duplicate per-app `MetricsManager` was removed in GH issue #11.
 # `config.metrics.address` is retained for backward-compat but ignored.
-health:
-  address: "127.0.0.1:9000"
-
 metrics:
   address: "127.0.0.1:9090"  # ignored by app; scalo uses METRICS_ADDR
 
@@ -309,9 +306,9 @@ for attempt in $(seq 1 60); do
         tail -100 "$WORK_DIR/wrapper.log" >&2
         exit 1
     fi
-    # /readyz, not the /health/ready alias scalo retired. The alias 404s, so
-    # this loop burned its full 60s against a wrapper that was already serving.
-    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9000/readyz"; then
+    # The probes are served by the metrics server; there is no separate
+    # health listener.
+    if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:9090/readyz"; then
         echo "pgo-workload: wrapper ready (attempt $attempt)"
         break
     fi
