@@ -100,6 +100,8 @@ anything not here is not read:
 | Env Var | Config Field |
 |---------|-------------|
 | `DFE_TRANSFORM_PIPELINE_NAME` | `pipeline.name` |
+| `DFE_TRANSFORM_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
+| `DFE_TRANSFORM_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
 | `DFE_TRANSFORM_SOURCE_GROUP_ID` | `source.group_id` |
@@ -113,7 +115,11 @@ anything not here is not read:
 | `DFE_TRANSFORM_SINK_SASL_USERNAME` | `sink.sasl.username` |
 | `DFE_TRANSFORM_SINK_SASL_PASSWORD` | `sink.sasl.password` |
 | `DFE_TRANSFORM_TRANSFORMS_DIR` | `transforms.dir` |
-| `DFE_TRANSFORM_HEALTH_ADDRESS` | `health.address` |
+
+The chart mounts the Kafka Secret into the `KAFKA_SASL_*` pair, which reaches
+both endpoints and beats whatever the config file set for either. The
+`SOURCE_`/`SINK_` names override it back, per endpoint -- but `chart/` injects
+only the shared pair, so a two-cluster deployment has to add them to the chart.
 
 ### scalo's own settings are not in the config file
 
@@ -190,6 +196,23 @@ RUST_LOG=debug cargo run -- --config config.yaml
 # Check config without running
 cargo run -- config-check --config config.yaml
 ```
+
+### Helm chart
+
+`chart/` is generated. `cargo run --bin dfe-transform-vrl -- emit-chart chart`
+rewrites it from `src/deployment.rs::contract()`, so a hand edit under `chart/`
+is reverted the next time anyone regenerates. Fix the contract, not the output.
+
+One file is a deliberate exception. `chart/templates/keda-scaledobject.yaml` is
+hand-fixed: the generator emits `.Values.config.kafka.*`, this app's values have
+`config.source` and `config.sink` and no `config.kafka` block, so a regenerated
+copy fails to render at all with `nil pointer evaluating interface {}.brokers`.
+Re-apply that one diff after every `emit-chart`, until the generator is fixed
+upstream in scalo.
+
+`test_committed_chart_matches_the_generator` holds both halves of that: it fails
+if any other chart file drifts from `emit-chart`, and fails the other way if the
+KEDA file stops diverging, so the exception cannot outlive the generator bug.
 
 ## Documentation
 

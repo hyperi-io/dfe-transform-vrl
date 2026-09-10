@@ -57,7 +57,6 @@ fn test_sasl_config_validates() {
 #[test]
 fn test_default_config_fields() {
     let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
-    assert_eq!(config.health.address, "0.0.0.0:9000");
     assert!(!config.source.sasl.enabled);
     assert!(!config.source.tls.enabled);
 }

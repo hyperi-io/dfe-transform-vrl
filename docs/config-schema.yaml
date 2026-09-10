@@ -25,7 +25,6 @@ description: |-
   - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
   - `sink.librdkafka_options` — passed to `ClientConfig` at creation
   - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
-  - `health.address` — HTTP server binds to socket at startup
 
   ## Accepted but not applied
 
@@ -42,6 +41,8 @@ properties:
   source:
     $ref: '#/$defs/SourceConfig'
     default:
+      transport: bus
+      listen: 0.0.0.0:6000
       brokers:
       - localhost:9092
       topics:
@@ -68,6 +69,8 @@ properties:
   sink:
     $ref: '#/$defs/SinkConfig'
     default:
+      transport: bus
+      endpoint: http://dfe-loader:6000
       brokers:
       - localhost:9092
       topic: ''
@@ -97,10 +100,6 @@ properties:
     items:
       $ref: '#/$defs/EnrichmentTableConfig'
     default: []
-  health:
-    $ref: '#/$defs/HealthConfig'
-    default:
-      address: 0.0.0.0:9000
 $defs:
   PipelineConfig:
     description: Pipeline identity and processing settings.
@@ -123,9 +122,19 @@ $defs:
         minimum: 0
         default: 100
   SourceConfig:
-    description: Kafka source configuration (wrapper-controlled consumer).
+    description: |-
+      Source configuration: the bus topics to consume, or the Push listener to
+      accept records on.
     type: object
     properties:
+      transport:
+        description: '`bus` consumes `topics`; `direct` accepts pushes on `listen`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      listen:
+        description: Address the Push listener binds on the direct transport.
+        type: string
+        default: 0.0.0.0:6000
       brokers:
         type: array
         items:
@@ -195,6 +204,21 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+  Transport:
+    description: |-
+      Which transport a stage uses.
+
+      One deployment runs one of them: `bus` is a broker between the stages,
+      `direct` is gRPC between them and needs no broker at all. The record and
+      the transform are identical either way -- only who hands the record over
+      changes.
+    oneOf:
+    - description: Kafka topics.
+      type: string
+      const: bus
+    - description: A scalo Push listener (source) or client (sink).
+      type: string
+      const: direct
   SaslConfig:
     description: SASL authentication for Kafka.
     type: object
@@ -238,9 +262,19 @@ $defs:
         type: boolean
         default: false
   SinkConfig:
-    description: Kafka sink configuration (wrapper-controlled producer).
+    description: |-
+      Sink configuration: the bus topic to produce to, or the Push listener to
+      send the transformed records on to.
     type: object
     properties:
+      transport:
+        description: '`bus` produces to `topic`; `direct` pushes to `endpoint`.'
+        $ref: '#/$defs/Transport'
+        default: bus
+      endpoint:
+        description: Downstream Push listener on the direct transport, e.g. the loader.
+        type: string
+        default: http://dfe-loader:6000
       brokers:
         type: array
         items:
@@ -480,10 +514,3 @@ $defs:
         minimum: 0
     required:
     - interval_secs
-  HealthConfig:
-    description: Health endpoint configuration.
-    type: object
-    properties:
-      address:
-        type: string
-        default: 0.0.0.0:9000

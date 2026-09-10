@@ -9,8 +9,8 @@
 //! Configuration structures and loading.
 //!
 //! Big-dial config schema for Kafka source/sink (wrapper-controlled), VRL
-//! transform files, enrichment tables and the health endpoint. scalo's own
-//! sections are not in here -- see [`SCALO_CASCADE_SECTIONS`].
+//! transform files and enrichment tables. scalo's own sections are not in here
+//! -- see [`SCALO_CASCADE_SECTIONS`].
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -88,7 +88,6 @@ pub struct TlsConfig {
 /// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
 /// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 /// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
-/// - `health.address` — HTTP server binds to socket at startup
 ///
 /// ## Accepted but not applied
 ///
@@ -103,7 +102,6 @@ pub struct Config {
     pub transforms: TransformConfig,
     #[serde(default)]
     pub enrichment_tables: Vec<EnrichmentTableConfig>,
-    pub health: HealthConfig,
 }
 
 /// Enrichment table configuration.
@@ -248,10 +246,41 @@ impl Default for PipelineConfig {
     }
 }
 
-/// Kafka source configuration (wrapper-controlled consumer).
+/// Which transport a stage uses.
+///
+/// One deployment runs one of them: `bus` is a broker between the stages,
+/// `direct` is gRPC between them and needs no broker at all. The record and
+/// the transform are identical either way -- only who hands the record over
+/// changes.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// Kafka topics.
+    #[default]
+    Bus,
+    /// A scalo Push listener (source) or client (sink).
+    Direct,
+}
+
+impl Transport {
+    /// Whether this stage is on the direct transport.
+    #[must_use]
+    pub const fn is_direct(self) -> bool {
+        matches!(self, Self::Direct)
+    }
+}
+
+/// Source configuration: the bus topics to consume, or the Push listener to
+/// accept records on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
+    /// `bus` consumes `topics`; `direct` accepts pushes on `listen`.
+    pub transport: Transport,
+    /// Address the Push listener binds on the direct transport.
+    pub listen: String,
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
@@ -276,6 +305,8 @@ pub struct SourceConfig {
 impl Default for SourceConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            listen: "0.0.0.0:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topics: vec!["events".to_string()],
             group_id: "dfe-transform-vrl".to_string(),
@@ -292,10 +323,15 @@ impl Default for SourceConfig {
     }
 }
 
-/// Kafka sink configuration (wrapper-controlled producer).
+/// Sink configuration: the bus topic to produce to, or the Push listener to
+/// send the transformed records on to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
+    /// `bus` produces to `topic`; `direct` pushes to `endpoint`.
+    pub transport: Transport,
+    /// Downstream Push listener on the direct transport, e.g. the loader.
+    pub endpoint: String,
     pub brokers: Vec<String>,
     pub topic: String,
     /// Event field path for Kafka partition key (e.g., ".`org_id`").
@@ -315,6 +351,8 @@ pub struct SinkConfig {
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            endpoint: "http://dfe-loader:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topic: String::new(),
             key_field: String::new(),
@@ -336,21 +374,6 @@ pub struct TransformConfig {
     pub dir: Option<String>,
     /// Explicit list of .vrl file paths (loaded in order).
     pub files: Option<Vec<String>>,
-}
-
-/// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct HealthConfig {
-    pub address: String,
-}
-
-impl Default for HealthConfig {
-    fn default() -> Self {
-        Self {
-            address: "0.0.0.0:9000".to_string(),
-        }
-    }
 }
 
 // =============================================================================
@@ -480,7 +503,8 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
-/// Env var names are the contract with dfe-engine — do not rename.
+/// `deployment::contract()` declares the SASL names separately for the chart it
+/// generates, so a rename here without one there stops the credential arriving.
 /// Uses scalo `flat_env_*` helpers for consistent parsing and logging.
 impl ApplyFlatEnv for Config {
     fn apply_flat_env(&mut self, prefix: &str) {
@@ -488,7 +512,24 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env_string(prefix, "PIPELINE_NAME") {
             self.pipeline.name = v;
         }
+        // Shared Kafka credentials, applied before the per-endpoint names so
+        // those override them. One cluster with one SCRAM principal is the
+        // default shape, so a single Secret feeds both endpoints.
+        if let Some(v) = flat_env_string(prefix, "KAFKA_SASL_USERNAME") {
+            self.source.sasl.username.clone_from(&v);
+            self.sink.sasl.username = v;
+        }
+        if let Some(v) = flat_env_string_sensitive(prefix, "KAFKA_SASL_PASSWORD") {
+            self.source.sasl.password.clone_from(&v);
+            self.sink.sasl.password = v;
+        }
         // Source
+        if let Some(v) = flat_env_string(prefix, "SOURCE_TRANSPORT") {
+            self.source.transport = parse_transport(&v, self.source.transport);
+        }
+        if let Some(v) = flat_env_string(prefix, "SOURCE_LISTEN") {
+            self.source.listen = v;
+        }
         if let Some(v) = flat_env_list(prefix, "SOURCE_BROKERS") {
             self.source.brokers = v;
         }
@@ -508,6 +549,12 @@ impl ApplyFlatEnv for Config {
             self.source.sasl.password = v;
         }
         // Sink
+        if let Some(v) = flat_env_string(prefix, "SINK_TRANSPORT") {
+            self.sink.transport = parse_transport(&v, self.sink.transport);
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_ENDPOINT") {
+            self.sink.endpoint = v;
+        }
         if let Some(v) = flat_env_list(prefix, "SINK_BROKERS") {
             self.sink.brokers = v;
         }
@@ -530,9 +577,21 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env_string(prefix, "TRANSFORMS_DIR") {
             self.transforms.dir = Some(v);
         }
-        // Infra
-        if let Some(v) = flat_env_string(prefix, "HEALTH_ADDRESS") {
-            self.health.address = v;
+    }
+}
+
+/// Parse a transport name from the environment, keeping `current` on anything
+/// unrecognised so a typo cannot silently move a deployment off its transport.
+fn parse_transport(value: &str, current: Transport) -> Transport {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "bus" | "kafka" => Transport::Bus,
+        "direct" | "grpc" => Transport::Direct,
+        other => {
+            tracing::warn!(
+                value = other,
+                "unknown transport, keeping the configured one"
+            );
+            current
         }
     }
 }
@@ -675,7 +734,6 @@ impl Config {
         registry::register("source", &self.source);
         registry::register("sink", &self.sink);
         registry::register("transforms", &self.transforms);
-        registry::register("health", &self.health);
     }
 }
 
@@ -747,7 +805,8 @@ mod tests {
         assert_eq!(config.pipeline.batch_timeout_ms, 100);
         assert_eq!(config.source.format, "auto");
         assert_eq!(config.sink.compression, "zstd");
-        assert_eq!(config.health.address, "0.0.0.0:9000");
+        assert_eq!(config.source.transport, Transport::Bus);
+        assert_eq!(config.sink.transport, Transport::Bus);
     }
 
     #[test]
@@ -1015,5 +1074,141 @@ enrichment_tables:
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let refresh = config.enrichment_tables[0].refresh.as_ref().unwrap();
         assert_eq!(refresh.interval_secs, 3600);
+    }
+
+    // ---------------------------------------------------------------------
+    // Flat env overrides
+    //
+    // These drive `apply_flat_env` on a `Config::default()` directly, never
+    // `Config::load()` -- load touches dotenvy, the CWD and the global config
+    // registry, so it is order-dependent under a parallel harness.
+    // ---------------------------------------------------------------------
+
+    /// Every name `apply_flat_env` reads must land on its field. A name that is
+    /// written but never read is the defect class this closes, so the shared
+    /// SASL pair gets its own pass -- the per-endpoint names shadow it.
+    #[test]
+    fn flat_env_applies_every_supported_name() {
+        let vars: Vec<(&str, Option<&str>)> = vec![
+            ("DFE_TRANSFORM_PIPELINE_NAME", Some("edge")),
+            ("DFE_TRANSFORM_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
+            ("DFE_TRANSFORM_SOURCE_TOPICS", Some("t1,t2")),
+            ("DFE_TRANSFORM_SOURCE_GROUP_ID", Some("cg")),
+            ("DFE_TRANSFORM_SOURCE_FORMAT", Some("json")),
+            ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
+            ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ("DFE_TRANSFORM_SINK_BROKERS", Some("b3:9092")),
+            ("DFE_TRANSFORM_SINK_TOPIC", Some("out")),
+            ("DFE_TRANSFORM_SINK_KEY_FIELD", Some(".tenant_id")),
+            ("DFE_TRANSFORM_SINK_COMPRESSION", Some("lz4")),
+            ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
+            ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
+            ("DFE_TRANSFORM_TRANSFORMS_DIR", Some("/etc/vrl")),
+            ("DFE_TRANSFORM_METRICS_ADDRESS", Some("127.0.0.1:2")),
+        ];
+
+        let config = temp_env::with_vars(vars, || {
+            let mut config = Config::default();
+            config.apply_flat_env(ENV_PREFIX);
+            config
+        });
+
+        assert_eq!(config.pipeline.name, "edge");
+        assert_eq!(config.source.brokers, vec!["b1:9092", "b2:9092"]);
+        assert_eq!(config.source.topics, vec!["t1", "t2"]);
+        assert_eq!(config.source.group_id, "cg");
+        assert_eq!(config.source.format, "json");
+        assert_eq!(config.source.sasl.username, "src-user");
+        assert_eq!(config.source.sasl.password, "src-pass");
+        assert_eq!(config.sink.brokers, vec!["b3:9092"]);
+        assert_eq!(config.sink.topic, "out");
+        assert_eq!(config.sink.key_field, ".tenant_id");
+        assert_eq!(config.sink.compression, "lz4");
+        assert_eq!(config.sink.sasl.username, "sink-user");
+        assert_eq!(config.sink.sasl.password, "sink-pass");
+        assert_eq!(config.transforms.dir.as_deref(), Some("/etc/vrl"));
+        assert_eq!(config.metrics.address, "127.0.0.1:2");
+
+        let shared = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(shared.source.sasl.username, "shared-user");
+        assert_eq!(shared.source.sasl.password, "shared-pass");
+    }
+
+    /// One cluster with one SCRAM principal is the default shape, so the shared
+    /// pair the chart injects must reach both endpoints from a single Secret.
+    #[test]
+    fn flat_env_kafka_sasl_fans_out_to_source_and_sink() {
+        let config = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("scram-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("scram-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(config.source.sasl.username, "scram-user");
+        assert_eq!(config.source.sasl.password, "scram-pass");
+        assert_eq!(config.sink.sasl.username, "scram-user");
+        assert_eq!(config.sink.sasl.password, "scram-pass");
+    }
+
+    /// Two clusters: the endpoint-specific name overrides the shared one, and
+    /// the endpoint left unset still gets the shared credential. Both
+    /// directions, because the shared block only sits above BOTH per-endpoint
+    /// blocks -- checking one direction lets it slide between them unnoticed.
+    #[test]
+    fn flat_env_endpoint_sasl_overrides_shared() {
+        let sink_specific = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
+                ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(sink_specific.source.sasl.username, "shared-user");
+        assert_eq!(sink_specific.source.sasl.password, "shared-pass");
+        assert_eq!(sink_specific.sink.sasl.username, "sink-user");
+        assert_eq!(sink_specific.sink.sasl.password, "sink-pass");
+
+        let source_specific = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
+                ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(source_specific.source.sasl.username, "src-user");
+        assert_eq!(source_specific.source.sasl.password, "src-pass");
+        assert_eq!(source_specific.sink.sasl.username, "shared-user");
+        assert_eq!(source_specific.sink.sasl.password, "shared-pass");
     }
 }

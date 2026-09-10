@@ -24,9 +24,14 @@ pipeline:
   batch_timeout_ms: 100
 
 # -----------------------------------------------------------------------------
-# Kafka source (wrapper-controlled consumer)
+# Source: the bus (Kafka topics) or direct (a Push listener)
 # -----------------------------------------------------------------------------
+# One deployment runs one transport. On `direct` there is no broker: the
+# receiver or the fetcher pushes records straight to `listen`, and the
+# brokers/topics/group_id below are unused.
 # source:
+#   transport: "bus"                   # bus | direct
+#   listen: "0.0.0.0:6000"             # direct only: the Push listener address
 #   brokers:
 #     - "localhost:9092"
 #   topics:
@@ -42,18 +47,27 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     # This file is NOT interpolated -- a ${VAR} here reaches the broker as a
+#     # literal. Supply credentials by environment instead:
+#     #   DFE_TRANSFORM_KAFKA_SASL_USERNAME   (feeds source and sink)
+#     #   DFE_TRANSFORM_KAFKA_SASL_PASSWORD
+#     # Only when source and sink are different clusters:
+#     #   DFE_TRANSFORM_SOURCE_SASL_USERNAME
+#     #   DFE_TRANSFORM_SOURCE_SASL_PASSWORD
+#     username: ""
+#     password: ""
 #   tls:
 #     enabled: true
-#   # librdkafka overrides — production defaults baked in, override here
+#   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
 
 # -----------------------------------------------------------------------------
-# Kafka sink (wrapper-controlled producer)
+# Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)
 # -----------------------------------------------------------------------------
 # sink:
+#   transport: "bus"                   # bus | direct
+#   endpoint: "http://dfe-loader:6000" # direct only: where the records go next
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
@@ -66,8 +80,13 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
-#     username: "${KAFKA_SASL_USERNAME}"
-#     password: "${KAFKA_SASL_PASSWORD}"
+#     # Not interpolated -- see the source block above. The shared
+#     # DFE_TRANSFORM_KAFKA_SASL_* pair covers this too; override it only for a
+#     # separate sink cluster:
+#     #   DFE_TRANSFORM_SINK_SASL_USERNAME
+#     #   DFE_TRANSFORM_SINK_SASL_PASSWORD
+#     username: ""
+#     password: ""
 #   tls:
 #     enabled: true
 #   # librdkafka overrides
@@ -134,13 +153,7 @@ pipeline:
 #       path: "/etc/dfe-transform-vrl/enrichment/GeoLite2-City.mmdb"
 
 # -----------------------------------------------------------------------------
-# Health endpoint
-# -----------------------------------------------------------------------------
-# health:
-#   address: "0.0.0.0:9000"
-
-# -----------------------------------------------------------------------------
-# scalo's own settings -- NOT in this file
+# scalo's own settings -- NOT in this file, /livez and /readyz included
 # -----------------------------------------------------------------------------
 # metrics, logger, scaling, worker_pool, batch_processing, self_regulation and
 # version_check belong to scalo's config cascade. That cascade discovers files

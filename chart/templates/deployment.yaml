@@ -48,8 +48,8 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            - name: health
-              containerPort: 9000
+            - name: push
+              containerPort: 6000
               protocol: TCP
           env:
             - name: OTEL_SERVICE_NAME
@@ -79,12 +79,12 @@ spec:
               value: {{ .Values.otel.protocol | quote }}
             {{- end }}
             # kafka credentials via Secret (figment env cascade overrides file config)
-            - name: KAFKA_SASL_USERNAME
+            - name: DFE_TRANSFORM_KAFKA_SASL_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}
                   key: {{ .Values.kafka.secretKeys.username }}
-            - name: KAFKA_SASL_PASSWORD
+            - name: DFE_TRANSFORM_KAFKA_SASL_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}

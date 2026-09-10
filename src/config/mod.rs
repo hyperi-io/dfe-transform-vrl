@@ -26,8 +26,8 @@ pub mod validate;
 
 pub use hot::HotConfig;
 pub use loader::{
-    Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, HealthConfig,
-    INERT_SETTINGS, InertSetting, PipelineConfig, RefreshConfig, SCALO_CASCADE_SECTIONS,
-    SaslConfig, SinkConfig, SourceConfig, StixAuthConfig, TlsConfig, TransformConfig,
+    Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, INERT_SETTINGS,
+    InertSetting, PipelineConfig, RefreshConfig, SCALO_CASCADE_SECTIONS, SaslConfig, SinkConfig,
+    SourceConfig, StixAuthConfig, TlsConfig, TransformConfig, Transport,
     warn_unreachable_scalo_settings,
 };

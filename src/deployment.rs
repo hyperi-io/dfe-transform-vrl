@@ -37,25 +37,29 @@ pub fn contract() -> DeploymentContract {
         config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         base_image: base_image.clone(),
+        // The Push listener the direct transport receives records on. The
+        // probes are on the metrics port, so there is no second health port.
         extra_ports: vec![PortContract {
-            name: "health".into(),
-            port: 9000,
+            name: "push".into(),
+            port: 6000,
             protocol: "TCP".into(),
         }],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vrl/config.yaml".into(),
         ],
+        // One entry per credential -- the generator renders `key_name` into
+        // values.yaml, so a second entry reusing it emits a duplicate YAML key.
         secrets: vec![SecretGroupContract {
             group_name: "kafka".into(),
             env_vars: vec![
                 SecretEnvContract {
-                    env_var: "KAFKA_SASL_USERNAME".into(),
+                    env_var: "DFE_TRANSFORM_KAFKA_SASL_USERNAME".into(),
                     key_name: "username".into(),
                     secret_key: "kafka-username".into(),
                 },
                 SecretEnvContract {
-                    env_var: "KAFKA_SASL_PASSWORD".into(),
+                    env_var: "DFE_TRANSFORM_KAFKA_SASL_PASSWORD".into(),
                     key_name: "password".into(),
                     secret_key: "kafka-password".into(),
                 },
@@ -68,6 +72,8 @@ pub fn contract() -> DeploymentContract {
                 "batch_timeout_ms": 100
             },
             "source": {
+                "transport": "bus",
+                "listen": "0.0.0.0:6000",
                 "brokers": ["kafka:9092"],
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vrl-default",
@@ -76,6 +82,8 @@ pub fn contract() -> DeploymentContract {
                 "tls": { "enabled": false }
             },
             "sink": {
+                "transport": "bus",
+                "endpoint": "http://dfe-loader:6000",
                 "brokers": ["kafka:9092"],
                 "topic": "enriched_events",
                 "key_field": ".org_id",
@@ -83,16 +91,17 @@ pub fn contract() -> DeploymentContract {
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false }
             },
-            "transforms": {
-                "dir": "/etc/dfe-transform-vrl/transforms"
-            },
-            "health": { "address": "0.0.0.0:9000" }
             // No `metrics`, `logger` or `scaling` section: those are scalo's,
             // and scalo's cascade discovers files by fixed base name, so it
             // never reads this one. Shipping them here put values in front of
             // operators that the process could not act on. They are set through
             // the env layer -- see `config::SCALO_CASCADE_SECTIONS`, and the
             // startup warning that fires when one turns up in the file anyway.
+            // Readiness is served by the metrics listener, so there is no
+            // `health` section either.
+            "transforms": {
+                "dir": "/etc/dfe-transform-vrl/transforms"
+            }
         })),
         depends_on: vec!["kafka".into()],
         native_deps: NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image),
@@ -217,8 +226,8 @@ mod tests {
         let c = contract();
         assert_eq!(c.metrics_port, 9090);
         assert_eq!(c.extra_ports.len(), 1);
-        assert_eq!(c.extra_ports[0].port, 9000);
-        assert_eq!(c.extra_ports[0].name, "health");
+        assert_eq!(c.extra_ports[0].port, 6000);
+        assert_eq!(c.extra_ports[0].name, "push");
     }
 
     /// GH issue #10 regression: config mount path must follow the
@@ -267,6 +276,106 @@ mod tests {
         assert_eq!(c.secrets.len(), 1);
         assert_eq!(c.secrets[0].group_name, "kafka");
         assert_eq!(c.secrets[0].env_vars.len(), 2);
+    }
+
+    /// The generated chart injects each `SecretEnvContract.env_var` verbatim,
+    /// so a name the config cascade never reads mounts the Secret and drops it.
+    #[test]
+    fn test_every_contract_secret_env_var_reaches_the_config() {
+        use scalo::config::flat_env::ApplyFlatEnv;
+
+        let c = contract();
+        let prefix = c.env_prefix.clone();
+
+        for group in &c.secrets {
+            for env in &group.env_vars {
+                assert!(
+                    env.env_var.starts_with(&format!("{prefix}_")),
+                    "{} must carry the {prefix} prefix the config cascade reads",
+                    env.env_var
+                );
+
+                let sentinel = format!("sentinel-{}", env.key_name);
+                let config = temp_env::with_var(&env.env_var, Some(&sentinel), || {
+                    let mut config = crate::config::Config::default();
+                    config.apply_flat_env(&prefix);
+                    config
+                });
+
+                let rendered = serde_json::to_string(&config).expect("config serialises");
+                assert!(
+                    rendered.contains(&sentinel),
+                    "{} is injected by the chart but never lands in the config",
+                    env.env_var
+                );
+            }
+        }
+    }
+
+    /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
+    /// next regen -- which is how the Kafka SASL env names shipped broken.
+    /// Two deliberate exceptions, both KEDA and both waiting on the generator:
+    /// `templates/keda-scaledobject.yaml`, where the generator emits a
+    /// `.Values.config.kafka.*` path this app's values do not have, so a
+    /// regenerated copy will not render at all; and
+    /// `templates/keda-triggerauth.yaml`, where it binds the username to
+    /// `sasl`, which KEDA reads as the mechanism enum, leaving the scaler with
+    /// no username and no lag metric.
+    #[test]
+    fn test_committed_chart_matches_the_generator() {
+        const HAND_FIXED: &[&str] = &[
+            "templates/keda-scaledobject.yaml",
+            "templates/keda-triggerauth.yaml",
+        ];
+
+        let generated = tempfile::tempdir().expect("temp dir");
+        scalo::deployment::generate_chart(&contract(), generated.path(), None)
+            .expect("chart generates");
+
+        let want = read_chart(generated.path());
+        let got = read_chart(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart"));
+
+        assert_eq!(
+            want.keys().collect::<Vec<_>>(),
+            got.keys().collect::<Vec<_>>(),
+            "chart/ holds a different set of files from `emit-chart`"
+        );
+
+        for (rel, from_generator) in &want {
+            if HAND_FIXED.contains(&rel.as_str()) {
+                assert_ne!(
+                    got[rel], *from_generator,
+                    "chart/{rel} is listed as hand-fixed but now matches the \
+                     generator -- drop it from HAND_FIXED"
+                );
+                continue;
+            }
+            assert_eq!(
+                got[rel], *from_generator,
+                "chart/{rel} has drifted from `emit-chart` -- fix contract() and \
+                 regenerate, never hand-edit the output"
+            );
+        }
+    }
+
+    /// Relative path -> contents for a chart directory (root files plus
+    /// `templates/`, which is the whole shape the generator emits).
+    fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for sub in [None, Some("templates")] {
+            let here = sub.map_or_else(|| dir.to_path_buf(), |s| dir.join(s));
+            for entry in std::fs::read_dir(&here).expect("chart directory readable") {
+                let entry = entry.expect("chart directory entry");
+                if !entry.file_type().expect("file type").is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rel = sub.map_or_else(|| name.clone(), |s| format!("{s}/{name}"));
+                let body = std::fs::read_to_string(entry.path()).expect("chart file readable");
+                out.insert(rel, body);
+            }
+        }
+        out
     }
 
     #[test]
