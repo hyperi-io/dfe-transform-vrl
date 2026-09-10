@@ -113,7 +113,6 @@ async fn a_batch_pushed_over_grpc_comes_out_the_grpc_sink_transformed() {
         batch_size: 10,
         batch_timeout_ms: 50,
         key_field: ".id".to_string(),
-        scaling_pressure_threshold: 0.8,
     });
     let shutdown = CancellationToken::new();
 

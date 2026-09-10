@@ -110,11 +110,6 @@ config:
       enabled: false
   transforms:
     dir: /etc/dfe-transform-vrl/transforms
-  metrics:
-    address: 0.0.0.0:9090
-  scaling:
-    enabled: true
-    memory_gate_threshold: 0.8
 
 # -- kafka credentials
 kafka:

@@ -91,20 +91,16 @@ pub fn contract() -> DeploymentContract {
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false }
             },
+            // No `metrics`, `logger` or `scaling` section: those are scalo's,
+            // and scalo's cascade discovers files by fixed base name, so it
+            // never reads this one. Shipping them here put values in front of
+            // operators that the process could not act on. They are set through
+            // the env layer -- see `config::SCALO_CASCADE_SECTIONS`, and the
+            // startup warning that fires when one turns up in the file anyway.
+            // Readiness is served by the metrics listener, so there is no
+            // `health` section either.
             "transforms": {
                 "dir": "/etc/dfe-transform-vrl/transforms"
-            },
-            "metrics": { "address": "0.0.0.0:9090" },
-            // Unified scaling-pressure engine (scalo 2.9). The CEL weighted
-            // engine collapsed into ONE ScalingPressure served at
-            // /scaling/pressure to KEDA: base config holds only the gate
-            // thresholds; the weighted components (kafka_lag, memory) are
-            // registered in code via `ServiceApp::scaling_components`. The
-            // memory gate forces pressure to 100 once usage crosses
-            // memory_gate_threshold (scale before OOM).
-            "scaling": {
-                "enabled": true,
-                "memory_gate_threshold": 0.8
             }
         })),
         depends_on: vec!["kafka".into()],
@@ -391,29 +387,50 @@ mod tests {
         assert!(cfg.get("sink").is_some());
     }
 
-    /// Cascade-applied proof (scalo 2.9): the `scaling` section the contract
-    /// ships in the deployed `--config` deserialises into scalo's OWN
-    /// `ScalingPressureConfig` -- the exact type `from_cascade()` unmarshals
-    /// from the `scaling` key once `run_app` populates the cascade from the
-    /// file. This guards the shape (key names / kinds) the engine honours, so a
-    /// rename here can't silently leave the engine on its defaults. The 2.9
-    /// unified engine config holds only the gate thresholds; the weighted KEDA
-    /// components are registered in code (`ServiceApp::scaling_components`), not
-    /// in the config.
+    /// The shipped `--config` must carry no section that only scalo's cascade
+    /// could read.
+    ///
+    /// `scalo::config` finds files by fixed base name (`settings.yaml`,
+    /// `defaults.yaml`, `settings.{env}.yaml`), so it never reads the
+    /// `config.yaml` this contract mounts. A `scaling:` or `metrics:` block in
+    /// here parses, renders into the `ConfigMap`, and changes nothing, so
+    /// asserting that such a block deserialises into scalo's type proves only
+    /// its shape -- this asserts it is not shipped at all.
     #[test]
-    fn test_contract_scaling_section_matches_scalo_pressure_config() {
-        use scalo::scaling::ScalingPressureConfig;
-
+    fn test_default_config_carries_no_scalo_cascade_section() {
         let cfg = contract().default_config.expect("default_config present");
-        let scaling = cfg.get("scaling").expect("scaling section present");
+        let map = cfg.as_object().expect("default_config is an object");
 
-        let pressure: ScalingPressureConfig = serde_json::from_value(scaling.clone())
-            .expect("scaling section must deser as scalo ScalingPressureConfig");
+        for (section, instead) in crate::config::SCALO_CASCADE_SECTIONS {
+            assert!(
+                !map.contains_key(*section),
+                "default_config ships a `{section}` section, which scalo's \
+                 cascade cannot read from this file -- set it via {instead}"
+            );
+        }
+    }
 
-        assert!(pressure.enabled, "scaling engine must be enabled");
-        assert!(
-            (pressure.memory_gate_threshold - 0.8).abs() < f64::EPSILON,
-            "memory_gate_threshold must be 0.8 (scale before OOM)"
-        );
+    /// Every section the contract DOES ship must be one the wrapper reads,
+    /// which is to say a field of `Config`.
+    #[test]
+    fn test_default_config_sections_are_all_read_by_the_wrapper() {
+        let cfg = contract().default_config.expect("default_config present");
+        let map = cfg.as_object().expect("default_config is an object");
+
+        let known = serde_json::to_value(crate::config::Config::default())
+            .expect("Config serialises")
+            .as_object()
+            .expect("Config is an object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for section in map.keys() {
+            assert!(
+                known.contains(section),
+                "default_config ships a `{section}` section that is not a field \
+                 of Config, so nothing deserialises it"
+            );
+        }
     }
 }

@@ -74,7 +74,6 @@ fn default_hot_config() -> SharedConfig<HotConfig> {
         batch_size: 10,
         batch_timeout_ms: 5000,
         key_field: String::new(),
-        scaling_pressure_threshold: 0.8,
     })
 }
 

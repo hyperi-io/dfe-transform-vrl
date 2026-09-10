@@ -60,7 +60,6 @@ impl Harness {
             batch_size,
             batch_timeout_ms,
             key_field: key_field.to_string(),
-            scaling_pressure_threshold: 0.8,
         };
         let hot_config = SharedConfig::new(hot);
 
@@ -640,7 +639,6 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
         batch_size: 100,
         batch_timeout_ms: 50,
         key_field: ".id".to_string(),
-        scaling_pressure_threshold: 0.8,
     });
 
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -911,7 +909,6 @@ async fn test_pipeline_burst_drains_with_concurrent_reader() {
         batch_size: 20,
         batch_timeout_ms: 50,
         key_field: ".id".to_string(),
-        scaling_pressure_threshold: 0.8,
     });
     let shutdown = CancellationToken::new();
 

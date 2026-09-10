@@ -105,6 +105,89 @@ fn config_check_with_checked_in_fixture_exits_zero() {
     );
 }
 
+/// `config-check` prints the settings it will actually run with. Return the
+/// value it reports for `key`, from the report -- NOT from the config dump
+/// below it, which prints what was parsed rather than what took effect.
+fn reported_setting(stderr: &str, key: &str) -> String {
+    stderr
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(key))
+        .map_or_else(
+            || panic!("config-check reported no `{key}` line:\n{stderr}"),
+            |rest| rest.trim().to_string(),
+        )
+}
+
+/// The scalo-owned settings must reach the runtime through the env layer.
+///
+/// Walks `SCALO_CASCADE_SECTIONS`' two reportable members end to end, against
+/// the real binary, with values that differ from every default -- so it fails
+/// if the app stops seeding scalo's cascade, which is the state that left the
+/// metrics address, the log level and the log format unsettable by any means.
+#[test]
+fn scalo_cascade_env_reaches_the_runtime() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configs/minimal.yaml");
+
+    let output = Command::new(binary_path())
+        .arg("--config")
+        .arg(fixture.to_str().expect("fixture path utf8"))
+        .arg("config-check")
+        .env("DFE_TRANSFORM_LOGGER__LEVEL", "warn")
+        .env("DFE_TRANSFORM_LOGGER__FORMAT", "json")
+        .env("DFE_TRANSFORM_METRICS__ADDRESS", "127.0.0.1:19099")
+        // Cleared so the assertions cannot pass on a higher-priority source.
+        .env_remove("LOG_LEVEL")
+        .env_remove("LOG_FORMAT")
+        .env_remove("METRICS_ADDR")
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "config-check should exit 0\nstderr: {stderr}"
+    );
+
+    // Each value differs from the default it would fall back to -- info, the
+    // otel-derived text, and 0.0.0.0:9090.
+    assert_eq!(reported_setting(&stderr, "log_level"), "warn");
+    assert_eq!(reported_setting(&stderr, "log_format"), "json");
+    assert_eq!(reported_setting(&stderr, "metrics_addr"), "127.0.0.1:19099");
+}
+
+/// A scalo section written into the `--config` file is reported, not obeyed.
+#[test]
+fn scalo_section_in_the_config_file_warns_at_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    std::fs::write(
+        &config,
+        "pipeline:\n  name: warn-probe\n\
+         source:\n  brokers: [\"127.0.0.1:9092\"]\n  topics: [\"in\"]\n  group_id: \"g\"\n\
+         sink:\n  brokers: [\"127.0.0.1:9092\"]\n  topic: \"out\"\n\
+         transforms:\n  dir: \"/nonexistent\"\n\
+         scaling:\n  enabled: false\n",
+    )
+    .unwrap();
+
+    let output = Command::new(binary_path())
+        .arg("--config")
+        .arg(config.to_str().unwrap())
+        .arg("run")
+        .output()
+        .expect("failed to execute binary");
+
+    // The run dies on the missing transforms dir; the warning precedes that.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("scalo cascade") && stderr.contains("scaling"),
+        "a `scaling:` section in the config file must warn that it is not \
+         applied\nstderr: {stderr}"
+    );
+}
+
 #[test]
 fn example_config_yaml_parses_as_yaml() {
     // The example config users will copy MUST at minimum be valid YAML.
