@@ -1,5 +1,12 @@
 # dfe-transform-vrl
 
+[![Build Status](https://github.com/hyperi-io/dfe-transform-vrl/actions/workflows/ci.yml/badge.svg)](https://github.com/hyperi-io/dfe-transform-vrl/actions)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/LICENSE)
+
+> Running Vector to reshape events costs you a subprocess, its config surface and
+> its failure modes. This embeds the VRL engine instead, so the transform runs
+> in-process and the wrapper owns memory, backpressure and offsets directly.
+
 Embedded VRL (Vector Remap Language) transform engine with wrapper-controlled Kafka source/sink.
 
 ## Overview
@@ -42,7 +49,7 @@ DFE_TRANSFORM_SINK_TOPIC=enriched_events \
 
 ## Configuration
 
-See [config.example.yaml](config.example.yaml) for full configuration reference.
+See [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/config.example.yaml) for full configuration reference.
 
 ### Minimal Configuration
 
@@ -89,7 +96,7 @@ those files, exactly like any user-supplied transform.
 
 **INTERIM:** elastic compatibility is being replaced by
 `dfe-transform-elastic` (Rust-native, in beta). See
-[pipelines/filebeat/README.md](pipelines/filebeat/README.md) for wiring,
+[pipelines/filebeat/README.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/pipelines/filebeat/README.md) for wiring,
 routing behaviour, and known limitations.
 
 ### Environment Variable Overrides
@@ -193,14 +200,14 @@ KEDA file stops diverging, so the exception cannot outlive the generator bug.
 
 ## Documentation
 
-- [docs/DESIGN.md](docs/DESIGN.md) - Full architecture and design
-- [config.example.yaml](config.example.yaml) - Configuration reference
+- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/DESIGN.md) - Full architecture and design
+- [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/config.example.yaml) - Configuration reference
 
 ## License
 
 This project is licensed under the Business Source License 1.1 (BUSL-1.1).
-See [LICENSE](LICENSE) for details.
+See [LICENSE](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/LICENSE) for details.
 
 Copyright (c) 2026 HYPERI PTY LIMITED
 
-For commercial licensing options, see [COMMERCIAL.md](COMMERCIAL.md).
+For commercial licensing options, see [COMMERCIAL.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/COMMERCIAL.md).
