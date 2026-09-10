@@ -16,8 +16,12 @@
 # -----------------------------------------------------------------------------
 pipeline:
   name: "my-pipeline"
-  batch_size: 1000                     # events per transform batch
-  batch_timeout_ms: 100                # max wait for full batch (ms)
+  # NOT APPLIED. Parsed and validated, then read by nothing -- the batch engine
+  # takes its chunk size from batch_processing.max_chunk_size (see the bottom of
+  # this file), and the governed driver has no partial-batch timer. Setting
+  # either logs a warning at startup.
+  batch_size: 1000
+  batch_timeout_ms: 100
 
 # -----------------------------------------------------------------------------
 # Source: the bus (Kafka topics) or direct (a Push listener)
@@ -37,6 +41,8 @@ pipeline:
 #   max_buffer_bytes: 67108864         # 64 MiB consumer buffer
 #   auto_offset_reset: "latest"        # latest, earliest
 #   session_timeout_ms: 30000
+#   # NOT APPLIED: librdkafka auto-commit is off in the production profile --
+#   # the engine commits at the at-least-once barrier after each sink ack.
 #   commit_interval_ms: 5000
 #   sasl:
 #     enabled: true
@@ -65,7 +71,9 @@ pipeline:
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
-#   key_field: ".org_id"               # Event field for Kafka partition key
+#   # NOT APPLIED: the producer's key argument carries the destination topic,
+#   # not a partition key, so nothing is derived from the event (scalo-rs#37).
+#   key_field: ".org_id"
 #   compression: "zstd"                # none, gzip, lz4, snappy, zstd
 #   max_buffer_bytes: 67108864         # 64 MiB producer buffer
 #   message_timeout_ms: 300000         # producer delivery timeout
@@ -145,44 +153,24 @@ pipeline:
 #       path: "/etc/dfe-transform-vrl/enrichment/GeoLite2-City.mmdb"
 
 # -----------------------------------------------------------------------------
-# Metrics endpoint -- /livez and /readyz are served here too
+# scalo's own settings -- NOT in this file, /livez and /readyz included
 # -----------------------------------------------------------------------------
-# metrics:
-#   address: "0.0.0.0:9090"
-
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
-logging:
-  level: "info"                        # trace, debug, info, warn, error
-  format: "json"                       # json, text
-
-# -----------------------------------------------------------------------------
-# Horizontal scaling-pressure engine (rustlib 2.8.11 ScalingEngine)
-# -----------------------------------------------------------------------------
-# Read from the global config cascade by rustlib's ScalingEngineConfig (NOT the
-# app's own serde loader). Requires the `expression` rustlib feature (enabled in
-# Cargo.toml) -- without it the engine compiles out and this section is inert.
+# metrics, logger, scaling, worker_pool, batch_processing, self_regulation and
+# version_check belong to scalo's config cascade. That cascade discovers files
+# by fixed base name (defaults.yaml, settings.yaml, settings.{env}.yaml) and so
+# never reads a file called config.yaml -- writing those sections here parses
+# cleanly and changes nothing, and the wrapper warns at startup if it finds one.
 #
-# Kafka-in -> transform -> Kafka-out: inbound + outbound are both kafka. The
-# smart default emits `dfe_transform_vrl_scaling_pressure{name="default"}` =
-# max(cpu_utilisation_ratio / cpu_target, transport_inbound_pressure_ratio),
-# gated to 0 when the outbound circuit is open. The pipeline pushes per-pod
-# assigned Kafka lag + the outbound circuit state every 5s.
-scaling:
-  enabled: true
-  interval_secs: 15
-  transport:
-    inbound: kafka
-    outbound: kafka
-  params:
-    cpu_target: 0.70
-    # lag_target: PER-POD = sustained_msgs_per_sec_per_pod * tolerable_backlog_s.
-    # TUNE-ME: left UNSET -- no measured per-pod VRL throughput exists yet, and
-    # guessing mis-scales. With it unset the lag term contributes 0 and the
-    # composite reduces to CPU vs the gratis inbound-pressure ratio. The KEDA
-    # ScaledObject's per-partition kafka lagThreshold (1000) still scales on raw
-    # lag independently. Set this once a real throughput number is measured.
-  pressures: []                          # empty => the smart default
-  # Legacy weighted ScalingPressure gate (worker-pool feedback). Retained.
-  pressure_threshold: 0.8
+# Set them through the env layer instead. The section nests on a DOUBLE
+# underscore; a single one produces a flat key that matches nothing:
+#
+#   METRICS_ADDR=0.0.0.0:9090            # or DFE_TRANSFORM_METRICS__ADDRESS
+#   LOG_LEVEL=debug                      # or DFE_TRANSFORM_LOGGER__LEVEL
+#   LOG_FORMAT=json                      # or DFE_TRANSFORM_LOGGER__FORMAT
+#   DFE_TRANSFORM_SCALING__ENABLED=true
+#   DFE_TRANSFORM_SCALING__MEMORY_GATE_THRESHOLD=0.8
+#   DFE_TRANSFORM_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+#
+# batch_processing.max_chunk_size is the events-per-chunk dial the batch engine
+# actually reads. pipeline.batch_size above is NOT it -- see the "accepted but
+# not applied" list in the README.
