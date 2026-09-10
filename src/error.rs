@@ -43,9 +43,6 @@ pub enum Error {
     #[error("enrichment error: {0}")]
     Enrichment(String),
 
-    #[error("health check error: {0}")]
-    Health(String),
-
     #[error("shutdown requested")]
     Shutdown,
 }

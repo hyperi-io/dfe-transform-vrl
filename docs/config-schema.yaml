@@ -5,8 +5,8 @@ description: |-
 
   ## This struct is the whole of the `--config` file
 
-  It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
-  `health`, and nothing else belongs in that file. scalo's own sections --
+  It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`,
+  and nothing else belongs in that file. scalo's own sections --
   `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
   `self_regulation`, `version_check` -- resolve from scalo's cascade, which
   discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and so

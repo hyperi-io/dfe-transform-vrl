@@ -34,8 +34,8 @@
 //! - `sink.max_buffer_bytes` — rdkafka queue.buffering.max.kbytes at creation
 //! - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 //! - `transforms.*` — VRL programs compiled at startup (immutable for process lifetime)
-//! - `health.address` — HTTP server binds to socket at startup
-//! - `metrics.address` — scalo binds the metrics server before `run_service`
+//! - `metrics.address` — scalo binds the metrics server, which also serves the
+//!   probes, before `run_service`
 //! - `logger.*` — tracing subscriber built once, before the runtime
 
 use serde::{Deserialize, Serialize};
