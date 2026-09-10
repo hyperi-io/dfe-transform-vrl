@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.22](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.21...v1.1.22) (2026-09-10)
+
+### Bug Fixes
+
+* **config:** read the Kafka SASL credentials the chart injects ([237996b](https://github.com/hyperi-io/dfe-transform-vrl/commit/237996bb077396c7dbc2e103ae1d4500974c6973))
+* **config:** stop accepting settings that reach nothing ([f695207](https://github.com/hyperi-io/dfe-transform-vrl/commit/f695207973847d67c5d673f6808be82734404e08))
+* **deps:** floor scalo at the 2.12.1 we build against ([2085be2](https://github.com/hyperi-io/dfe-transform-vrl/commit/2085be2cf6e7a75b010b79fb8023d3ca714ee702))
+
 ## [1.1.21](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.20...v1.1.21) (2026-09-09)
 
 ### Bug Fixes
