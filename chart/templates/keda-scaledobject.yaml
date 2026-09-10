@@ -1,3 +1,7 @@
+{{/* Hand-fixed, unlike the rest of chart/. emit-chart writes
+.Values.config.kafka.* here, which this chart does not have, so a regenerated
+copy fails to render at all. Re-apply this diff after every emit-chart; the
+HAND_FIXED list in src/deployment.rs is what holds the exception. */}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject

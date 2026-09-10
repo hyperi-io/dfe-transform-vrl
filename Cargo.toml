@@ -177,6 +177,9 @@ testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
 scalo = { version = ">=2.10.14, <3", features = ["transport-memory"] }
+# Env is process-global and the harness runs tests in parallel -- the flat-env
+# tests must scope their vars rather than leak them into a sibling test.
+temp-env = ">=0.3.6, <0.4"
 
 [lints.rust]
 unsafe_code = "forbid"

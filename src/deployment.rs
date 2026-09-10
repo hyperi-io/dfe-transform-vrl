@@ -48,16 +48,18 @@ pub fn contract() -> DeploymentContract {
             "--config".into(),
             "/etc/dfe-transform-vrl/config.yaml".into(),
         ],
+        // One entry per credential -- the generator renders `key_name` into
+        // values.yaml, so a second entry reusing it emits a duplicate YAML key.
         secrets: vec![SecretGroupContract {
             group_name: "kafka".into(),
             env_vars: vec![
                 SecretEnvContract {
-                    env_var: "KAFKA_SASL_USERNAME".into(),
+                    env_var: "DFE_TRANSFORM_KAFKA_SASL_USERNAME".into(),
                     key_name: "username".into(),
                     secret_key: "kafka-username".into(),
                 },
                 SecretEnvContract {
-                    env_var: "KAFKA_SASL_PASSWORD".into(),
+                    env_var: "DFE_TRANSFORM_KAFKA_SASL_PASSWORD".into(),
                     key_name: "password".into(),
                     secret_key: "kafka-password".into(),
                 },
@@ -278,6 +280,106 @@ mod tests {
         assert_eq!(c.secrets.len(), 1);
         assert_eq!(c.secrets[0].group_name, "kafka");
         assert_eq!(c.secrets[0].env_vars.len(), 2);
+    }
+
+    /// The generated chart injects each `SecretEnvContract.env_var` verbatim,
+    /// so a name the config cascade never reads mounts the Secret and drops it.
+    #[test]
+    fn test_every_contract_secret_env_var_reaches_the_config() {
+        use scalo::config::flat_env::ApplyFlatEnv;
+
+        let c = contract();
+        let prefix = c.env_prefix.clone();
+
+        for group in &c.secrets {
+            for env in &group.env_vars {
+                assert!(
+                    env.env_var.starts_with(&format!("{prefix}_")),
+                    "{} must carry the {prefix} prefix the config cascade reads",
+                    env.env_var
+                );
+
+                let sentinel = format!("sentinel-{}", env.key_name);
+                let config = temp_env::with_var(&env.env_var, Some(&sentinel), || {
+                    let mut config = crate::config::Config::default();
+                    config.apply_flat_env(&prefix);
+                    config
+                });
+
+                let rendered = serde_json::to_string(&config).expect("config serialises");
+                assert!(
+                    rendered.contains(&sentinel),
+                    "{} is injected by the chart but never lands in the config",
+                    env.env_var
+                );
+            }
+        }
+    }
+
+    /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
+    /// next regen -- which is how the Kafka SASL env names shipped broken.
+    /// Two deliberate exceptions, both KEDA and both waiting on the generator:
+    /// `templates/keda-scaledobject.yaml`, where the generator emits a
+    /// `.Values.config.kafka.*` path this app's values do not have, so a
+    /// regenerated copy will not render at all; and
+    /// `templates/keda-triggerauth.yaml`, where it binds the username to
+    /// `sasl`, which KEDA reads as the mechanism enum, leaving the scaler with
+    /// no username and no lag metric.
+    #[test]
+    fn test_committed_chart_matches_the_generator() {
+        const HAND_FIXED: &[&str] = &[
+            "templates/keda-scaledobject.yaml",
+            "templates/keda-triggerauth.yaml",
+        ];
+
+        let generated = tempfile::tempdir().expect("temp dir");
+        scalo::deployment::generate_chart(&contract(), generated.path(), None)
+            .expect("chart generates");
+
+        let want = read_chart(generated.path());
+        let got = read_chart(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart"));
+
+        assert_eq!(
+            want.keys().collect::<Vec<_>>(),
+            got.keys().collect::<Vec<_>>(),
+            "chart/ holds a different set of files from `emit-chart`"
+        );
+
+        for (rel, from_generator) in &want {
+            if HAND_FIXED.contains(&rel.as_str()) {
+                assert_ne!(
+                    got[rel], *from_generator,
+                    "chart/{rel} is listed as hand-fixed but now matches the \
+                     generator -- drop it from HAND_FIXED"
+                );
+                continue;
+            }
+            assert_eq!(
+                got[rel], *from_generator,
+                "chart/{rel} has drifted from `emit-chart` -- fix contract() and \
+                 regenerate, never hand-edit the output"
+            );
+        }
+    }
+
+    /// Relative path -> contents for a chart directory (root files plus
+    /// `templates/`, which is the whole shape the generator emits).
+    fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for sub in [None, Some("templates")] {
+            let here = sub.map_or_else(|| dir.to_path_buf(), |s| dir.join(s));
+            for entry in std::fs::read_dir(&here).expect("chart directory readable") {
+                let entry = entry.expect("chart directory entry");
+                if !entry.file_type().expect("file type").is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let rel = sub.map_or_else(|| name.clone(), |s| format!("{s}/{name}"));
+                let body = std::fs::read_to_string(entry.path()).expect("chart file readable");
+                out.insert(rel, body);
+            }
+        }
+        out
     }
 
     #[test]
