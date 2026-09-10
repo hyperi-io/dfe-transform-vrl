@@ -82,6 +82,8 @@ config:
     batch_size: 1000
     batch_timeout_ms: 100
   source:
+    transport: bus
+    listen: 0.0.0.0:6000
     brokers:
     - kafka:9092
     topics:
@@ -94,6 +96,8 @@ config:
     tls:
       enabled: false
   sink:
+    transport: bus
+    endpoint: http://dfe-loader:6000
     brokers:
     - kafka:9092
     topic: enriched_events
@@ -106,8 +110,6 @@ config:
       enabled: false
   transforms:
     dir: /etc/dfe-transform-vrl/transforms
-  health:
-    address: 0.0.0.0:9000
   metrics:
     address: 0.0.0.0:9090
   scaling:

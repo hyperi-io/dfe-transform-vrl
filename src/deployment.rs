@@ -37,9 +37,11 @@ pub fn contract() -> DeploymentContract {
         config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         base_image: base_image.clone(),
+        // The Push listener the direct transport receives records on. The
+        // probes are on the metrics port, so there is no second health port.
         extra_ports: vec![PortContract {
-            name: "health".into(),
-            port: 9000,
+            name: "push".into(),
+            port: 6000,
             protocol: "TCP".into(),
         }],
         entrypoint_args: vec![
@@ -70,6 +72,8 @@ pub fn contract() -> DeploymentContract {
                 "batch_timeout_ms": 100
             },
             "source": {
+                "transport": "bus",
+                "listen": "0.0.0.0:6000",
                 "brokers": ["kafka:9092"],
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vrl-default",
@@ -78,6 +82,8 @@ pub fn contract() -> DeploymentContract {
                 "tls": { "enabled": false }
             },
             "sink": {
+                "transport": "bus",
+                "endpoint": "http://dfe-loader:6000",
                 "brokers": ["kafka:9092"],
                 "topic": "enriched_events",
                 "key_field": ".org_id",
@@ -88,7 +94,6 @@ pub fn contract() -> DeploymentContract {
             "transforms": {
                 "dir": "/etc/dfe-transform-vrl/transforms"
             },
-            "health": { "address": "0.0.0.0:9000" },
             "metrics": { "address": "0.0.0.0:9090" },
             // Unified scaling-pressure engine (scalo 2.9). The CEL weighted
             // engine collapsed into ONE ScalingPressure served at
@@ -225,8 +230,8 @@ mod tests {
         let c = contract();
         assert_eq!(c.metrics_port, 9090);
         assert_eq!(c.extra_ports.len(), 1);
-        assert_eq!(c.extra_ports[0].port, 9000);
-        assert_eq!(c.extra_ports[0].name, "health");
+        assert_eq!(c.extra_ports[0].port, 6000);
+        assert_eq!(c.extra_ports[0].name, "push");
     }
 
     /// GH issue #10 regression: config mount path must follow the

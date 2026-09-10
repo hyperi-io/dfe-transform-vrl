@@ -48,8 +48,8 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            - name: health
-              containerPort: 9000
+            - name: push
+              containerPort: 6000
               protocol: TCP
           env:
             - name: OTEL_SERVICE_NAME

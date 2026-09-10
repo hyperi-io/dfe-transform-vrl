@@ -20,9 +20,14 @@ pipeline:
   batch_timeout_ms: 100                # max wait for full batch (ms)
 
 # -----------------------------------------------------------------------------
-# Kafka source (wrapper-controlled consumer)
+# Source: the bus (Kafka topics) or direct (a Push listener)
 # -----------------------------------------------------------------------------
+# One deployment runs one transport. On `direct` there is no broker: the
+# receiver or the fetcher pushes records straight to `listen`, and the
+# brokers/topics/group_id below are unused.
 # source:
+#   transport: "bus"                   # bus | direct
+#   listen: "0.0.0.0:6000"             # direct only: the Push listener address
 #   brokers:
 #     - "localhost:9092"
 #   topics:
@@ -52,9 +57,11 @@ pipeline:
 #   #   fetch.max.bytes: "10485760"
 
 # -----------------------------------------------------------------------------
-# Kafka sink (wrapper-controlled producer)
+# Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)
 # -----------------------------------------------------------------------------
 # sink:
+#   transport: "bus"                   # bus | direct
+#   endpoint: "http://dfe-loader:6000" # direct only: where the records go next
 #   brokers:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
@@ -138,13 +145,7 @@ pipeline:
 #       path: "/etc/dfe-transform-vrl/enrichment/GeoLite2-City.mmdb"
 
 # -----------------------------------------------------------------------------
-# Health endpoint
-# -----------------------------------------------------------------------------
-# health:
-#   address: "0.0.0.0:9000"
-
-# -----------------------------------------------------------------------------
-# Metrics endpoint
+# Metrics endpoint -- /livez and /readyz are served here too
 # -----------------------------------------------------------------------------
 # metrics:
 #   address: "0.0.0.0:9090"

@@ -9,7 +9,7 @@
 //! Configuration structures and loading.
 //!
 //! Big-dial config schema for Kafka source/sink (wrapper-controlled),
-//! VRL transform files, health/metrics endpoints, and scaling pressure.
+//! VRL transform files, the metrics endpoint, and scaling pressure.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -83,7 +83,6 @@ pub struct TlsConfig {
 /// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
 /// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 /// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
-/// - `health.address` — HTTP server binds to socket at startup
 /// - `metrics.address` — metrics server binds to socket at startup
 /// - `logging.*` — tracing subscriber configured at startup
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -95,7 +94,6 @@ pub struct Config {
     pub transforms: TransformConfig,
     #[serde(default)]
     pub enrichment_tables: Vec<EnrichmentTableConfig>,
-    pub health: HealthConfig,
     pub metrics: MetricsConfig,
     pub logging: LoggingConfig,
     pub scaling: ScalingConfig,
@@ -243,10 +241,41 @@ impl Default for PipelineConfig {
     }
 }
 
-/// Kafka source configuration (wrapper-controlled consumer).
+/// Which transport a stage uses.
+///
+/// One deployment runs one of them: `bus` is a broker between the stages,
+/// `direct` is gRPC between them and needs no broker at all. The record and
+/// the transform are identical either way -- only who hands the record over
+/// changes.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Transport {
+    /// Kafka topics.
+    #[default]
+    Bus,
+    /// A scalo Push listener (source) or client (sink).
+    Direct,
+}
+
+impl Transport {
+    /// Whether this stage is on the direct transport.
+    #[must_use]
+    pub const fn is_direct(self) -> bool {
+        matches!(self, Self::Direct)
+    }
+}
+
+/// Source configuration: the bus topics to consume, or the Push listener to
+/// accept records on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
+    /// `bus` consumes `topics`; `direct` accepts pushes on `listen`.
+    pub transport: Transport,
+    /// Address the Push listener binds on the direct transport.
+    pub listen: String,
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
@@ -271,6 +300,8 @@ pub struct SourceConfig {
 impl Default for SourceConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            listen: "0.0.0.0:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topics: vec!["events".to_string()],
             group_id: "dfe-transform-vrl".to_string(),
@@ -287,10 +318,15 @@ impl Default for SourceConfig {
     }
 }
 
-/// Kafka sink configuration (wrapper-controlled producer).
+/// Sink configuration: the bus topic to produce to, or the Push listener to
+/// send the transformed records on to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
+    /// `bus` produces to `topic`; `direct` pushes to `endpoint`.
+    pub transport: Transport,
+    /// Downstream Push listener on the direct transport, e.g. the loader.
+    pub endpoint: String,
     pub brokers: Vec<String>,
     pub topic: String,
     /// Event field path for Kafka partition key (e.g., ".`org_id`").
@@ -310,6 +346,8 @@ pub struct SinkConfig {
 impl Default for SinkConfig {
     fn default() -> Self {
         Self {
+            transport: Transport::default(),
+            endpoint: "http://dfe-loader:6000".to_string(),
             brokers: vec!["localhost:9092".to_string()],
             topic: String::new(),
             key_field: String::new(),
@@ -331,21 +369,6 @@ pub struct TransformConfig {
     pub dir: Option<String>,
     /// Explicit list of .vrl file paths (loaded in order).
     pub files: Option<Vec<String>>,
-}
-
-/// Health endpoint configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
-pub struct HealthConfig {
-    pub address: String,
-}
-
-impl Default for HealthConfig {
-    fn default() -> Self {
-        Self {
-            address: "0.0.0.0:9000".to_string(),
-        }
-    }
 }
 
 /// Metrics endpoint configuration.
@@ -428,6 +451,12 @@ impl ApplyFlatEnv for Config {
             self.sink.sasl.password = v;
         }
         // Source
+        if let Some(v) = flat_env_string(prefix, "SOURCE_TRANSPORT") {
+            self.source.transport = parse_transport(&v, self.source.transport);
+        }
+        if let Some(v) = flat_env_string(prefix, "SOURCE_LISTEN") {
+            self.source.listen = v;
+        }
         if let Some(v) = flat_env_list(prefix, "SOURCE_BROKERS") {
             self.source.brokers = v;
         }
@@ -447,6 +476,12 @@ impl ApplyFlatEnv for Config {
             self.source.sasl.password = v;
         }
         // Sink
+        if let Some(v) = flat_env_string(prefix, "SINK_TRANSPORT") {
+            self.sink.transport = parse_transport(&v, self.sink.transport);
+        }
+        if let Some(v) = flat_env_string(prefix, "SINK_ENDPOINT") {
+            self.sink.endpoint = v;
+        }
         if let Some(v) = flat_env_list(prefix, "SINK_BROKERS") {
             self.sink.brokers = v;
         }
@@ -470,11 +505,24 @@ impl ApplyFlatEnv for Config {
             self.transforms.dir = Some(v);
         }
         // Infra
-        if let Some(v) = flat_env_string(prefix, "HEALTH_ADDRESS") {
-            self.health.address = v;
-        }
         if let Some(v) = flat_env_string(prefix, "METRICS_ADDRESS") {
             self.metrics.address = v;
+        }
+    }
+}
+
+/// Parse a transport name from the environment, keeping `current` on anything
+/// unrecognised so a typo cannot silently move a deployment off its transport.
+fn parse_transport(value: &str, current: Transport) -> Transport {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "bus" | "kafka" => Transport::Bus,
+        "direct" | "grpc" => Transport::Direct,
+        other => {
+            tracing::warn!(
+                value = other,
+                "unknown transport, keeping the configured one"
+            );
+            current
         }
     }
 }
@@ -577,7 +625,6 @@ impl Config {
         registry::register("source", &self.source);
         registry::register("sink", &self.sink);
         registry::register("transforms", &self.transforms);
-        registry::register("health", &self.health);
         registry::register("metrics", &self.metrics);
         registry::register("logging", &self.logging);
         registry::register("scaling", &self.scaling);
@@ -597,8 +644,9 @@ mod tests {
         assert_eq!(config.pipeline.batch_timeout_ms, 100);
         assert_eq!(config.source.format, "auto");
         assert_eq!(config.sink.compression, "zstd");
-        assert_eq!(config.health.address, "0.0.0.0:9000");
         assert_eq!(config.metrics.address, "0.0.0.0:9090");
+        assert_eq!(config.source.transport, Transport::Bus);
+        assert_eq!(config.sink.transport, Transport::Bus);
         assert!((config.scaling.pressure_threshold - 0.8).abs() < f64::EPSILON);
     }
 
