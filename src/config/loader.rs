@@ -430,13 +430,25 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
-/// Env var names are the contract with dfe-engine — do not rename.
+/// `deployment::contract()` declares the SASL names separately for the chart it
+/// generates, so a rename here without one there stops the credential arriving.
 /// Uses scalo `flat_env_*` helpers for consistent parsing and logging.
 impl ApplyFlatEnv for Config {
     fn apply_flat_env(&mut self, prefix: &str) {
         // Pipeline
         if let Some(v) = flat_env_string(prefix, "PIPELINE_NAME") {
             self.pipeline.name = v;
+        }
+        // Shared Kafka credentials, applied before the per-endpoint names so
+        // those override them. One cluster with one SCRAM principal is the
+        // default shape, so a single Secret feeds both endpoints.
+        if let Some(v) = flat_env_string(prefix, "KAFKA_SASL_USERNAME") {
+            self.source.sasl.username.clone_from(&v);
+            self.sink.sasl.username = v;
+        }
+        if let Some(v) = flat_env_string_sensitive(prefix, "KAFKA_SASL_PASSWORD") {
+            self.source.sasl.password.clone_from(&v);
+            self.sink.sasl.password = v;
         }
         // Source
         if let Some(v) = flat_env_string(prefix, "SOURCE_TRANSPORT") {
@@ -903,5 +915,141 @@ enrichment_tables:
         let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let refresh = config.enrichment_tables[0].refresh.as_ref().unwrap();
         assert_eq!(refresh.interval_secs, 3600);
+    }
+
+    // ---------------------------------------------------------------------
+    // Flat env overrides
+    //
+    // These drive `apply_flat_env` on a `Config::default()` directly, never
+    // `Config::load()` -- load touches dotenvy, the CWD and the global config
+    // registry, so it is order-dependent under a parallel harness.
+    // ---------------------------------------------------------------------
+
+    /// Every name `apply_flat_env` reads must land on its field. A name that is
+    /// written but never read is the defect class this closes, so the shared
+    /// SASL pair gets its own pass -- the per-endpoint names shadow it.
+    #[test]
+    fn flat_env_applies_every_supported_name() {
+        let vars: Vec<(&str, Option<&str>)> = vec![
+            ("DFE_TRANSFORM_PIPELINE_NAME", Some("edge")),
+            ("DFE_TRANSFORM_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
+            ("DFE_TRANSFORM_SOURCE_TOPICS", Some("t1,t2")),
+            ("DFE_TRANSFORM_SOURCE_GROUP_ID", Some("cg")),
+            ("DFE_TRANSFORM_SOURCE_FORMAT", Some("json")),
+            ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
+            ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ("DFE_TRANSFORM_SINK_BROKERS", Some("b3:9092")),
+            ("DFE_TRANSFORM_SINK_TOPIC", Some("out")),
+            ("DFE_TRANSFORM_SINK_KEY_FIELD", Some(".tenant_id")),
+            ("DFE_TRANSFORM_SINK_COMPRESSION", Some("lz4")),
+            ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
+            ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
+            ("DFE_TRANSFORM_TRANSFORMS_DIR", Some("/etc/vrl")),
+            ("DFE_TRANSFORM_METRICS_ADDRESS", Some("127.0.0.1:2")),
+        ];
+
+        let config = temp_env::with_vars(vars, || {
+            let mut config = Config::default();
+            config.apply_flat_env(ENV_PREFIX);
+            config
+        });
+
+        assert_eq!(config.pipeline.name, "edge");
+        assert_eq!(config.source.brokers, vec!["b1:9092", "b2:9092"]);
+        assert_eq!(config.source.topics, vec!["t1", "t2"]);
+        assert_eq!(config.source.group_id, "cg");
+        assert_eq!(config.source.format, "json");
+        assert_eq!(config.source.sasl.username, "src-user");
+        assert_eq!(config.source.sasl.password, "src-pass");
+        assert_eq!(config.sink.brokers, vec!["b3:9092"]);
+        assert_eq!(config.sink.topic, "out");
+        assert_eq!(config.sink.key_field, ".tenant_id");
+        assert_eq!(config.sink.compression, "lz4");
+        assert_eq!(config.sink.sasl.username, "sink-user");
+        assert_eq!(config.sink.sasl.password, "sink-pass");
+        assert_eq!(config.transforms.dir.as_deref(), Some("/etc/vrl"));
+        assert_eq!(config.metrics.address, "127.0.0.1:2");
+
+        let shared = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(shared.source.sasl.username, "shared-user");
+        assert_eq!(shared.source.sasl.password, "shared-pass");
+    }
+
+    /// One cluster with one SCRAM principal is the default shape, so the shared
+    /// pair the chart injects must reach both endpoints from a single Secret.
+    #[test]
+    fn flat_env_kafka_sasl_fans_out_to_source_and_sink() {
+        let config = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("scram-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("scram-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(config.source.sasl.username, "scram-user");
+        assert_eq!(config.source.sasl.password, "scram-pass");
+        assert_eq!(config.sink.sasl.username, "scram-user");
+        assert_eq!(config.sink.sasl.password, "scram-pass");
+    }
+
+    /// Two clusters: the endpoint-specific name overrides the shared one, and
+    /// the endpoint left unset still gets the shared credential. Both
+    /// directions, because the shared block only sits above BOTH per-endpoint
+    /// blocks -- checking one direction lets it slide between them unnoticed.
+    #[test]
+    fn flat_env_endpoint_sasl_overrides_shared() {
+        let sink_specific = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
+                ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(sink_specific.source.sasl.username, "shared-user");
+        assert_eq!(sink_specific.source.sasl.password, "shared-pass");
+        assert_eq!(sink_specific.sink.sasl.username, "sink-user");
+        assert_eq!(sink_specific.sink.sasl.password, "sink-pass");
+
+        let source_specific = temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
+                ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ],
+            || {
+                let mut config = Config::default();
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        );
+
+        assert_eq!(source_specific.source.sasl.username, "src-user");
+        assert_eq!(source_specific.source.sasl.password, "src-pass");
+        assert_eq!(source_specific.sink.sasl.username, "shared-user");
+        assert_eq!(source_specific.sink.sasl.password, "shared-pass");
     }
 }
