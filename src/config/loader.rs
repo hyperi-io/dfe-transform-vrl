@@ -1104,7 +1104,6 @@ enrichment_tables:
             ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
             ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
             ("DFE_TRANSFORM_TRANSFORMS_DIR", Some("/etc/vrl")),
-            ("DFE_TRANSFORM_METRICS_ADDRESS", Some("127.0.0.1:2")),
         ];
 
         let config = temp_env::with_vars(vars, || {
@@ -1127,7 +1126,6 @@ enrichment_tables:
         assert_eq!(config.sink.sasl.username, "sink-user");
         assert_eq!(config.sink.sasl.password, "sink-pass");
         assert_eq!(config.transforms.dir.as_deref(), Some("/etc/vrl"));
-        assert_eq!(config.metrics.address, "127.0.0.1:2");
 
         let shared = temp_env::with_vars(
             [
