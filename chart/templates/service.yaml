@@ -11,9 +11,9 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
-    - port: 9000
-      targetPort: 9000
+    - port: 6000
+      targetPort: 6000
       protocol: TCP
-      name: health
+      name: push
   selector:
     {{- include "dfe-transform-vrl.selectorLabels" . | nindent 4 }}

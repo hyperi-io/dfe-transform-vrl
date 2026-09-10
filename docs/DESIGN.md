@@ -31,12 +31,11 @@ flowchart TB
         direction LR
         KS["Kafka source (scalo)<br/>msgpack or JSON"] -->|consume| VRL["VRL engine<br/>Value in/out"]
         VRL --> KP["Kafka sink (scalo)<br/>msgpack or JSON"]
-        KP -. "offset commit after delivery (at-least-once)" .-> KS
+        KP -.->|offset commit after delivery, at-least-once| KS
     end
     subgraph OPS["Operational endpoints (same process)"]
         direction LR
-        HS["Health :9000<br/>/livez + /readyz"]
-        MS["Metrics :9090<br/>/metrics (prometheus)"]
+        MS["Metrics :9090<br/>/metrics, /livez, /readyz"]
     end
 ```
 
@@ -186,9 +185,6 @@ sink:
   key_field: ".org_id"
   max_buffer_bytes: 67108864        # 64 MiB producer buffer
 
-health:
-  address: "0.0.0.0:9000"
-
 metrics:
   address: "0.0.0.0:9090"
 ```
@@ -248,6 +244,5 @@ standard K8s pattern — ConfigMap changes trigger rolling restart via the
 | `sink.max_buffer_bytes` | rdkafka `queue.buffering.max.kbytes` |
 | `sink.librdkafka_options` | librdkafka `ClientConfig` |
 | `transforms.*` | VRL programs compiled at startup |
-| `health.address` | HTTP server socket bind |
-| `metrics.address` | Metrics server socket bind |
+| `metrics.address` | Metrics server socket bind; the probes are served here too |
 | `logging.*` | Tracing subscriber |

@@ -140,7 +140,7 @@ Some configuration fields are hot-reloaded without pod restart:
 | `pipeline.batch_size` | `source.*` (Kafka connections) |
 | `pipeline.batch_timeout_ms` | `sink.brokers`, `sink.topic` |
 | `sink.key_field` | `transforms.*` (compiled at startup) |
-| `scaling.pressure_threshold` | `health.address`, `metrics.address` |
+| `scaling.pressure_threshold` | `metrics.address` |
 
 ## API Endpoints
 

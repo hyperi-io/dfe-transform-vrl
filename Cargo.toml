@@ -81,6 +81,9 @@ scalo = { version = ">=2.10.14, <3", features = [
     "service-metrics",
     "transport",
     "transport-kafka",
+    # transport-grpc: the Push listener and the gRPC sink on the direct
+    # transport, where the stages talk to each other with no broker.
+    "transport-grpc",
     "version-check",
     "worker-batch",
     "worker-pool",
