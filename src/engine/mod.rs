@@ -11,5 +11,6 @@
 //! Compiles VRL source code at startup and executes compiled programs
 //! against events in-process. No Vector subprocess needed.
 
+pub mod budget;
 pub mod compiler;
 pub mod runner;
