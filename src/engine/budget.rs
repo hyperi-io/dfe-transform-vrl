@@ -189,7 +189,10 @@ mod tests {
         let resident = compiled
             .field("resident_bytes")
             .expect("resident_bytes must be on the line");
-        assert!(resident > 0, "a running test process is resident: {resident}");
+        assert!(
+            resident > 0,
+            "a running test process is resident: {resident}"
+        );
     }
 
     /// One captured event: its message and its integer fields.
@@ -264,11 +267,13 @@ mod tests {
 
     impl Visit for Recorder {
         fn record_u64(&mut self, field: &Field, value: u64) {
-            self.fields.push((field.name().to_string(), i128::from(value)));
+            self.fields
+                .push((field.name().to_string(), i128::from(value)));
         }
 
         fn record_i64(&mut self, field: &Field, value: i64) {
-            self.fields.push((field.name().to_string(), i128::from(value)));
+            self.fields
+                .push((field.name().to_string(), i128::from(value)));
         }
 
         fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
