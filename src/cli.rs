@@ -27,7 +27,7 @@ use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::config::hot::HotConfig;
-use crate::engine::compiler;
+use crate::engine::{budget, compiler};
 use crate::{deployment, metrics, pipeline};
 
 #[derive(Parser, Debug)]
@@ -232,6 +232,11 @@ async fn run_transform_service(
     let vrl_source = compiler::load_vrl_source(&config.transforms)
         .map_err(|e| anyhow::anyhow!("VRL source loading failed: {e}"))?;
 
+    // Compiling runs before anything back-pressures it, so too small a limit
+    // has to be a refusal here rather than an exit-137 restart loop.
+    budget::check_compile_budget(vrl_source.len() as u64, scalo::detect_memory_limit())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
     let enrichment_registry = if config.enrichment_tables.is_empty() {
         None
     } else {
@@ -268,7 +273,7 @@ async fn run_transform_service(
         programs_loaded = 1,
         "VRL program compiled"
     );
-    info!("VRL program compiled");
+    budget::log_compiled(vrl_source.len() as u64);
 
     // Shutdown coordination. The runtime installs the signal handler and
     // cancels `runtime.shutdown` on SIGTERM (K8s) / SIGINT (Ctrl+C). That token
