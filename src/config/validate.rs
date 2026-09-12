@@ -93,14 +93,21 @@ impl Config {
 
     /// Does this configuration give the transform work?
     ///
-    /// On the bus a transform with no topics has nothing to consume: it starts,
-    /// stays Ready, holds no consumer group, and picks up the first config that
-    /// names a topic. On the direct transport the listener IS the work.
+    /// Two ways to have none, and both are the same answer: start, stay Ready,
+    /// hold no consumer group, and pick up the first config that gives the app
+    /// work. On the bus a transform with no topics has nothing to consume; on
+    /// the direct transport the listener IS the work. Either way a transform
+    /// with no program can only pass records through, which is not what the
+    /// source that named it asked for -- and the program arrives after the
+    /// instance does, so refusing to boot would crash-loop the wait.
     #[must_use]
     pub fn work_state(&self) -> scalo::lifecycle::WorkState {
+        if !self.source.transport.is_direct() && self.source.topics.is_empty() {
+            return scalo::lifecycle::WorkState::idle("no source topics configured");
+        }
         scalo::lifecycle::WorkState::idle_if(
-            !self.source.transport.is_direct() && self.source.topics.is_empty(),
-            "no source topics configured",
+            crate::engine::compiler::program_count(&self.transforms) == 0,
+            "no VRL program in the transforms this config names",
         )
     }
 }
@@ -245,5 +252,84 @@ mod tests {
         let mut config = minimal_config();
         config.pipeline.batch_timeout_ms = 10;
         assert!(config.validate().is_ok());
+    }
+
+    /// A config with topics and one program on disk, which is a working transform.
+    fn working_config(dir: &std::path::Path) -> Config {
+        std::fs::write(dir.join("100_transform.vrl"), ".marked = true\n").unwrap();
+        let mut config = minimal_config();
+        config.transforms.dir = Some(dir.display().to_string());
+        config
+    }
+
+    #[test]
+    fn a_config_with_topics_and_a_program_is_active() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            working_config(dir.path()).work_state(),
+            scalo::lifecycle::WorkState::Active
+        );
+    }
+
+    #[test]
+    fn no_topics_idles_on_the_topics_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = working_config(dir.path());
+        config.source.topics.clear();
+        assert_eq!(
+            config.work_state().reason(),
+            Some("no source topics configured")
+        );
+    }
+
+    #[test]
+    fn an_empty_transforms_directory_idles_rather_than_refusing() {
+        // The program arrives after the instance does, so an empty directory is
+        // no work rather than a bad config.
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = minimal_config();
+        config.transforms.dir = Some(dir.path().display().to_string());
+
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            config.work_state().reason(),
+            Some("no VRL program in the transforms this config names")
+        );
+    }
+
+    #[test]
+    fn a_transforms_directory_that_is_not_there_yet_idles_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = minimal_config();
+        config.transforms.dir = Some(dir.path().join("not-written-yet").display().to_string());
+
+        assert!(config.work_state().is_idle());
+    }
+
+    #[test]
+    fn a_program_written_into_the_directory_turns_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = minimal_config();
+        config.transforms.dir = Some(dir.path().display().to_string());
+        assert!(config.work_state().is_idle());
+
+        std::fs::write(dir.path().join("100_transform.vrl"), ".marked = true\n").unwrap();
+
+        assert_eq!(config.work_state(), scalo::lifecycle::WorkState::Active);
+    }
+
+    #[test]
+    fn a_direct_transform_with_no_program_still_idles() {
+        // The listener is the work on direct, but a pass-through is not what the
+        // source that named a transform asked for.
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = minimal_config();
+        config.source.transport = crate::config::Transport::Direct;
+        config.source.listen = "0.0.0.0:6000".to_string();
+        config.sink.transport = crate::config::Transport::Direct;
+        config.sink.endpoint = "http://dfe-loader:6000".to_string();
+        config.transforms.dir = Some(dir.path().display().to_string());
+
+        assert!(config.work_state().is_idle());
     }
 }

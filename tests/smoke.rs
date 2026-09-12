@@ -160,31 +160,80 @@ fn scalo_cascade_env_reaches_the_runtime() {
 /// A scalo section written into the `--config` file is reported, not obeyed.
 #[test]
 fn scalo_section_in_the_config_file_warns_at_startup() {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::{Duration, Instant};
+
     let dir = tempfile::tempdir().unwrap();
+    // A program on disk takes the run past scalo's idle gate, which sits
+    // before the startup warnings (scalo-rs #69); the broker is never there.
+    let transforms = dir.path().join("transforms");
+    std::fs::create_dir(&transforms).unwrap();
+    std::fs::write(transforms.join("100_probe.vrl"), ".marked = true\n").unwrap();
     let config = dir.path().join("config.yaml");
     std::fs::write(
         &config,
-        "pipeline:\n  name: warn-probe\n\
-         source:\n  brokers: [\"127.0.0.1:9092\"]\n  topics: [\"in\"]\n  group_id: \"g\"\n\
-         sink:\n  brokers: [\"127.0.0.1:9092\"]\n  topic: \"out\"\n\
-         transforms:\n  dir: \"/nonexistent\"\n\
-         scaling:\n  enabled: false\n",
+        format!(
+            "pipeline:\n  name: warn-probe\n\
+             source:\n  brokers: [\"127.0.0.1:9092\"]\n  topics: [\"in\"]\n  group_id: \"g\"\n\
+             sink:\n  brokers: [\"127.0.0.1:9092\"]\n  topic: \"out\"\n\
+             transforms:\n  dir: \"{}\"\n\
+             scaling:\n  enabled: false\n",
+            transforms.display()
+        ),
     )
     .unwrap();
 
-    let output = Command::new(binary_path())
+    // The run never exits on its own: read the warning off the live process,
+    // then stop it.
+    let mut child = Command::new(binary_path())
         .arg("--config")
         .arg(config.to_str().unwrap())
         .arg("run")
-        .output()
-        .expect("failed to execute binary");
+        .env("METRICS_ADDR", "127.0.0.1:0")
+        .env("DFE_TRANSFORM_HEALTH__ADDRESS", "127.0.0.1:0")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn binary");
+    let stderr = child.stderr.take().expect("stderr is piped");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
 
-    // The run dies on the missing transforms dir; the warning precedes that.
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen = String::new();
+    let mut warned = false;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                warned = line.contains("scalo cascade") && line.contains("scaling");
+                seen.push_str(&line);
+                seen.push('\n');
+                if warned {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
     assert!(
-        stderr.contains("scalo cascade") && stderr.contains("scaling"),
+        warned,
         "a `scaling:` section in the config file must warn that it is not \
-         applied\nstderr: {stderr}"
+         applied\nstderr: {seen}"
     );
 }
 

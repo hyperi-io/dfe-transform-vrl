@@ -21,6 +21,31 @@ use crate::config::TransformConfig;
 use crate::enrichment::EnrichmentRegistry;
 use crate::enrichment::vrl_functions;
 
+/// How many VRL programs this configuration currently names on disk.
+///
+/// A config can legitimately name a directory that is empty, or not there yet:
+/// the deployment writes the program after the instance exists, so a transform
+/// is deployed before it has one. That is no work rather than a bad config, so
+/// this counts rather than refusing and the idle gate decides
+/// (`Config::work_state`).
+#[must_use]
+pub fn program_count(config: &TransformConfig) -> usize {
+    let in_dir = config
+        .dir
+        .as_ref()
+        .and_then(|dir| std::fs::read_dir(Path::new(dir)).ok())
+        .map_or(0, |entries| {
+            entries
+                .filter_map(std::result::Result::ok)
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "vrl"))
+                .count()
+        });
+    let named = config.files.as_ref().map_or(0, |files| {
+        files.iter().filter(|f| Path::new(f).is_file()).count()
+    });
+    in_dir + named
+}
+
 /// Load VRL source code from transform configuration.
 ///
 /// If `dir` is specified, loads all `.vrl` files sorted by filename.
