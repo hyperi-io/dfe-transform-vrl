@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.23](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.22...v1.1.23) (2026-09-12)
+
+### Bug Fixes
+
+* **config:** idle with no program instead of failing at compile ([#57](https://github.com/hyperi-io/dfe-transform-vrl/issues/57)) ([ec71928](https://github.com/hyperi-io/dfe-transform-vrl/commit/ec71928e18c4a9c92db0140ffaa0fabe516d9eaa))
+* **engine:** refuse to start when the limit cannot compile the VRL ([#55](https://github.com/hyperi-io/dfe-transform-vrl/issues/55)) ([18bb437](https://github.com/hyperi-io/dfe-transform-vrl/commit/18bb43710da775b283a7b6bf333d36d5e85d9b9d))
+* rebuild on scalo 2.12.2 ([fcadca9](https://github.com/hyperi-io/dfe-transform-vrl/commit/fcadca9576da388f77b0f32f9d68085d56d388d6))
+
 ## [1.1.22](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.21...v1.1.22) (2026-09-10)
 
 ### Bug Fixes
