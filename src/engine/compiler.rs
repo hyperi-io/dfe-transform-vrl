@@ -40,10 +40,9 @@ pub fn program_count(config: &TransformConfig) -> usize {
                 .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "vrl"))
                 .count()
         });
-    let named = config
-        .files
-        .as_ref()
-        .map_or(0, |files| files.iter().filter(|f| Path::new(f).is_file()).count());
+    let named = config.files.as_ref().map_or(0, |files| {
+        files.iter().filter(|f| Path::new(f).is_file()).count()
+    });
     in_dir + named
 }
 
