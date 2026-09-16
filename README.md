@@ -128,6 +128,10 @@ both endpoints and beats whatever the config file set for either. The
 `SOURCE_`/`SINK_` names override it back, per endpoint -- but `chart/` injects
 only the shared pair, so a two-cluster deployment has to add them to the chart.
 
+Either half turns SASL on, an enabled block still missing one once the env
+layer has run refuses to start, and the password is redacted on every output
+path (`x-dfe-secret` + `writeOnly` in the emitted schema).
+
 ### scalo's own settings are not in the config file
 
 `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,

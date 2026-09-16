@@ -81,6 +81,8 @@ impl Config {
         }
         validate_sasl("sink.sasl", &self.sink.sasl)?;
 
+        validate_kafka_security(self)?;
+
         // Transforms — must have at least dir or files
         if self.transforms.dir.is_none() && self.transforms.files.is_none() {
             return Err(crate::Error::Validation(
@@ -133,6 +135,37 @@ fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
             "{prefix}.mechanism must be one of: {}",
             valid_mechanisms.join(", ")
         )));
+    }
+    // librdkafka's SCRAM check is a NULL check that an empty string passes, so
+    // an enabled block with no credential authenticates against nothing.
+    if sasl.username.is_empty() || sasl.password.is_empty() {
+        return Err(crate::Error::Validation(format!(
+            "{prefix}.username and {prefix}.password must both be set when \
+             {prefix}.enabled is true -- an empty credential authenticates \
+             against nothing and the pod still reports Ready"
+        )));
+    }
+    Ok(())
+}
+
+/// Hand the resolved client config to scalo's own Kafka guard.
+///
+/// It refuses SASL PLAIN on any transport that is not `sasl_ssl`, and under a
+/// production app env an unencrypted transport or a disabled certificate check.
+/// `KafkaTransport::new` runs the identical check at construction, so this adds
+/// no refusal -- it moves the failure to startup validation, where the message
+/// names the config key.
+fn validate_kafka_security(config: &Config) -> Result<()> {
+    let is_production = scalo::env::is_production();
+    if !config.source.transport.is_direct() {
+        crate::kafka::build_consumer_config(&config.source)
+            .validate(is_production)
+            .map_err(|e| crate::Error::Validation(format!("source: {e}")))?;
+    }
+    if !config.sink.transport.is_direct() {
+        crate::kafka::build_producer_config(&config.sink, &config.pipeline.name)
+            .validate(is_production)
+            .map_err(|e| crate::Error::Validation(format!("sink: {e}")))?;
     }
     Ok(())
 }
@@ -224,6 +257,91 @@ mod tests {
         config.source.sasl.enabled = true;
         config.source.sasl.mechanism = "SCRAM-SHA-512".to_string();
         assert!(config.validate().is_err());
+    }
+
+    /// A complete credential on both endpoints, which is what the chart's
+    /// Secret supplies through the env.
+    fn sasl_config() -> Config {
+        let mut config = minimal_config();
+        for sasl in [&mut config.source.sasl, &mut config.sink.sasl] {
+            sasl.enabled = true;
+            sasl.username = "scram-user".to_string();
+            sasl.password = scalo::SensitiveString::new("scram-pass");
+        }
+        config.source.tls.enabled = true;
+        config.sink.tls.enabled = true;
+        config
+    }
+
+    #[test]
+    fn a_complete_sasl_credential_validates() {
+        assert!(sasl_config().validate().is_ok());
+    }
+
+    /// An empty credential passes librdkafka's NULL check, so the pod
+    /// authenticates against nothing and still reports Ready.
+    #[test]
+    fn sasl_enabled_with_an_empty_credential_is_refused() {
+        for (label, blank) in [("username", true), ("password", false)] {
+            let mut config = sasl_config();
+            if blank {
+                config.source.sasl.username = String::new();
+            } else {
+                config.source.sasl.password = scalo::SensitiveString::default();
+            }
+
+            let err = config.validate().unwrap_err().to_string();
+            assert!(
+                err.contains("source.sasl.username") && err.contains("source.sasl.password"),
+                "an empty {label} must name both keys, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn sasl_enabled_with_an_empty_credential_is_refused_on_the_sink_too() {
+        let mut config = sasl_config();
+        config.sink.sasl.password = scalo::SensitiveString::default();
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("sink.sasl.password"),
+            "expected the sink key in the error, got: {err}"
+        );
+    }
+
+    /// scalo's guard refuses a PLAIN password on a transport that is not
+    /// `sasl_ssl`, and startup validation must reach it before the transport does.
+    #[test]
+    fn plain_without_tls_is_refused() {
+        let mut config = sasl_config();
+        config.source.sasl.mechanism = "plain".to_string();
+        config.source.tls.enabled = false;
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("PLAIN") && err.contains("sasl_ssl"),
+            "expected scalo's PLAIN-over-plaintext refusal, got: {err}"
+        );
+    }
+
+    #[test]
+    fn plain_over_tls_is_accepted() {
+        let mut config = sasl_config();
+        config.source.sasl.mechanism = "plain".to_string();
+        config.sink.sasl.mechanism = "plain".to_string();
+
+        assert!(config.validate().is_ok());
+    }
+
+    /// SCRAM never sends the password in the clear, so it is not gated on TLS.
+    #[test]
+    fn scram_without_tls_is_accepted() {
+        let mut config = sasl_config();
+        config.source.tls.enabled = false;
+        config.sink.tls.enabled = false;
+
+        assert!(config.validate().is_ok());
     }
 
     #[test]

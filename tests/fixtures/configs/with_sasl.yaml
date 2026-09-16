@@ -13,6 +13,8 @@ source:
   sasl:
     enabled: true
     mechanism: scram_sha_512
+    username: fixture-user
+    password: placeholder-not-a-secret
   tls:
     enabled: true
 
@@ -26,6 +28,8 @@ sink:
   sasl:
     enabled: true
     mechanism: scram_sha_512
+    username: fixture-user
+    password: placeholder-not-a-secret
   tls:
     enabled: true
 

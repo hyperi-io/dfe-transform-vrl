@@ -54,6 +54,9 @@ pipeline:
 #     # Only when source and sink are different clusters:
 #     #   DFE_TRANSFORM_SOURCE_SASL_USERNAME
 #     #   DFE_TRANSFORM_SOURCE_SASL_PASSWORD
+#     # An enabled block whose username or password is still empty by the time
+#     # the env layer has run refuses to start, rather than authenticating
+#     # against nothing and reporting Ready.
 #     username: ""
 #     password: ""
 #   tls:

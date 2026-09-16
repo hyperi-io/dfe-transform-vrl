@@ -47,7 +47,11 @@ fn build_test_config(
         enabled: kf.has_sasl(),
         mechanism: kf.sasl_mechanism.clone().unwrap_or_default(),
         username: kf.sasl_user.clone().unwrap_or_default(),
-        password: kf.sasl_password.clone().unwrap_or_default(),
+        password: kf
+            .sasl_password
+            .clone()
+            .map(scalo::SensitiveString::from)
+            .unwrap_or_default(),
     };
     let tls = dfe_transform_vrl::config::TlsConfig {
         enabled: kf.security_protocol.contains("SSL"),

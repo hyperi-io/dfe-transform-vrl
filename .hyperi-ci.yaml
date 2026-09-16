@@ -56,8 +56,9 @@ build:
 # Publishing (on release)
 publish:
   enabled: true
-  # target=both maps to the release channel which unlocks Tier 2 PGO+BOLT
-  # (target=internal resolves to spike channel — Tier 1 only).
+  # Legacy key: hyperi-ci accepts it and ignores it (config.py:90-98), and the
+  # channel that unlocks Tier 2 PGO+BOLT comes from the release dispatch
+  # (HYPERCI_CHANNEL, else a tag ref), never from this value.
   target: both
   binaries: both
   container:

@@ -167,7 +167,7 @@ fn apply_sasl_tls(
         };
         kafka_config.sasl_mechanism = Some(mechanism.to_string());
         kafka_config.sasl_username = Some(sasl.username.clone());
-        kafka_config.sasl_password = Some(sasl.password.clone().into());
+        kafka_config.sasl_password = Some(sasl.password.clone());
 
         if tls.enabled {
             kafka_config.security_protocol = "sasl_ssl".to_string();
