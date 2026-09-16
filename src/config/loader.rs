@@ -15,31 +15,25 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use scalo::SensitiveString;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::Result;
 
 /// SASL authentication for Kafka.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+///
+/// `password` is a [`SensitiveString`] so every serialise path redacts it by
+/// type rather than by a reader's field-name heuristic, and the emitted config
+/// schema carries `x-dfe-secret` + `writeOnly` on the field by construction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SaslConfig {
     pub enabled: bool,
     /// SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`.
     pub mechanism: String,
     pub username: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for SaslConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SaslConfig")
-            .field("enabled", &self.enabled)
-            .field("mechanism", &self.mechanism)
-            .field("username", &self.username)
-            .field("password", &"***")
-            .finish()
-    }
+    pub password: SensitiveString,
 }
 
 impl Default for SaslConfig {
@@ -48,7 +42,7 @@ impl Default for SaslConfig {
             enabled: false,
             mechanism: "scram_sha_512".to_string(),
             username: String::new(),
-            password: String::new(),
+            password: SensitiveString::default(),
         }
     }
 }
@@ -520,8 +514,8 @@ impl ApplyFlatEnv for Config {
             self.sink.sasl.username = v;
         }
         if let Some(v) = flat_env_string_sensitive(prefix, "KAFKA_SASL_PASSWORD") {
-            self.source.sasl.password.clone_from(&v);
-            self.sink.sasl.password = v;
+            self.source.sasl.password = SensitiveString::new(v.clone());
+            self.sink.sasl.password = SensitiveString::new(v);
         }
         // Source
         if let Some(v) = flat_env_string(prefix, "SOURCE_TRANSPORT") {
@@ -546,7 +540,7 @@ impl ApplyFlatEnv for Config {
             self.source.sasl.username = v;
         }
         if let Some(v) = flat_env_string_sensitive(prefix, "SOURCE_SASL_PASSWORD") {
-            self.source.sasl.password = v;
+            self.source.sasl.password = SensitiveString::new(v);
         }
         // Sink
         if let Some(v) = flat_env_string(prefix, "SINK_TRANSPORT") {
@@ -571,7 +565,7 @@ impl ApplyFlatEnv for Config {
             self.sink.sasl.username = v;
         }
         if let Some(v) = flat_env_string_sensitive(prefix, "SINK_SASL_PASSWORD") {
-            self.sink.sasl.password = v;
+            self.sink.sasl.password = SensitiveString::new(v);
         }
         // Transforms
         if let Some(v) = flat_env_string(prefix, "TRANSFORMS_DIR") {
@@ -600,11 +594,12 @@ fn parse_transport(value: &str, current: Transport) -> Transport {
 /// Infers implied settings regardless of how values arrived.
 impl Normalize for Config {
     fn normalize(&mut self) {
-        // Credentials present → enable SASL auth
-        if !self.source.sasl.username.is_empty() {
+        // Either half of the credential enables SASL -- keying on the username
+        // alone leaves a password-only config on scalo's plaintext default.
+        if !self.source.sasl.username.is_empty() || !self.source.sasl.password.is_empty() {
             self.source.sasl.enabled = true;
         }
-        if !self.sink.sasl.username.is_empty() {
+        if !self.sink.sasl.username.is_empty() || !self.sink.sasl.password.is_empty() {
             self.sink.sasl.enabled = true;
         }
         // TLS cert present → enable TLS
@@ -658,18 +653,18 @@ impl Config {
             }
         }
 
-        // Figment env (double-underscore nesting)
-        {
+        // Figment env (double-underscore nesting). The round-trip serialises the
+        // file-sourced config, so without `expose_during` a SensitiveString
+        // password is replaced by the redaction constant here.
+        config = scalo::expose_during(|| {
             use figment::Figment;
             use figment::providers::{Env, Serialized};
 
-            let figment = Figment::from(Serialized::defaults(&config))
-                .merge(Env::prefixed(&format!("{ENV_PREFIX}_")).split("__"));
-
-            config = figment
-                .extract()
-                .map_err(|e| crate::Error::Config(e.to_string()))?;
-        }
+            Figment::from(Serialized::defaults(&config))
+                .merge(Env::prefixed(&format!("{ENV_PREFIX}_")).split("__"))
+                .extract::<Self>()
+                .map_err(|e| crate::Error::Config(e.to_string()))
+        })?;
 
         // Flat env overrides (single-underscore, K8s-friendly)
         config.apply_flat_env(ENV_PREFIX);
@@ -1118,13 +1113,13 @@ enrichment_tables:
         assert_eq!(config.source.group_id, "cg");
         assert_eq!(config.source.format, "json");
         assert_eq!(config.source.sasl.username, "src-user");
-        assert_eq!(config.source.sasl.password, "src-pass");
+        assert_eq!(config.source.sasl.password.expose(), "src-pass");
         assert_eq!(config.sink.brokers, vec!["b3:9092"]);
         assert_eq!(config.sink.topic, "out");
         assert_eq!(config.sink.key_field, ".tenant_id");
         assert_eq!(config.sink.compression, "lz4");
         assert_eq!(config.sink.sasl.username, "sink-user");
-        assert_eq!(config.sink.sasl.password, "sink-pass");
+        assert_eq!(config.sink.sasl.password.expose(), "sink-pass");
         assert_eq!(config.transforms.dir.as_deref(), Some("/etc/vrl"));
 
         let shared = temp_env::with_vars(
@@ -1140,7 +1135,7 @@ enrichment_tables:
         );
 
         assert_eq!(shared.source.sasl.username, "shared-user");
-        assert_eq!(shared.source.sasl.password, "shared-pass");
+        assert_eq!(shared.source.sasl.password.expose(), "shared-pass");
     }
 
     /// One cluster with one SCRAM principal is the default shape, so the shared
@@ -1160,9 +1155,9 @@ enrichment_tables:
         );
 
         assert_eq!(config.source.sasl.username, "scram-user");
-        assert_eq!(config.source.sasl.password, "scram-pass");
+        assert_eq!(config.source.sasl.password.expose(), "scram-pass");
         assert_eq!(config.sink.sasl.username, "scram-user");
-        assert_eq!(config.sink.sasl.password, "scram-pass");
+        assert_eq!(config.sink.sasl.password.expose(), "scram-pass");
     }
 
     /// Two clusters: the endpoint-specific name overrides the shared one, and
@@ -1186,9 +1181,9 @@ enrichment_tables:
         );
 
         assert_eq!(sink_specific.source.sasl.username, "shared-user");
-        assert_eq!(sink_specific.source.sasl.password, "shared-pass");
+        assert_eq!(sink_specific.source.sasl.password.expose(), "shared-pass");
         assert_eq!(sink_specific.sink.sasl.username, "sink-user");
-        assert_eq!(sink_specific.sink.sasl.password, "sink-pass");
+        assert_eq!(sink_specific.sink.sasl.password.expose(), "sink-pass");
 
         let source_specific = temp_env::with_vars(
             [
@@ -1205,8 +1200,69 @@ enrichment_tables:
         );
 
         assert_eq!(source_specific.source.sasl.username, "src-user");
-        assert_eq!(source_specific.source.sasl.password, "src-pass");
+        assert_eq!(source_specific.source.sasl.password.expose(), "src-pass");
         assert_eq!(source_specific.sink.sasl.username, "shared-user");
-        assert_eq!(source_specific.sink.sasl.password, "shared-pass");
+        assert_eq!(source_specific.sink.sasl.password.expose(), "shared-pass");
+    }
+
+    /// The config registry serialises the whole section into a process-global
+    /// and redacts on the way out by field name; the type must redact instead.
+    #[test]
+    fn a_serialised_sasl_section_never_carries_the_password() {
+        let sasl = SaslConfig {
+            enabled: true,
+            username: "scram-user".to_string(),
+            password: SensitiveString::new("hunter2"),
+            ..SaslConfig::default()
+        };
+
+        let rendered = serde_json::to_string(&sasl).unwrap();
+
+        assert!(
+            !rendered.contains("hunter2"),
+            "the password reached a serialised output: {rendered}"
+        );
+        assert!(
+            format!("{sasl:?}").contains("***REDACTED***"),
+            "Debug must redact the password, got: {sasl:?}"
+        );
+    }
+
+    /// The figment round-trip serialises the file-sourced config, so without
+    /// `expose_during` the password arrives at the broker as the constant.
+    #[test]
+    fn a_password_from_the_config_file_survives_the_figment_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("with-password.yaml");
+
+        std::fs::write(
+            &path,
+            r"
+source:
+  sasl:
+    enabled: true
+    username: scram-user
+    password: from-the-file
+",
+        )
+        .unwrap();
+
+        let config = Config::load(Some(path.to_str().unwrap())).unwrap();
+
+        assert_eq!(config.source.sasl.password.expose(), "from-the-file");
+    }
+
+    /// A password with no username must not leave the transport on scalo's
+    /// plaintext default while the operator believes a credential was supplied.
+    #[test]
+    fn normalize_enables_sasl_on_a_password_with_no_username() {
+        let mut config = Config::default();
+        config.source.sasl.password = SensitiveString::new("scram-pass");
+        config.sink.sasl.password = SensitiveString::new("scram-pass");
+
+        config.normalize();
+
+        assert!(config.source.sasl.enabled);
+        assert!(config.sink.sasl.enabled);
     }
 }

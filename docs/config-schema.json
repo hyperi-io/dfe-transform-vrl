@@ -30,7 +30,7 @@
           "enabled": false,
           "mechanism": "scram_sha_512",
           "username": "",
-          "password": ""
+          "password": "***REDACTED***"
         },
         "tls": {
           "enabled": false,
@@ -62,7 +62,7 @@
           "enabled": false,
           "mechanism": "scram_sha_512",
           "username": "",
-          "password": ""
+          "password": "***REDACTED***"
         },
         "tls": {
           "enabled": false,
@@ -170,7 +170,7 @@
             "enabled": false,
             "mechanism": "scram_sha_512",
             "username": "",
-            "password": ""
+            "password": "***REDACTED***"
           }
         },
         "tls": {
@@ -232,7 +232,7 @@
       ]
     },
     "SaslConfig": {
-      "description": "SASL authentication for Kafka.",
+      "description": "SASL authentication for Kafka.\n\n`password` is a [`SensitiveString`] so every serialise path redacts it by\ntype rather than by a reader's field-name heuristic, and the emitted config\nschema carries `x-dfe-secret` + `writeOnly` on the field by construction.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -250,7 +250,9 @@
         },
         "password": {
           "type": "string",
-          "default": ""
+          "x-dfe-secret": true,
+          "writeOnly": true,
+          "default": "***REDACTED***"
         }
       }
     },
@@ -339,7 +341,7 @@
             "enabled": false,
             "mechanism": "scram_sha_512",
             "username": "",
-            "password": ""
+            "password": "***REDACTED***"
           }
         },
         "tls": {

@@ -35,6 +35,12 @@ fn test_load_sasl_config() {
     assert_eq!(config.pipeline.batch_size, 5000);
     assert!(config.source.sasl.enabled);
     assert_eq!(config.source.sasl.mechanism, "scram_sha_512");
+    // The file-sourced password survives the figment round-trip rather than
+    // arriving as the redaction constant.
+    assert_eq!(
+        config.source.sasl.password.expose(),
+        "placeholder-not-a-secret"
+    );
     assert!(config.source.tls.enabled);
     assert!(config.sink.sasl.enabled);
     assert!(config.sink.tls.enabled);

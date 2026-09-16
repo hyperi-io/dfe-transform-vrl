@@ -302,7 +302,11 @@ mod tests {
                     config
                 });
 
-                let rendered = serde_json::to_string(&config).expect("config serialises");
+                // A credential field redacts on every other serialise path, so
+                // the walk has to expose to see where the value landed.
+                let rendered = scalo::expose_during(|| {
+                    serde_json::to_string(&config).expect("config serialises")
+                });
                 assert!(
                     rendered.contains(&sentinel),
                     "{} is injected by the chart but never lands in the config",

@@ -54,7 +54,7 @@ properties:
         enabled: false
         mechanism: scram_sha_512
         username: ''
-        password: ''
+        password: '***REDACTED***'
       tls:
         enabled: false
         ca_cert_file: null
@@ -81,7 +81,7 @@ properties:
         enabled: false
         mechanism: scram_sha_512
         username: ''
-        password: ''
+        password: '***REDACTED***'
       tls:
         enabled: false
         ca_cert_file: null
@@ -166,7 +166,7 @@ $defs:
           enabled: false
           mechanism: scram_sha_512
           username: ''
-          password: ''
+          password: '***REDACTED***'
       tls:
         $ref: '#/$defs/TlsConfig'
         default:
@@ -220,7 +220,12 @@ $defs:
       type: string
       const: direct
   SaslConfig:
-    description: SASL authentication for Kafka.
+    description: |-
+      SASL authentication for Kafka.
+
+      `password` is a [`SensitiveString`] so every serialise path redacts it by
+      type rather than by a reader's field-name heuristic, and the emitted config
+      schema carries `x-dfe-secret` + `writeOnly` on the field by construction.
     type: object
     properties:
       enabled:
@@ -235,7 +240,9 @@ $defs:
         default: ''
       password:
         type: string
-        default: ''
+        x-dfe-secret: true
+        writeOnly: true
+        default: '***REDACTED***'
   TlsConfig:
     description: TLS configuration for Kafka.
     type: object
@@ -304,7 +311,7 @@ $defs:
           enabled: false
           mechanism: scram_sha_512
           username: ''
-          password: ''
+          password: '***REDACTED***'
       tls:
         $ref: '#/$defs/TlsConfig'
         default:
