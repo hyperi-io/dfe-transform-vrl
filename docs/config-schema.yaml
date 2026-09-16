@@ -54,7 +54,6 @@ properties:
         enabled: false
         mechanism: scram_sha_512
         username: ''
-        password: '***REDACTED***'
       tls:
         enabled: false
         ca_cert_file: null
@@ -81,7 +80,6 @@ properties:
         enabled: false
         mechanism: scram_sha_512
         username: ''
-        password: '***REDACTED***'
       tls:
         enabled: false
         ca_cert_file: null
@@ -166,7 +164,6 @@ $defs:
           enabled: false
           mechanism: scram_sha_512
           username: ''
-          password: '***REDACTED***'
       tls:
         $ref: '#/$defs/TlsConfig'
         default:
@@ -242,7 +239,6 @@ $defs:
         type: string
         x-dfe-secret: true
         writeOnly: true
-        default: '***REDACTED***'
   TlsConfig:
     description: TLS configuration for Kafka.
     type: object
@@ -311,7 +307,6 @@ $defs:
           enabled: false
           mechanism: scram_sha_512
           username: ''
-          password: '***REDACTED***'
       tls:
         $ref: '#/$defs/TlsConfig'
         default:

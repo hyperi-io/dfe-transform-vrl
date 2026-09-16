@@ -33,6 +33,9 @@ pub struct SaslConfig {
     /// SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`.
     pub mechanism: String,
     pub username: String,
+    // Skipping an unset password keeps the redaction constant out of the
+    // emitted schema: a secret's default is absent, not a placeholder.
+    #[serde(skip_serializing_if = "SensitiveString::is_empty")]
     pub password: SensitiveString,
 }
 
@@ -1250,6 +1253,25 @@ source:
         let config = Config::load(Some(path.to_str().unwrap())).unwrap();
 
         assert_eq!(config.source.sasl.password.expose(), "from-the-file");
+    }
+
+    /// The engine serves this schema to the console, where a marked field
+    /// renders as set-or-not and an unmarked one renders its value.
+    #[test]
+    fn the_emitted_schema_marks_the_password_and_gives_it_no_default() {
+        let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+        let password = &schema["$defs"]["SaslConfig"]["properties"]["password"];
+
+        assert_eq!(password["x-dfe-secret"], true, "schema was: {schema}");
+        assert_eq!(password["writeOnly"], true);
+        assert!(
+            password.get("default").is_none(),
+            "a secret's default is absent, not a placeholder: {password}"
+        );
+        assert!(
+            !schema.to_string().contains("REDACTED"),
+            "the redaction constant must not reach the emitted schema"
+        );
     }
 
     /// A password with no username must not leave the transport on scalo's

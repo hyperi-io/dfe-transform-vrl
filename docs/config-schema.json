@@ -29,8 +29,7 @@
         "sasl": {
           "enabled": false,
           "mechanism": "scram_sha_512",
-          "username": "",
-          "password": "***REDACTED***"
+          "username": ""
         },
         "tls": {
           "enabled": false,
@@ -61,8 +60,7 @@
         "sasl": {
           "enabled": false,
           "mechanism": "scram_sha_512",
-          "username": "",
-          "password": "***REDACTED***"
+          "username": ""
         },
         "tls": {
           "enabled": false,
@@ -169,8 +167,7 @@
           "default": {
             "enabled": false,
             "mechanism": "scram_sha_512",
-            "username": "",
-            "password": "***REDACTED***"
+            "username": ""
           }
         },
         "tls": {
@@ -251,8 +248,7 @@
         "password": {
           "type": "string",
           "x-dfe-secret": true,
-          "writeOnly": true,
-          "default": "***REDACTED***"
+          "writeOnly": true
         }
       }
     },
@@ -340,8 +336,7 @@
           "default": {
             "enabled": false,
             "mechanism": "scram_sha_512",
-            "username": "",
-            "password": "***REDACTED***"
+            "username": ""
           }
         },
         "tls": {
