@@ -56,8 +56,8 @@ build:
 # Publishing (on release)
 publish:
   enabled: true
-  # target=both maps to the release channel which unlocks Tier 2 PGO+BOLT
-  # (target=internal resolves to spike channel — Tier 1 only).
+  # target is a legacy no-op -- every value routes to the OSS destinations,
+  # and the build channel that gates Tier 2 is resolved from the ref, not here.
   target: both
   binaries: both
   container:
