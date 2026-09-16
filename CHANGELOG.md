@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.24](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.23...v1.1.24) (2026-09-16)
+
+### Bug Fixes
+
+* mark the Kafka passwords secret and refuse a credential that cannot authenticate ([8a96383](https://github.com/hyperi-io/dfe-transform-vrl/commit/8a9638312e4b31d53692679d3a128cd03fbba79a)), closes [#59](https://github.com/hyperi-io/dfe-transform-vrl/issues/59) [#43](https://github.com/hyperi-io/dfe-transform-vrl/issues/43) [hyperi-io/scalo-rs#110](https://github.com/hyperi-io/scalo-rs/issues/110) [#59](https://github.com/hyperi-io/dfe-transform-vrl/issues/59)
+
 ## [1.1.23](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.22...v1.1.23) (2026-09-12)
 
 ### Bug Fixes
