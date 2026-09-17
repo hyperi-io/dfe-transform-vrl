@@ -1,13 +1,3 @@
-{{- /*
-  HAND-EDITED -- do NOT overwrite this file with `emit-chart` output.
-
-  The generator binds the username to `sasl`. KEDA's kafka scaler reads `sasl`
-  as the mechanism enum and takes the principal in `username`, so a regenerated
-  TriggerAuthentication supplies no username and the scaler answers "no username
-  given" instead of a lag metric. Guarded by
-  `test_committed_chart_matches_the_generator`, which also fails once the
-  generator is fixed upstream -- drop this file from HAND_FIXED then.
-*/}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
@@ -17,6 +7,11 @@ metadata:
     {{- include "dfe-transform-vrl.labels" . | nindent 4 }}
 spec:
   secretTargetRef:
+    # KEDA's `sasl` parameter is the MECHANISM, not the username -- it takes
+    # plaintext | scram_sha256 | scram_sha512 | none, and the username is its
+    # own parameter. Supplying no `username` at all means SASL authentication
+    # cannot succeed, so the scaler never reads consumer-group lag and the app
+    # never scales. The mechanism itself rides the trigger metadata.
     - parameter: username
       name: {{ include "dfe-transform-vrl.kafkaSecretName" . }}
       key: {{ .Values.kafka.secretKeys.username }}
