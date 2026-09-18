@@ -866,9 +866,14 @@ sink:
         let tmp = tempfile::tempdir().unwrap();
         let prev_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
-        let config = Config::load(None).unwrap();
+        // `load` reads the process environment, so it runs under temp_env's
+        // lock -- otherwise a flat-env test's override window supplies the
+        // name this asserts is a default.
+        let config = temp_env::with_var("DFE_TRANSFORM_PIPELINE_NAME", None::<&str>, || {
+            Config::load(None)
+        });
         std::env::set_current_dir(prev_cwd).unwrap();
-        assert_eq!(config.pipeline.name, "default");
+        assert_eq!(config.unwrap().pipeline.name, "default");
     }
 
     #[test]

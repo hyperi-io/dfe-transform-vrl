@@ -3,9 +3,10 @@
 copy fails to render at all. Re-apply this diff after every emit-chart; the
 HAND_FIXED list in src/deployment.rs is what holds the exception.
 
-Only the broker/group/topic addressing diverges. Every other line tracks the
-generator and must be carried across by hand when scalo changes it, because the
-exemption stops emit-chart from delivering it here. */}}
+The broker/group/topic addressing and the sasl/tls lines diverge, the latter
+because the generator pins them instead of reading config.source. Every other
+line tracks the generator and must be carried across by hand when scalo changes
+it, because the exemption stops emit-chart from delivering it here. */}}
 {{- if .Values.keda.enabled }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -42,8 +43,25 @@ spec:
         # `sasl`, not `saslType`: the kafka trigger replaced the old `authMode`
         # property with `sasl` + `tls`, and an unrecognised key is ignored, so
         # the mechanism was being supplied nowhere at all.
-        sasl: scram_sha512
-        tls: disable
+        {{- /* Read from the same config.source the app connects with, so the
+            scaler cannot be told a different mechanism or transport. KEDA spells
+            the mechanisms differently, and an unmapped one fails here rather
+            than render a value the scaler rejects at runtime. */}}
+        {{- /* Defaulted to a dict because values that null the section out would
+            otherwise take the whole render down on a nil dereference. */}}
+        {{- $sasl := .Values.config.source.sasl | default dict }}
+        {{- $tls := .Values.config.source.tls | default dict }}
+        {{- if $sasl.enabled }}
+        {{- $mechanisms := dict "plain" "plaintext" "scram_sha_256" "scram_sha256" "scram_sha_512" "scram_sha512" }}
+        {{- $mechanism := toString $sasl.mechanism }}
+        {{- if not (hasKey $mechanisms $mechanism) }}
+        {{- fail (printf "config.source.sasl.mechanism %q has no KEDA kafka equivalent -- use plain, scram_sha_256 or scram_sha_512" $mechanism) }}
+        {{- end }}
+        sasl: {{ get $mechanisms $mechanism }}
+        {{- else }}
+        sasl: none
+        {{- end }}
+        tls: {{ if $tls.enabled }}enable{{ else }}disable{{ end }}
     {{- if .Values.keda.cpu.enabled }}
     # CPU utilisation (secondary scaler)
     - type: cpu
