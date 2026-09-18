@@ -132,6 +132,17 @@ impl ServiceApp for App {
         ]
     }
 
+    fn register_metrics(&self, manager: &scalo::metrics::MetricsManager) {
+        // `metrics-manifest` and `generate-artefacts` read the registry without
+        // starting the service, so the catalogue stays empty unless the
+        // transform's metrics are built against the manager they hand in.
+        let _ = metrics::TransformMetrics::new(
+            manager,
+            env!("CARGO_PKG_VERSION"),
+            option_env!("GIT_COMMIT").unwrap_or("unknown"),
+        );
+    }
+
     fn deployment_contract(&self) -> Option<scalo::deployment::DeploymentContract> {
         Some(crate::deployment::contract())
     }
@@ -540,6 +551,35 @@ mod tests {
         let app = parse(&["run"]);
         // Just verifies the accessor compiles and returns a reference.
         let _args = app.common_args();
+    }
+
+    /// `metrics-manifest` builds an offline manager, calls `register_metrics`
+    /// and prints the registry, so an app that leaves scalo's no-op default in
+    /// place prints an empty catalogue.
+    #[test]
+    fn register_metrics_fills_the_manifest() {
+        let app = parse(&["metrics-manifest"]);
+        let manager = scalo::metrics::MetricsManager::with_config(
+            scalo::metrics::MetricsConfig::offline(app.name()),
+        );
+
+        app.register_metrics(&manager);
+
+        let names: Vec<String> = manager
+            .registry()
+            .manifest()
+            .metrics
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        assert!(!names.is_empty(), "metrics-manifest catalogue is empty");
+        // Suffix match: the manifest's namespace prefix is scalo's to settle.
+        assert!(
+            names
+                .iter()
+                .any(|n| n.ends_with("execute_duration_seconds")),
+            "metrics-manifest catalogue is missing the transform's own metrics: {names:?}"
+        );
     }
 
     #[test]
