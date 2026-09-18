@@ -380,6 +380,96 @@ mod tests {
         out
     }
 
+    /// True when `helm` can run, so the render checks below can be attempted.
+    ///
+    /// A gate that disappears with its environment is no gate, so a CI runner
+    /// without helm fails here instead of quietly skipping.
+    fn helm_available() -> bool {
+        let found = std::process::Command::new("helm")
+            .arg("version")
+            .output()
+            .is_ok_and(|out| out.status.success());
+        assert!(
+            found || std::env::var_os("CI").is_none(),
+            "helm is missing on a CI runner, so the KEDA trigger metadata goes \
+             unchecked"
+        );
+        if !found {
+            eprintln!("skipping KEDA render checks: helm is not on PATH");
+        }
+        found
+    }
+
+    /// Render the committed chart's `ScaledObject` under `--set` overrides,
+    /// returning helm's stderr when the render is refused.
+    fn render_keda_trigger(overrides: &[&str]) -> Result<String, String> {
+        let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
+        let mut helm = std::process::Command::new("helm");
+        helm.arg("template")
+            .arg("guard")
+            .arg(&chart)
+            .arg("--show-only")
+            .arg("templates/keda-scaledobject.yaml");
+        for set in overrides {
+            helm.arg("--set").arg(set);
+        }
+        let out = helm.output().expect("helm runs");
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    }
+
+    /// The kafka scaler authenticates with the mechanism and transport named in
+    /// its own trigger metadata, so pinning either one there scales the app off
+    /// a connection the app itself never makes.
+    ///
+    /// KEDA spells the mechanisms differently from this config
+    /// (<https://keda.sh/docs/latest/scalers/apache-kafka/>): `sasl` takes
+    /// `plaintext`, `scram_sha256`, `scram_sha512`, `gssapi`, `oauthbearer` or
+    /// `none`, and `tls` takes enable or disable. The mapped set matches the
+    /// mechanisms `config::validate` accepts, so anything outside it stops the
+    /// render rather than reaching the scaler.
+    #[test]
+    fn test_keda_trigger_metadata_tracks_the_source_config() {
+        if !helm_available() {
+            return;
+        }
+
+        let cases: [(&[&str], &str); 8] = [
+            (&[], "sasl: scram_sha512"),
+            (&["config.source.sasl.enabled=false"], "sasl: none"),
+            (
+                &["config.source.sasl.mechanism=scram_sha_256"],
+                "sasl: scram_sha256",
+            ),
+            (&["config.source.sasl.mechanism=plain"], "sasl: plaintext"),
+            (&["config.source.tls.enabled=true"], "tls: enable"),
+            (&["config.source.tls.enabled=false"], "tls: disable"),
+            // Values that null a section out must fall back, not take the
+            // whole render down on a nil dereference.
+            (&["config.source.sasl=null"], "sasl: none"),
+            (&["config.source.tls=null"], "tls: disable"),
+        ];
+
+        for (overrides, want) in cases {
+            let rendered = render_keda_trigger(overrides)
+                .unwrap_or_else(|err| panic!("helm template {overrides:?} failed:\n{err}"));
+            assert!(
+                rendered.contains(want),
+                "helm template {overrides:?} must render `{want}`:\n{rendered}"
+            );
+        }
+
+        let err = render_keda_trigger(&["config.source.sasl.mechanism=gssapi"])
+            .expect_err("a mechanism with no mapping must stop the render");
+        assert!(
+            err.contains("no KEDA kafka equivalent"),
+            "the refused render must name the unmapped mechanism:\n{err}"
+        );
+    }
+
     #[test]
     fn test_contract_default_config_present() {
         let c = contract();
