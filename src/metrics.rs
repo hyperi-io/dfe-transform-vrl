@@ -20,10 +20,19 @@
 //! or the prefix would double up. Per-app differentiation in the platform is by
 //! LABEL (Prometheus job/pod), never the metric name.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use scalo::memory::MemoryGuard;
 use scalo::metrics::groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
 };
 use scalo::metrics::{MetricsManager, ServiceMetrics};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+/// How often the memory gauges are refreshed from the memory guard.
+const MEMORY_GAUGE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
@@ -207,6 +216,37 @@ impl TransformMetrics {
             );
         }
     }
+
+    /// Copy the memory guard's usage and limit into the `memory_used_bytes`
+    /// and `memory_limit_bytes` gauges.
+    #[inline]
+    pub fn record_memory(&self, guard: &MemoryGuard) {
+        if let Some(ref app) = self.app {
+            app.set_memory(guard.current_bytes(), guard.limit_bytes());
+        }
+    }
+}
+
+/// Refresh the memory gauges from `guard` every [`MEMORY_GAUGE_INTERVAL`]
+/// until `shutdown` is cancelled.
+///
+/// A task of its own because the pipeline's scaling ticker runs only on the
+/// bus transport with scaling enabled, and these gauges are wanted on both.
+pub fn spawn_memory_gauge_task(
+    transform_metrics: Arc<TransformMetrics>,
+    guard: Arc<MemoryGuard>,
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(MEMORY_GAUGE_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => break,
+                _ = tick.tick() => transform_metrics.record_memory(&guard),
+            }
+        }
+    })
 }
 
 impl Default for TransformMetrics {
@@ -243,8 +283,155 @@ impl Default for TransformMetrics {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use scalo::memory::{MemoryGuardConfig, UsageSource};
+
+    /// Recorder that keeps every gauge's last value by name, so a test can
+    /// read back what production code wrote. scalo's gauges are write-only.
+    #[derive(Default)]
+    struct GaugeCapture {
+        gauges: Mutex<HashMap<String, Arc<AtomicU64>>>,
+    }
+
+    impl GaugeCapture {
+        fn read(&self, name: &str) -> Option<f64> {
+            self.gauges
+                .lock()
+                .unwrap()
+                .get(name)
+                .map(|g| f64::from_bits(g.load(Ordering::Acquire)))
+        }
+    }
+
+    impl metrics::Recorder for GaugeCapture {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            metrics::Counter::noop()
+        }
+
+        fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            let cell = Arc::clone(
+                self.gauges
+                    .lock()
+                    .unwrap()
+                    .entry(key.name().to_string())
+                    .or_default(),
+            );
+            metrics::Gauge::from_arc(cell)
+        }
+
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    const FIXTURE_USED_BYTES: u64 = 123_456_789;
+    const FIXTURE_LIMIT_BYTES: u64 = 1 << 30;
+
+    /// Transform metrics whose gauges land in `capture`, plus a guard reading a
+    /// fixture cgroup that reports [`FIXTURE_USED_BYTES`] in use.
+    fn captured_metrics_and_guard(
+        capture: &GaugeCapture,
+        namespace: &str,
+    ) -> (TransformMetrics, MemoryGuard, tempfile::TempDir) {
+        let manager = MetricsManager::new(namespace);
+        let m = metrics::with_local_recorder(capture, || {
+            TransformMetrics::new(&manager, "0.1.0", "eeee")
+        });
+        let cgroup = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            cgroup.path().join("memory.current"),
+            format!("{FIXTURE_USED_BYTES}\n"),
+        )
+        .expect("write memory.current");
+        let guard = MemoryGuard::with_usage_source(
+            MemoryGuardConfig {
+                limit_bytes: FIXTURE_LIMIT_BYTES,
+                ..MemoryGuardConfig::default()
+            },
+            UsageSource::CgroupV2(cgroup.path().to_path_buf()),
+        );
+        (m, guard, cgroup)
+    }
+
+    #[test]
+    fn record_memory_writes_the_guard_reading_to_the_app_gauges() {
+        let capture = GaugeCapture::default();
+        let (m, guard, _cgroup) = captured_metrics_and_guard(&capture, "test_record_memory");
+        assert_eq!(capture.read("memory_used_bytes"), Some(0.0));
+
+        m.record_memory(&guard);
+
+        assert_eq!(
+            capture.read("memory_used_bytes"),
+            Some(123_456_789.0),
+            "memory_used_bytes must carry the guard's current_bytes"
+        );
+        assert_eq!(
+            capture.read("memory_limit_bytes"),
+            Some(1_073_741_824.0),
+            "memory_limit_bytes must carry the guard's limit_bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_gauge_task_writes_the_gauges_and_stops_on_shutdown() {
+        let capture = GaugeCapture::default();
+        let (m, guard, _cgroup) = captured_metrics_and_guard(&capture, "test_memory_gauge_task");
+        let shutdown = CancellationToken::new();
+        let task = spawn_memory_gauge_task(Arc::new(m), Arc::new(guard), shutdown.clone());
+
+        // The interval's first tick fires at once; allow a loaded host 5s.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while capture.read("memory_used_bytes") != Some(123_456_789.0) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the task never wrote memory_used_bytes"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the task must stop once shutdown is cancelled")
+            .expect("the task must not panic");
+    }
 
     #[test]
     fn default_does_not_panic() {
