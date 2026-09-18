@@ -430,6 +430,14 @@ async fn run_transform_service(
     // false` -- the ticker is then not spawned.
     let scaling = runtime.scaling.clone();
 
+    // Stops on `shutdown_token`; aborted below as well, for a pipeline that
+    // fails without a shutdown.
+    let memory_gauge_task = metrics::spawn_memory_gauge_task(
+        Arc::clone(&transform_metrics),
+        Arc::clone(&memory_guard),
+        shutdown_token.clone(),
+    );
+
     // Pipeline -- runs the governed engine driver until `shutdown_token` is
     // cancelled (the driver returns cleanly on cancel). `run_service` is awaited
     // by `run_app`, so this blocks here for the process lifetime; no separate
@@ -448,6 +456,7 @@ async fn run_transform_service(
         memory_guard,
     )
     .await;
+    memory_gauge_task.abort();
 
     match result {
         Ok(()) => info!("pipeline shutdown complete"),
