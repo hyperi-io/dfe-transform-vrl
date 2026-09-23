@@ -18,10 +18,10 @@
 
 use std::process::Command;
 
-fn binary_path() -> String {
-    // cargo test sets this for integration tests
-    let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
-    format!("{target_dir}/debug/dfe-transform-vrl")
+fn binary_path() -> &'static str {
+    // Cargo resolves this at compile time to the binary it just built, so it
+    // still points at one when coverage redirects the build with --target-dir.
+    env!("CARGO_BIN_EXE_dfe-transform-vrl")
 }
 
 #[test]
