@@ -53,14 +53,9 @@ build:
       bolt:
         enabled: true  # Linux only; skipped on non-Linux targets
 
-# Publishing (on release)
-publish:
+# Release (where the artefacts go)
+release:
   enabled: true
-  # Legacy key: hyperi-ci accepts it and ignores it (config.py:90-98), and the
-  # channel that unlocks Tier 2 PGO+BOLT comes from the release dispatch
-  # (HYPERCI_CHANNEL, else a tag ref), never from this value.
-  target: both
-  binaries: both
   container:
     enabled: true
     dockerfile: Dockerfile
