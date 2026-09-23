@@ -18,7 +18,7 @@
 
 use std::process::Command;
 
-fn binary_path() -> &'static str {
+const fn binary_path() -> &'static str {
     // Cargo resolves this at compile time to the binary it just built, so it
     // still points at one when coverage redirects the build with --target-dir.
     env!("CARGO_BIN_EXE_dfe-transform-vrl")
