@@ -254,7 +254,7 @@ fn example_config_yaml_parses_as_yaml() {
 }
 
 /// GH issue #11 regression: the wrapper used to construct a SECOND
-/// `MetricsManager` that tried to bind the same `:9090` as rustlib's
+/// `MetricsManager` that tried to bind the same `:9090` as scalo's
 /// auto-started one, causing every startup to fail with EADDRINUSE.
 /// Spawn the actual binary, give it time to clear the metrics-server
 /// bind path, and assert it doesn't die with that error before we
@@ -272,7 +272,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
     assert!(fixture.exists(), "fixture missing");
 
     // Bind to random unused ports so we don't conflict with anything on
-    // the host running the test suite (the rustlib metrics server uses
+    // the host running the test suite (the scalo metrics server uses
     // METRICS_ADDR; we set both health/metrics via env to ephemeral high
     // ports).
     let mut child = std::process::Command::new(binary_path())
