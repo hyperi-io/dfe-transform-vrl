@@ -43,10 +43,6 @@ jobs:
   ci:
     uses: hyperi-io/hyperi-ci/.github/workflows/rust-ci.yml@main
     with:
-      # `both` resolves to release channel and unlocks Tier 2 (PGO+BOLT).
-      # `internal` would resolve to spike channel = Tier 1 only — silent
-      # demotion that loader v1.17.4 hit before flipping to `both` in v1.17.5.
-      publish-target: both
       tag: ${{ inputs.tag || '' }}
       from-head: ${{ inputs.from-head || '' }}
       bump: ${{ inputs.bump || 'auto' }}

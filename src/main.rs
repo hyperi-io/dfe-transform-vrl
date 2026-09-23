@@ -12,7 +12,7 @@ use clap::Parser;
 use dfe_transform_vrl::cli::{App, handle_emit_command};
 
 // jemalloc at every channel per 2026-04-17 DFE allocator policy.
-// hyperi-ci enables --features jemalloc on spike/alpha/beta/release builds.
+// hyperi-ci enables --features jemalloc on alpha/beta/release builds.
 // Local dev (no feature) uses the system allocator so cargo build stays fast.
 #[cfg(feature = "jemalloc")]
 #[global_allocator]

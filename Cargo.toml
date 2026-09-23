@@ -140,7 +140,7 @@ rusqlite = { version = ">=0.40.1, <0.41", features = ["bundled"], optional = tru
 
 # Optional allocator (jemalloc-only per 2026-04-17 DFE policy).
 # hyperi-ci enables `--features jemalloc` automatically at every channel
-# (spike/alpha/beta/release). Default build keeps system allocator so
+# (alpha/beta/release). Default build keeps system allocator so
 # local dev `cargo build` stays fast.
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 
