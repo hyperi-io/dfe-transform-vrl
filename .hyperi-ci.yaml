@@ -45,19 +45,6 @@ build:
     targets:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
-    # Tier 2 release-track optimisation. hyperi-ci enables jemalloc + fat
-    # LTO automatically; this section opts in to PGO + BOLT on top. PGO
-    # adds ~20-25 min per arch to release builds (Tier 1 baseline ~4 min,
-    # Tier 2 ~26 min) — only runs on the release channel.
-    optimize:
-      pgo:
-        enabled: true
-        workload_cmd: "bash scripts/pgo-workload.sh"
-        # Floor of 60s in the workload script; 300s default produces stable
-        # profiles. Loader canary observed shorter runs giving NEGATIVE PGO.
-        duration_secs: 300
-      bolt:
-        enabled: true  # Linux only; skipped on non-Linux targets
 
 # Release (where the artefacts go)
 release:
