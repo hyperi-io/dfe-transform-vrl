@@ -227,8 +227,8 @@ impl TransformMetrics {
     }
 }
 
-/// Refresh the memory gauges from `guard` every [`MEMORY_GAUGE_INTERVAL`]
-/// until `shutdown` is cancelled.
+/// Refresh the memory gauges from `guard` once a second until `shutdown` is
+/// cancelled.
 ///
 /// A task of its own because the pipeline's scaling ticker runs only on the
 /// bus transport with scaling enabled, and these gauges are wanted on both.
