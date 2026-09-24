@@ -51,7 +51,6 @@ pub struct TransformMetrics {
     pub deserialise_duration: metrics::Histogram,
     pub serialise_duration: metrics::Histogram,
     pub batch_duration: metrics::Histogram,
-    pub records_error: metrics::Counter,
     pub records_format: metrics::Counter,
     pub programs_loaded: metrics::Gauge,
     pub abort_total: metrics::Counter,
@@ -100,10 +99,6 @@ impl TransformMetrics {
                 "batch_duration_seconds",
                 "End-to-end batch latency (consume to commit)",
             ),
-            records_error: manager.counter(
-                "records_error_total",
-                "Records that failed processing, by stage",
-            ),
             records_format: manager.counter(
                 "records_format_total",
                 "Records received by detected format",
@@ -133,11 +128,13 @@ impl TransformMetrics {
     }
 
     /// Record a deserialise error.
+    ///
+    /// Each error lands in one `stage` series only. An unlabelled increment as
+    /// well would be a second series under the same name, and a `sum()` across
+    /// labels would count the error twice.
     #[inline]
     pub fn record_deser_error(&self) {
-        self.records_error.increment(1);
-        // Labelled counter for stage breakdown. Bare name -- the namespace
-        // prefix layer prepends `dfe_transform_vrl_` once.
+        // Bare name -- the namespace prefix layer prepends `dfe_transform_vrl_` once.
         metrics::counter!(
             "records_error_total",
             "stage" => "deserialise"
@@ -148,7 +145,6 @@ impl TransformMetrics {
     /// Record a VRL transform error.
     #[inline]
     pub fn record_transform_error(&self) {
-        self.records_error.increment(1);
         metrics::counter!(
             "records_error_total",
             "stage" => "transform"
@@ -159,7 +155,6 @@ impl TransformMetrics {
     /// Record a produce error.
     #[inline]
     pub fn record_produce_error(&self) {
-        self.records_error.increment(1);
         metrics::counter!(
             "records_error_total",
             "stage" => "produce"
@@ -266,7 +261,6 @@ impl Default for TransformMetrics {
             deserialise_duration: metrics::histogram!("deserialise_duration_seconds"),
             serialise_duration: metrics::histogram!("serialise_duration_seconds"),
             batch_duration: metrics::histogram!("batch_duration_seconds"),
-            records_error: metrics::counter!("records_error_total"),
             records_format: metrics::counter!("records_format_total"),
             programs_loaded: metrics::gauge!("programs_loaded"),
             abort_total: metrics::counter!("abort_total"),
@@ -538,6 +532,84 @@ mod tests {
         m.set_enrichment_rows("geo", 10_000);
         m.set_enrichment_rows("services", 50);
         m.set_enrichment_rows("empty", 0);
+    }
+
+    /// Counts one named counter across every label set, as a `sum()` over the
+    /// name reads it.
+    struct CountingRecorder {
+        name: &'static str,
+        hits: Arc<AtomicU64>,
+    }
+
+    impl metrics::Recorder for CountingRecorder {
+        fn describe_counter(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_gauge(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+        fn describe_histogram(
+            &self,
+            _: metrics::KeyName,
+            _: Option<metrics::Unit>,
+            _: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            key: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            if key.name() == self.name {
+                metrics::Counter::from_arc(Arc::clone(&self.hits))
+            } else {
+                metrics::Counter::noop()
+            }
+        }
+
+        fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(
+            &self,
+            _: &metrics::Key,
+            _: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// Run `f` with a thread-local recorder counting `name`.
+    fn counted(name: &'static str, f: impl FnOnce()) -> u64 {
+        let hits = Arc::new(AtomicU64::new(0));
+        let recorder = CountingRecorder {
+            name,
+            hits: Arc::clone(&hits),
+        };
+        metrics::with_local_recorder(&recorder, f);
+        hits.load(Ordering::Acquire)
+    }
+
+    #[test]
+    fn each_error_counts_once_across_records_error_total() {
+        let manager = MetricsManager::with_config(scalo::metrics::MetricsConfig::offline(""));
+        let hits = counted("records_error_total", || {
+            let m = TransformMetrics::new(&manager, "0.1.0", "eeee");
+            m.record_deser_error();
+            m.record_transform_error();
+            m.record_produce_error();
+        });
+        assert_eq!(hits, 3, "three errors read as three across every stage");
     }
 
     #[test]
