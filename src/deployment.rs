@@ -12,9 +12,13 @@
 //! in its container image. The container is just the Rust binary.
 
 use scalo::deployment::{
-    DeploymentContract, HealthContract, ImageProfile, KedaConfig, KedaContract, NativeDepsContract,
-    PortContract, SecretEnvContract, SecretGroupContract, base_image_from_cascade,
+    DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
+    NativeDepsContract, PortContract, SecretEnvContract, SecretGroupContract,
+    base_image_from_cascade,
 };
+
+/// The `source.transport` value, as `Transport` serialises it, that binds the Push listener.
+const TRANSPORT_DIRECT: &str = "direct";
 
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
@@ -37,13 +41,13 @@ pub fn contract() -> DeploymentContract {
         config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
         base_image: base_image.clone(),
-        // The Push listener the direct transport receives records on. The
-        // probes are on the metrics port, so there is no second health port.
-        extra_ports: vec![PortContract {
-            name: "push".into(),
-            port: 6000,
-            protocol: "TCP".into(),
-        }],
+        // The Push listener binds only on the direct transport, and the probes use the metrics port.
+        extra_ports: vec![
+            PortContract::tcp("push", 6000)
+                .when_equals("config.source.transport", TRANSPORT_DIRECT)
+                .bound_from("source.listen"),
+        ],
+        unbound_listen_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vrl/config.yaml".into(),
@@ -106,22 +110,20 @@ pub fn contract() -> DeploymentContract {
         depends_on: vec!["kafka".into()],
         native_deps: NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image),
         image_profile: ImageProfile::Production,
-        // KedaContract is #[non_exhaustive] (scalo) -- build it from a
-        // KedaConfig holding this app's real KEDA values and convert. The
-        // scaling_pressure_* trigger fields then come from KedaConfig defaults
-        // (trigger OFF -- the Prometheus serverAddress is cluster-specific), and
-        // ..Default::default() future-proofs any later contract-field additions.
-        keda: Some(KedaContract::from_config(&KedaConfig {
-            min_replicas: 1,
-            max_replicas: 10,
-            polling_interval: 15,
-            cooldown_period: 300,
-            kafka_lag_threshold: 1000,
-            activation_lag_threshold: 0,
-            cpu_enabled: true,
-            cpu_threshold: 80,
-            ..Default::default()
-        })),
+        keda: Some(
+            KedaContract::from_config(&KedaConfig {
+                enabled: true,
+                min_replicas: 1,
+                max_replicas: 10,
+                polling_interval: 15,
+                cooldown_period: 300,
+                cpu_enabled: true,
+                cpu_threshold: 80,
+                ..Default::default()
+            })
+            // Raw consumer-group lag rises when a downstream stage breaks, so it never scales this app.
+            .with_kafka_trigger(KafkaLagTrigger::disabled()),
+        ),
         schema_version: 3,
         oci_labels: scalo::deployment::OciLabels {
             licenses: "BUSL-1.1".into(),
@@ -228,6 +230,48 @@ mod tests {
         assert_eq!(c.extra_ports.len(), 1);
         assert_eq!(c.extra_ports[0].port, 6000);
         assert_eq!(c.extra_ports[0].name, "push");
+        assert_eq!(c.extra_ports[0].protocol, "TCP");
+        assert_eq!(
+            c.extra_ports[0].bound_from.as_deref(),
+            Some("source.listen")
+        );
+    }
+
+    /// The gate compares the chart's string of `source.transport`, so it has to
+    /// hold for the spelling `Transport::Direct` serialises to and for no other.
+    #[test]
+    fn test_push_port_listens_only_on_the_direct_transport() {
+        let c = contract();
+        let gate = c.extra_ports[0].when.as_ref().expect("push port is gated");
+        let on = |transport: crate::config::Transport| {
+            let mut config = c.default_config.clone().expect("default_config present");
+            config["source"]["transport"] =
+                serde_json::to_value(transport).expect("Transport serialises");
+            gate.holds_in(&config)
+        };
+
+        assert_eq!(on(crate::config::Transport::Direct), Some(true));
+        assert_eq!(on(crate::config::Transport::Bus), Some(false));
+        assert_eq!(
+            gate.holds_in(c.default_config.as_ref().expect("default_config present")),
+            Some(false),
+            "the shipped default is the bus transport, which binds no Push listener"
+        );
+    }
+
+    /// `generate-artefacts` and `generate_chart` write nothing for a contract
+    /// that fails either check.
+    #[test]
+    fn test_contract_passes_the_generate_artefacts_checks() {
+        let c = contract();
+        c.validate()
+            .expect("every generator must accept the contract");
+        scalo::deployment::assert_listeners_declared(&c);
+        assert!(
+            c.unresolved_values_paths().is_empty(),
+            "the chart reads values default_config never sets: {:?}",
+            c.unresolved_values_paths()
+        );
     }
 
     /// GH issue #10 regression: config mount path must follow the
@@ -260,14 +304,23 @@ mod tests {
         );
     }
 
+    /// KEDA stays on and scales on CPU alone, because raw consumer-group lag
+    /// must never reach the `ScaledObject`.
     #[test]
-    fn test_contract_keda_enabled() {
+    fn test_contract_keda_scales_on_cpu_without_a_lag_trigger() {
         let c = contract();
         let keda = c.keda.as_ref().unwrap();
+        assert!(keda.enabled);
+        assert!(
+            !keda.kafka_trigger.enabled,
+            "a consumer-lag trigger scales out when a downstream stage is broken"
+        );
+        assert!(keda.cpu_enabled);
+        assert_eq!(keda.cpu_threshold, 80);
         assert_eq!(keda.min_replicas, 1);
         assert_eq!(keda.max_replicas, 10);
-        assert_eq!(keda.kafka_lag_threshold, 1000);
-        assert!(keda.cpu_enabled);
+        assert_eq!(keda.polling_interval, 15);
+        assert_eq!(keda.cooldown_period, 300);
     }
 
     #[test]
@@ -317,67 +370,13 @@ mod tests {
     }
 
     /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
-    /// next regen -- which is how the Kafka SASL env names shipped broken.
-    /// One deliberate exception: `templates/keda-scaledobject.yaml`, where the
-    /// generator emits a `.Values.config.kafka.*` path this app's values do not
-    /// have, so a regenerated copy will not render at all.
-    ///
-    /// An exemption only asserts the file DIFFERS, and a header comment alone
-    /// satisfies that, so a substantive fix can be missed while this stays
-    /// green -- both of the above shipped that way. Diff an exempt file against
-    /// the generator by eye when scalo moves.
+    /// next regen -- which is how the Kafka SASL env names shipped broken. A
+    /// hand fix the generator cannot yet make goes in as a pinned `ChartPatch`,
+    /// never as an exempt file.
     #[test]
     fn test_committed_chart_matches_the_generator() {
-        const HAND_FIXED: &[&str] = &["templates/keda-scaledobject.yaml"];
-
-        let generated = tempfile::tempdir().expect("temp dir");
-        scalo::deployment::generate_chart(&contract(), generated.path(), None)
-            .expect("chart generates");
-
-        let want = read_chart(generated.path());
-        let got = read_chart(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart"));
-
-        assert_eq!(
-            want.keys().collect::<Vec<_>>(),
-            got.keys().collect::<Vec<_>>(),
-            "chart/ holds a different set of files from `emit-chart`"
-        );
-
-        for (rel, from_generator) in &want {
-            if HAND_FIXED.contains(&rel.as_str()) {
-                assert_ne!(
-                    got[rel], *from_generator,
-                    "chart/{rel} is listed as hand-fixed but now matches the \
-                     generator -- drop it from HAND_FIXED"
-                );
-                continue;
-            }
-            assert_eq!(
-                got[rel], *from_generator,
-                "chart/{rel} has drifted from `emit-chart` -- fix contract() and \
-                 regenerate, never hand-edit the output"
-            );
-        }
-    }
-
-    /// Relative path -> contents for a chart directory (root files plus
-    /// `templates/`, which is the whole shape the generator emits).
-    fn read_chart(dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
-        let mut out = std::collections::BTreeMap::new();
-        for sub in [None, Some("templates")] {
-            let here = sub.map_or_else(|| dir.to_path_buf(), |s| dir.join(s));
-            for entry in std::fs::read_dir(&here).expect("chart directory readable") {
-                let entry = entry.expect("chart directory entry");
-                if !entry.file_type().expect("file type").is_file() {
-                    continue;
-                }
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let rel = sub.map_or_else(|| name.clone(), |s| format!("{s}/{name}"));
-                let body = std::fs::read_to_string(entry.path()).expect("chart file readable");
-                out.insert(rel, body);
-            }
-        }
-        out
+        let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
+        scalo::deployment::assert_no_chart_drift(&contract(), &chart, &[]);
     }
 
     /// True when this path answers `helm version`.
@@ -419,8 +418,8 @@ mod tests {
 
     /// A usable helm, or the reason this host has none.
     ///
-    /// The render checks below are the only proof the KEDA trigger metadata
-    /// tracks the config, so a runner without helm fetches one instead of
+    /// The render check below is the only proof the chart's `ScaledObject`
+    /// carries no lag trigger, so a runner without helm fetches one instead of
     /// letting the gate disappear with its environment.
     fn helm_binary() -> Result<&'static std::path::PathBuf, &'static str> {
         static HELM: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
@@ -435,19 +434,12 @@ mod tests {
         .map_err(String::as_str)
     }
 
-    /// Render the committed chart's `ScaledObject` under `--set` overrides,
-    /// returning helm's stderr when the render is refused.
-    fn render_keda_trigger(
-        helm_bin: &std::path::Path,
-        overrides: &[&str],
-    ) -> Result<String, String> {
+    /// Render the committed chart under `--set` overrides, returning helm's
+    /// stderr when the render is refused.
+    fn render_chart(helm_bin: &std::path::Path, overrides: &[&str]) -> Result<String, String> {
         let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
         let mut helm = std::process::Command::new(helm_bin);
-        helm.arg("template")
-            .arg("guard")
-            .arg(&chart)
-            .arg("--show-only")
-            .arg("templates/keda-scaledobject.yaml");
+        helm.arg("template").arg("guard").arg(&chart);
         for set in overrides {
             helm.arg("--set").arg(set);
         }
@@ -459,61 +451,70 @@ mod tests {
         }
     }
 
-    /// The kafka scaler authenticates with the mechanism and transport named in
-    /// its own trigger metadata, so pinning either one there scales the app off
-    /// a connection the app itself never makes.
-    ///
-    /// KEDA spells the mechanisms differently from this config
-    /// (<https://keda.sh/docs/latest/scalers/apache-kafka/>): `sasl` takes
-    /// `plaintext`, `scram_sha256`, `scram_sha512`, `gssapi`, `oauthbearer` or
-    /// `none`, and `tls` takes enable or disable. The mapped set matches the
-    /// mechanisms `config::validate` accepts, so anything outside it stops the
-    /// render rather than reaching the scaler.
-    #[test]
-    fn test_keda_trigger_metadata_tracks_the_source_config() {
-        let helm_bin = match helm_binary() {
-            Ok(bin) => bin,
+    /// A usable helm, or `None` off CI when none could be had.
+    fn helm_or_skip() -> Option<&'static std::path::PathBuf> {
+        match helm_binary() {
+            Ok(bin) => Some(bin),
             Err(reason) => {
                 assert!(
                     std::env::var_os("CI").is_none(),
                     "helm is missing on a CI runner and could not be fetched, so \
-                     the KEDA trigger metadata goes unchecked: {reason}"
+                     the chart render goes unchecked: {reason}"
                 );
-                eprintln!("skipping KEDA render checks: {reason}");
-                return;
+                eprintln!("skipping chart render checks: {reason}");
+                None
             }
+        }
+    }
+
+    /// Consumer-group lag rises when a downstream stage breaks and scaling out
+    /// fixes nothing, so the rendered `ScaledObject` carries the CPU trigger alone.
+    #[test]
+    fn test_keda_scaled_object_carries_no_lag_trigger() {
+        let Some(helm_bin) = helm_or_skip() else {
+            return;
         };
 
-        let cases: [(&[&str], &str); 8] = [
-            (&[], "sasl: scram_sha512"),
-            (&["config.source.sasl.enabled=false"], "sasl: none"),
-            (
-                &["config.source.sasl.mechanism=scram_sha_256"],
-                "sasl: scram_sha256",
-            ),
-            (&["config.source.sasl.mechanism=plain"], "sasl: plaintext"),
-            (&["config.source.tls.enabled=true"], "tls: enable"),
-            (&["config.source.tls.enabled=false"], "tls: disable"),
-            // Values that null a section out must fall back, not take the
-            // whole render down on a nil dereference.
-            (&["config.source.sasl=null"], "sasl: none"),
-            (&["config.source.tls=null"], "tls: disable"),
-        ];
-
-        for (overrides, want) in cases {
-            let rendered = render_keda_trigger(helm_bin, overrides)
-                .unwrap_or_else(|err| panic!("helm template {overrides:?} failed:\n{err}"));
-            assert!(
-                rendered.contains(want),
-                "helm template {overrides:?} must render `{want}`:\n{rendered}"
-            );
-        }
-
-        let err = render_keda_trigger(helm_bin, &["config.source.sasl.mechanism=gssapi"])
-            .expect_err("a mechanism with no mapping must stop the render");
+        let rendered = render_chart(helm_bin, &[])
+            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
         assert!(
-            err.contains("no KEDA kafka equivalent"),
-            "the refused render must name the unmapped mechanism:\n{err}"
+            rendered.contains("kind: ScaledObject"),
+            "KEDA is on by default, so the ScaledObject must render:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("type: kafka"),
+            "the ScaledObject must carry no consumer-lag trigger:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("kind: TriggerAuthentication"),
+            "with no lag trigger there is nothing for a TriggerAuthentication to serve:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("type: cpu") && rendered.contains("value: \"80\""),
+            "the CPU trigger must render at the contract's 80% threshold:\n{rendered}"
+        );
+    }
+
+    /// The Service and Deployment publish the Push port only where the app
+    /// binds it, which is the direct transport.
+    #[test]
+    fn test_push_port_renders_only_on_the_direct_transport() {
+        let Some(helm_bin) = helm_or_skip() else {
+            return;
+        };
+
+        let bus = render_chart(helm_bin, &[])
+            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
+        assert!(
+            !bus.contains("containerPort: 6000") && !bus.contains("port: 6000"),
+            "the bus transport binds no Push listener, so no port 6000 may render:\n{bus}"
+        );
+
+        let direct = render_chart(helm_bin, &["config.source.transport=direct"])
+            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
+        assert!(
+            direct.contains("containerPort: 6000") && direct.contains("port: 6000"),
+            "the direct transport binds the Push listener, so port 6000 must render:\n{direct}"
         );
     }
 

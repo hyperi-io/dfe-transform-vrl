@@ -175,13 +175,9 @@ The `Dockerfile` and everything under `chart/` are generated from
 generator and the regeneration command. A hand edit to either is reverted by the
 next regeneration, so a fix belongs in `contract()`.
 
-One exception is deliberate and guarded:
-`chart/templates/keda-scaledobject.yaml` is hand-fixed because the generator
-emits `.Values.config.kafka.*` while this app's values carry `config.source` and
-`config.sink` and no `config.kafka` block. A regenerated copy fails to render at
-all. `test_committed_chart_matches_the_generator` fails if any other chart file
-drifts from the generator, and fails the other way if the KEDA file stops
-diverging, so the exception cannot outlive the upstream bug.
+`test_committed_chart_matches_the_generator` holds `chart/` to the generator byte for byte through scalo's `assert_no_chart_drift`. A hand fix the generator cannot yet make goes in as a pinned `ChartPatch`, never as an exempt file.
+
+The Push port (6000) is gated on `config.source.transport` being `direct`, the only transport that binds the listener, so the bus default publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
 
 ### How many instances run
 

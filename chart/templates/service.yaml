@@ -11,9 +11,11 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
+    {{- if eq (toString ((.Values.config).source).transport) "direct" }}
     - port: 6000
       targetPort: 6000
       protocol: TCP
       name: push
+    {{- end }}
   selector:
     {{- include "dfe-transform-vrl.selectorLabels" . | nindent 4 }}

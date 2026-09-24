@@ -39,7 +39,9 @@ RUN chmod +x /usr/local/bin/dfe-transform-vrl
 RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create-home --uid 1000 appuser
 USER appuser
 
-EXPOSE 9090 6000
+EXPOSE 9090
+# Conditional listeners, not EXPOSEd -- publish explicitly when enabled:
+#   6000/tcp push -- when config.source.transport is "direct"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:9090/livez > /dev/null || exit 1
