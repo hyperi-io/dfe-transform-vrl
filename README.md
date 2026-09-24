@@ -214,16 +214,9 @@ cargo run -- config-check --config config.yaml
 rewrites it from `src/deployment.rs::contract()`, so a hand edit under `chart/`
 is reverted the next time anyone regenerates. Fix the contract, not the output.
 
-One file is a deliberate exception. `chart/templates/keda-scaledobject.yaml` is
-hand-fixed: the generator emits `.Values.config.kafka.*`, this app's values have
-`config.source` and `config.sink` and no `config.kafka` block, so a regenerated
-copy fails to render at all with `nil pointer evaluating interface {}.brokers`.
-Re-apply that one diff after every `emit-chart`, until the generator is fixed
-upstream in scalo.
+`test_committed_chart_matches_the_generator` runs scalo's `assert_no_chart_drift`, so any chart file that differs from `emit-chart` fails the suite. A hand fix the generator cannot yet make is pinned there as a `ChartPatch`, never exempted.
 
-`test_committed_chart_matches_the_generator` holds both halves of that: it fails
-if any other chart file drifts from `emit-chart`, and fails the other way if the
-KEDA file stops diverging, so the exception cannot outlive the generator bug.
+The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. The deployed chart in dfe-infra (`helm/library/dfe-common/templates/_keda.tpl`) renders its own ScaledObject, CPU plus a scaling-pressure trigger through dfe-keda-shim wherever `keda.pressure.enabled` is set.
 
 ## Documentation
 
@@ -304,7 +297,7 @@ checked.
 | Don't | Do | Why |
 |---|---|---|
 | Hand-edit `chart/` or `Dockerfile` | Fix `src/deployment.rs::contract()` and regenerate | Both are generator output and a hand edit is reverted by the next regeneration. The chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- fixed in the generator so `emit-chart` keeps it |
-| Regenerate the chart and commit it blind | Re-apply the `keda-scaledobject.yaml` hand fix | The generator emits `.Values.config.kafka.*`, this app's values carry `config.source` and `config.sink` and no `config.kafka`, so a regenerated copy fails to render at all with `nil pointer evaluating interface {}.brokers`. The KEDA scaler reading a kafka block it does not have was fixed three times (#37, #65, #70) |
+| Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
 | Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in the config file | Set it through the env layer, on a **double** underscore | scalo's cascade finds files by fixed base name and can never be pointed at `config.yaml`, so the section parses and reaches nothing. Full list above under Configuration |
 | Trust `pipeline.batch_size`, `pipeline.batch_timeout_ms`, `sink.key_field` or `source.commit_interval_ms` | Size a chunk with `batch_processing.max_chunk_size` | `config::INERT_SETTINGS` -- accepted, validated, reaching nothing. Table above under Configuration |
 | Call a bare `cargo nextest run` green | Pass `--features enrichment-mmdb` | `default = []`, so the MMDB tests are not compiled in and the run is green without having tested them |
