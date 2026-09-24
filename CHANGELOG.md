@@ -3,6 +3,21 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.25](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.24...v1.1.25) (2026-09-24)
+
+### Bug Fixes
+
+* **chart:** render the ScaledObject at all, and let the scaler authenticate ([#65](https://github.com/hyperi-io/dfe-transform-vrl/issues/65)) ([be16797](https://github.com/hyperi-io/dfe-transform-vrl/commit/be16797bfd94ad7cf3f3951731ee2d091dfb1171))
+* **ci:** release vocabulary, and drop the retired spike channel ([#74](https://github.com/hyperi-io/dfe-transform-vrl/issues/74)) ([e1f3e4e](https://github.com/hyperi-io/dfe-transform-vrl/commit/e1f3e4ea04caf6046dc1b879cdb678421191477c))
+* **ci:** skip PGO and BOLT for the rc.14 workstream ([#76](https://github.com/hyperi-io/dfe-transform-vrl/issues/76)) ([e61f21a](https://github.com/hyperi-io/dfe-transform-vrl/commit/e61f21a64fa398a4f69719f24a4ba7263838f1bb))
+* derive the KEDA trigger auth from the source config ([#70](https://github.com/hyperi-io/dfe-transform-vrl/issues/70)) ([bbe7889](https://github.com/hyperi-io/dfe-transform-vrl/commit/bbe78892af8504261ee6833120e17d50acc0c4b0)), closes [#42](https://github.com/hyperi-io/dfe-transform-vrl/issues/42)
+* **docs:** add the README Context section and an architecture doc ([#72](https://github.com/hyperi-io/dfe-transform-vrl/issues/72)) ([3de66d6](https://github.com/hyperi-io/dfe-transform-vrl/commit/3de66d617eaf450a98c45f3b756db1e8bfb999c4)), closes [#37](https://github.com/hyperi-io/dfe-transform-vrl/issues/37) [#65](https://github.com/hyperi-io/dfe-transform-vrl/issues/65) [#70](https://github.com/hyperi-io/dfe-transform-vrl/issues/70)
+* **docs:** name scalo, not rustlib ([#73](https://github.com/hyperi-io/dfe-transform-vrl/issues/73)) ([65a08fc](https://github.com/hyperi-io/dfe-transform-vrl/commit/65a08fc8c4d002d7fd0f4357de8c6150eb735fad))
+* feed the memory gauges from the guard ([#69](https://github.com/hyperi-io/dfe-transform-vrl/issues/69)) ([c09180b](https://github.com/hyperi-io/dfe-transform-vrl/commit/c09180b1ec099dc68f9f7bbdf6c786ac2e036fd7)), closes [#53](https://github.com/hyperi-io/dfe-transform-vrl/issues/53)
+* fill the metrics manifest and patch rustls ([#68](https://github.com/hyperi-io/dfe-transform-vrl/issues/68)) ([598717f](https://github.com/hyperi-io/dfe-transform-vrl/commit/598717fb10f269c43d5358bbe542e9ee41eabe43)), closes [#60](https://github.com/hyperi-io/dfe-transform-vrl/issues/60)
+* rebuild on scalo 2.12.6 with release consent ([43ea5a6](https://github.com/hyperi-io/dfe-transform-vrl/commit/43ea5a67f29e7762a3a9991f1f7bf2774bb7e463))
+* **tests:** ask Cargo for the binary path instead of guessing it ([#75](https://github.com/hyperi-io/dfe-transform-vrl/issues/75)) ([5393ada](https://github.com/hyperi-io/dfe-transform-vrl/commit/5393adac4d817aed3123f5e8cadc2862ad0e9f49))
+
 ## [1.1.24](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.23...v1.1.24) (2026-09-16)
 
 ### Bug Fixes
