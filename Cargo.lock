@@ -3594,7 +3594,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools",
  "log",
  "multimap",
@@ -4504,9 +4504,9 @@ dependencies = [
 
 [[package]]
 name = "scalo"
-version = "2.12.6"
+version = "2.12.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f419ad5adc5767ae7319872c0e6344c26df639c6dde62f4e79bb83644a210e0"
+checksum = "fe1702a1e7a52f5b94e0eb2c8faffcdcd4f3e5eced345cdccc8fe595e90c4747"
 dependencies = [
  "axum",
  "backon",
@@ -4986,7 +4986,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
