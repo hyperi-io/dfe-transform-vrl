@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Project:   dfe-transform-vrl
 # File:      scripts/pgo-workload.sh
-# Purpose:   PGO workload orchestrator — Kafka + wrapper + producer
+# Purpose:   PGO workload orchestrator -- Kafka + wrapper + producer
 # Language:  Bash
 #
 # License:   BUSL-1.1
@@ -10,8 +10,8 @@
 # Usage:
 #   scripts/pgo-workload.sh <path-to-dfe-transform-vrl-binary>
 #
-# Drives the wrapper's hot path (Kafka consume → format detect → deserialise
-# → VRL execute → serialise → Kafka produce) under representative load so a
+# Drives the wrapper's hot path (Kafka consume -> format detect -> deserialise
+# -> VRL execute -> serialise -> Kafka produce) under representative load so a
 # PGO-instrumented binary accumulates useful profile data.
 #
 # Environment variables (all optional):
@@ -55,7 +55,7 @@ DURATION="${PGO_WORKLOAD_DURATION_SECS:-300}"
 KAFKA_IMAGE="${PGO_WORKLOAD_KAFKA_IMAGE:-docker.redpanda.com/redpandadata/redpanda:v26.1.9}"
 KEEP="${PGO_WORKLOAD_KEEP:-0}"
 
-# Floor of 60s — shorter workloads produce bad PGO profiles
+# Floor of 60s -- shorter workloads produce bad PGO profiles
 if [[ "$DURATION" -lt 60 ]]; then
     echo "error: PGO_WORKLOAD_DURATION_SECS must be >= 60 (got $DURATION)" >&2
     echo "  short workloads produce NEGATIVE PGO gains by biasing the" >&2
@@ -100,7 +100,7 @@ WORK_DIR=""
 cleanup() {
     local rc=$?
     if [[ "$KEEP" == "1" ]]; then
-        echo "PGO_WORKLOAD_KEEP=1 — skipping cleanup" >&2
+        echo "PGO_WORKLOAD_KEEP=1 -- skipping cleanup" >&2
         echo "  wrapper PID: $WRAPPER_PID" >&2
         echo "  kafka CID:   $KAFKA_CID" >&2
         echo "  work dir:    $WORK_DIR" >&2
@@ -128,7 +128,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ----------------------------------------------------------------------------
-# Start Redpanda (Kafka-API broker — lightweight, fits 4GB CI runners)
+# Start Redpanda (Kafka-API broker -- lightweight, fits 4GB CI runners)
 # ----------------------------------------------------------------------------
 
 echo "pgo-workload: starting Redpanda ($KAFKA_IMAGE)"
@@ -137,7 +137,7 @@ echo "pgo-workload: starting Redpanda ($KAFKA_IMAGE)"
 # free OSS runners we target post-OSS). dev-container mode bundles
 # --overprovisioned, --reserve-memory 0M, --check=false, --unsafe-bypass-fsync
 # and auto-creates topics; the explicit --memory cap leaves headroom for the
-# instrumented binary + load driver. Same Kafka wire protocol — wrapper config
+# instrumented binary + load driver. Same Kafka wire protocol -- wrapper config
 # and the localhost:19092 endpoint are unchanged.
 KAFKA_CID=$(docker run -d --rm \
     -p 19092:9092 \
@@ -193,7 +193,7 @@ mkdir -p "$TRANSFORM_DIR"
 # Order matters: VRL programs are applied sequentially in filename order.
 
 cat > "$TRANSFORM_DIR/01_routing.vrl" <<'VRL'
-# Conditional routing — exercises string ops, branching, abort
+# Conditional routing -- exercises string ops, branching, abort
 if exists(.level) {
     .level = downcase!(string!(.level))
 } else {
@@ -212,7 +212,7 @@ if .level == "error" || .level == "critical" {
 VRL
 
 cat > "$TRANSFORM_DIR/02_kv_extract.vrl" <<'VRL'
-# Extract k=v from .message — exercises parse_key_value + numeric coercion
+# Extract k=v from .message -- exercises parse_key_value + numeric coercion
 if exists(.message) && is_string(.message) {
     msg = string!(.message)
     # Fast skip if message looks like JSON (starts with {); 03 will handle.
@@ -231,7 +231,7 @@ if exists(.message) && is_string(.message) {
 VRL
 
 cat > "$TRANSFORM_DIR/03_json_unflatten.vrl" <<'VRL'
-# Parse embedded JSON in .message — exercises parse_json + field promotion
+# Parse embedded JSON in .message -- exercises parse_json + field promotion
 if exists(.message) && is_string(.message) {
     msg = string!(.message)
     if starts_with(msg, "{") {
