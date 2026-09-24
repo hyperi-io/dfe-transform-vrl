@@ -47,7 +47,6 @@ use scalo::SelfRegulationGovernor;
 use scalo::config::shared::SharedConfig;
 use scalo::logger::{log_sampled, security};
 use scalo::memory::MemoryGuard;
-use scalo::metrics::TransportKind;
 use scalo::scaling::ScalingPressure;
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
 use scalo::transport::kafka::{KafkaTransport, total_consumer_lag};
@@ -334,6 +333,10 @@ where
     // -- set to the configured sink topic in `transform_records`). A non-Ok
     // result is a TERMINAL ack-barrier error: the driver skips the commit and the
     // whole block is re-delivered (at-least-once -- duplicates, never loss).
+    //
+    // The sender counts its own `transport_*` series under its own transport
+    // label, so the sink records only the metrics no transport emits.
+    let sink_backend = sender.name();
     let sink = {
         let transform_metrics = Arc::clone(transform_metrics);
         let sink_topic = sink_topic.clone();
@@ -361,15 +364,13 @@ where
                         // scaling ticker reads it for `set_circuit_open`).
                         circuit_open.store(false, Ordering::Release);
                         if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.transport_sent(TransportKind::Kafka, record_count);
                             dfe.records_delivered(record_count);
-                            dfe.transport_send_duration("kafka", elapsed);
                         }
                         if let Some(ref app) = transform_metrics.app {
                             app.record_processed(record_count);
                         }
                         if let Some(ref sm) = transform_metrics.sink {
-                            sm.record_duration("kafka", elapsed);
+                            sm.record_duration(sink_backend, elapsed);
                         }
                         trace!(
                             records = record_count,
@@ -388,9 +389,6 @@ where
                         Ok(())
                     }
                     SendResult::Backpressured => {
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.transport_backpressured("kafka", record_count);
-                        }
                         if let Some(ref bp) = transform_metrics.backpressure {
                             bp.record_event();
                         }
@@ -404,9 +402,6 @@ where
                         // relieve a dead broker; the circuit is the gate).
                         circuit_open.store(true, Ordering::Release);
                         transform_metrics.record_produce_error();
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.transport_send_errors(TransportKind::Kafka, record_count);
-                        }
                         Err(EngineError::Sink(format!("produce failed: {e}")))
                     }
                 }
@@ -476,9 +471,9 @@ fn transform_records(
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.records_received(batch_len as u64);
     }
-    // Layer 2: AppMetrics (common group)
+    // Layer 2: AppMetrics (common group). Its `records_received_total` is the
+    // platform series above, so counting it here as well doubles every record.
     if let Some(ref app) = transform_metrics.app {
-        app.record_received(batch_len as u64);
         app.record_bytes_received(batch_bytes);
     }
     // Layer 3: app-specific
@@ -824,5 +819,193 @@ mod tests {
             None,
         );
         assert_eq!(out.len(), 1, "only the valid record survives");
+    }
+
+    use std::time::Duration;
+
+    use scalo::metrics::MetricsManager;
+    use scalo::transport::{MemoryConfig, MemoryTransport};
+    use scalo::worker::WorkerPoolConfig;
+    use scalo::worker::engine::BatchProcessingConfig;
+
+    use crate::metrics::capture::Capture;
+
+    /// `n` JSON records a passthrough program keeps.
+    fn json_records(n: usize) -> Vec<Record> {
+        (0..n)
+            .map(|i| Record {
+                payload: Bytes::from(format!(r#"{{"id":{i}}}"#)),
+                key: None,
+                headers: Vec::new(),
+                metadata: RecordMeta {
+                    timestamp_ms: None,
+                    format: PayloadFormat::Json,
+                },
+            })
+            .collect()
+    }
+
+    /// The platform and app metric groups both name `records_received_total`,
+    /// and one name with no labels is one series.
+    #[test]
+    fn a_received_record_is_counted_once() {
+        let capture = Capture::default();
+        let manager = MetricsManager::new("test_received_once");
+        let program = crate::engine::compiler::compile_vrl(".", None)
+            .expect("VRL compile")
+            .program;
+        let sink_topic: Arc<str> = Arc::from("out");
+
+        let out = metrics::with_local_recorder(&capture, || {
+            let m = TransformMetrics::new(&manager, "0.1.0", "ffff");
+            transform_records(
+                json_records(3),
+                &program,
+                PayloadFormat::Json,
+                &sink_topic,
+                &m,
+                None,
+            )
+        });
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            capture.counter("records_received_total", &[]),
+            Some(3),
+            "three records received must count three"
+        );
+    }
+
+    /// A runtime whose tasks all run on this thread, so a local recorder sees them.
+    fn this_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    /// Run three records from a memory source through the pipeline into `sink`,
+    /// returning once the sink has delivered all three.
+    async fn deliver_three<S: TransportSender>(
+        manager: &MetricsManager,
+        capture: &Capture,
+        sink: &S,
+    ) {
+        let source = MemoryTransport::new(&MemoryConfig {
+            buffer_size: 16,
+            recv_timeout_ms: 10,
+            ..MemoryConfig::default()
+        })
+        .expect("memory source");
+        for record in json_records(3) {
+            let sent = source.send("in", record.payload).await;
+            assert!(matches!(sent, SendResult::Ok), "{sent:?}");
+        }
+
+        let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+            min_threads: 1,
+            max_threads: 1,
+            ..Default::default()
+        }));
+        let engine = BatchEngine::with_pool(pool, BatchProcessingConfig::default());
+        let program = Arc::new(
+            crate::engine::compiler::compile_vrl(".", None)
+                .expect("VRL compile")
+                .program,
+        );
+        let hot_config = SharedConfig::new(HotConfig {
+            batch_size: 10,
+            batch_timeout_ms: 50,
+            key_field: ".id".to_string(),
+        });
+        let metrics = Arc::new(TransformMetrics::new(manager, "0.1.0", "ffff"));
+        let shutdown = CancellationToken::new();
+
+        let run = run_governed_pipeline(
+            &engine,
+            &source,
+            sink,
+            program,
+            hot_config,
+            PayloadFormat::Auto,
+            &metrics,
+            Arc::new(AtomicBool::new(false)),
+            shutdown.clone(),
+            None,
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let watch = async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while capture.counter("records_delivered_total", &[]) != Some(3) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the sink never delivered the three records"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            shutdown.cancel();
+        };
+        let (result, ()) = tokio::join!(run, watch);
+        result.expect("pipeline");
+    }
+
+    /// The sink's metrics name the transport the records went over, and no
+    /// series claims one they did not.
+    fn assert_sink_metered_as(capture: &Capture, backend: &str) {
+        for label in ["transport", "backend"] {
+            assert_eq!(
+                capture.series_labelled(label, "kafka"),
+                Vec::<String>::new(),
+                "no record went over Kafka, so no series may say {label}=kafka"
+            );
+        }
+        assert!(
+            capture.has_histogram("sink_duration_seconds", &[("backend", backend)]),
+            "sink_duration_seconds must carry backend={backend}"
+        );
+    }
+
+    #[test]
+    fn a_grpc_sink_is_metered_as_grpc() {
+        let capture = Capture::default();
+        let manager = MetricsManager::new("test_grpc_sink");
+
+        metrics::with_local_recorder(&capture, || {
+            this_thread_runtime().block_on(async {
+                // The downstream stage, the loader on a real deployment.
+                let downstream = GrpcTransport::new(&GrpcConfig::server("127.0.0.1:0"))
+                    .await
+                    .expect("downstream listener");
+                let addr = downstream.local_addr().expect("bound address");
+                let sink = AnySender::Grpc(
+                    GrpcTransport::new(&GrpcConfig::client(&format!("http://{addr}")))
+                        .await
+                        .expect("sink client"),
+                );
+                deliver_three(&manager, &capture, &sink).await;
+            });
+        });
+
+        assert_sink_metered_as(&capture, "grpc");
+    }
+
+    #[test]
+    fn a_memory_sink_is_metered_as_memory() {
+        let capture = Capture::default();
+        let manager = MetricsManager::new("test_memory_sink");
+
+        metrics::with_local_recorder(&capture, || {
+            this_thread_runtime().block_on(async {
+                let sink = MemoryTransport::new(&MemoryConfig {
+                    buffer_size: 16,
+                    ..MemoryConfig::default()
+                })
+                .expect("memory sink");
+                deliver_three(&manager, &capture, &sink).await;
+            });
+        });
+
+        assert_sink_metered_as(&capture, "memory");
     }
 }
