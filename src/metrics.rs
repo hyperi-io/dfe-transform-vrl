@@ -282,34 +282,87 @@ impl Default for TransformMetrics {
     }
 }
 
+/// A recorder for tests that reads back what production code wrote, which
+/// scalo's write-only metric handles cannot.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
+#[allow(clippy::unwrap_used)]
+pub(crate) mod capture {
     use std::collections::HashMap;
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use scalo::memory::{MemoryGuardConfig, UsageSource};
-
-    /// Recorder that keeps every gauge's last value by name, so a test can
-    /// read back what production code wrote. scalo's gauges are write-only.
+    /// Every counter by its name and labels, as a Prometheus series is keyed,
+    /// every gauge's last value by name, and every histogram key registered.
     #[derive(Default)]
-    struct GaugeCapture {
+    pub struct Capture {
+        counters: Mutex<HashMap<metrics::Key, Arc<AtomicU64>>>,
         gauges: Mutex<HashMap<String, Arc<AtomicU64>>>,
+        histograms: Mutex<Vec<metrics::Key>>,
     }
 
-    impl GaugeCapture {
-        fn read(&self, name: &str) -> Option<f64> {
+    /// The labels of `key` as owned pairs, sorted.
+    fn labels_of(key: &metrics::Key) -> Vec<(String, String)> {
+        let mut labels: Vec<(String, String)> = key
+            .labels()
+            .map(|l| (l.key().to_string(), l.value().to_string()))
+            .collect();
+        labels.sort();
+        labels
+    }
+
+    /// Whether `key` is `name` carrying exactly `labels`.
+    fn is_series(key: &metrics::Key, name: &str, labels: &[(&str, &str)]) -> bool {
+        let mut want: Vec<(String, String)> = labels
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        want.sort();
+        key.name() == name && labels_of(key) == want
+    }
+
+    impl Capture {
+        /// Last value of the gauge `name`.
+        pub fn gauge(&self, name: &str) -> Option<f64> {
             self.gauges
                 .lock()
                 .unwrap()
                 .get(name)
                 .map(|g| f64::from_bits(g.load(Ordering::Acquire)))
         }
+
+        /// Value of the counter series `name` with exactly `labels`.
+        pub fn counter(&self, name: &str, labels: &[(&str, &str)]) -> Option<u64> {
+            self.counters
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(key, _)| is_series(key, name, labels))
+                .map(|(_, cell)| cell.load(Ordering::Acquire))
+        }
+
+        /// Whether the histogram series `name` with exactly `labels` was registered.
+        pub fn has_histogram(&self, name: &str, labels: &[(&str, &str)]) -> bool {
+            self.histograms
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|key| is_series(key, name, labels))
+        }
+
+        /// Every counter and histogram series carrying `label` = `value`.
+        pub fn series_labelled(&self, label: &str, value: &str) -> Vec<String> {
+            let counters = self.counters.lock().unwrap();
+            let histograms = self.histograms.lock().unwrap();
+            counters
+                .keys()
+                .chain(histograms.iter())
+                .filter(|key| labels_of(key).iter().any(|(k, v)| k == label && v == value))
+                .map(|key| key.name().to_string())
+                .collect()
+        }
     }
 
-    impl metrics::Recorder for GaugeCapture {
+    impl metrics::Recorder for Capture {
         fn describe_counter(
             &self,
             _: metrics::KeyName,
@@ -334,10 +387,17 @@ mod tests {
 
         fn register_counter(
             &self,
-            _: &metrics::Key,
+            key: &metrics::Key,
             _: &metrics::Metadata<'_>,
         ) -> metrics::Counter {
-            metrics::Counter::noop()
+            let cell = Arc::clone(
+                self.counters
+                    .lock()
+                    .unwrap()
+                    .entry(key.clone())
+                    .or_default(),
+            );
+            metrics::Counter::from_arc(cell)
         }
 
         fn register_gauge(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
@@ -353,12 +413,22 @@ mod tests {
 
         fn register_histogram(
             &self,
-            _: &metrics::Key,
+            key: &metrics::Key,
             _: &metrics::Metadata<'_>,
         ) -> metrics::Histogram {
+            self.histograms.lock().unwrap().push(key.clone());
             metrics::Histogram::noop()
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::capture::Capture;
+    use super::*;
+
+    use scalo::memory::{MemoryGuardConfig, UsageSource};
 
     const FIXTURE_USED_BYTES: u64 = 123_456_789;
     const FIXTURE_LIMIT_BYTES: u64 = 1 << 30;
@@ -366,7 +436,7 @@ mod tests {
     /// Transform metrics whose gauges land in `capture`, plus a guard reading a
     /// fixture cgroup that reports [`FIXTURE_USED_BYTES`] in use.
     fn captured_metrics_and_guard(
-        capture: &GaugeCapture,
+        capture: &Capture,
         namespace: &str,
     ) -> (TransformMetrics, MemoryGuard, tempfile::TempDir) {
         let manager = MetricsManager::new(namespace);
@@ -391,19 +461,19 @@ mod tests {
 
     #[test]
     fn record_memory_writes_the_guard_reading_to_the_app_gauges() {
-        let capture = GaugeCapture::default();
+        let capture = Capture::default();
         let (m, guard, _cgroup) = captured_metrics_and_guard(&capture, "test_record_memory");
-        assert_eq!(capture.read("memory_used_bytes"), Some(0.0));
+        assert_eq!(capture.gauge("memory_used_bytes"), Some(0.0));
 
         m.record_memory(&guard);
 
         assert_eq!(
-            capture.read("memory_used_bytes"),
+            capture.gauge("memory_used_bytes"),
             Some(123_456_789.0),
             "memory_used_bytes must carry the guard's current_bytes"
         );
         assert_eq!(
-            capture.read("memory_limit_bytes"),
+            capture.gauge("memory_limit_bytes"),
             Some(1_073_741_824.0),
             "memory_limit_bytes must carry the guard's limit_bytes"
         );
@@ -411,14 +481,14 @@ mod tests {
 
     #[tokio::test]
     async fn memory_gauge_task_writes_the_gauges_and_stops_on_shutdown() {
-        let capture = GaugeCapture::default();
+        let capture = Capture::default();
         let (m, guard, _cgroup) = captured_metrics_and_guard(&capture, "test_memory_gauge_task");
         let shutdown = CancellationToken::new();
         let task = spawn_memory_gauge_task(Arc::new(m), Arc::new(guard), shutdown.clone());
 
         // The interval's first tick fires at once; allow a loaded host 5s.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while capture.read("memory_used_bytes") != Some(123_456_789.0) {
+        while capture.gauge("memory_used_bytes") != Some(123_456_789.0) {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the task never wrote memory_used_bytes"
