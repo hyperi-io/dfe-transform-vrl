@@ -334,6 +334,18 @@ pub(crate) mod capture {
                 .map(|(_, cell)| cell.load(Ordering::Acquire))
         }
 
+        /// Sum of the counter `name` across every label set, as a `sum()` over
+        /// the name reads it.
+        pub fn counter_total(&self, name: &str) -> u64 {
+            self.counters
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| key.name() == name)
+                .map(|(_, cell)| cell.load(Ordering::Acquire))
+                .sum()
+        }
+
         /// Whether the histogram series `name` with exactly `labels` was registered.
         pub fn has_histogram(&self, name: &str, labels: &[(&str, &str)]) -> bool {
             self.histograms
@@ -604,82 +616,28 @@ mod tests {
         m.set_enrichment_rows("empty", 0);
     }
 
-    /// Counts one named counter across every label set, as a `sum()` over the
-    /// name reads it.
-    struct CountingRecorder {
-        name: &'static str,
-        hits: Arc<AtomicU64>,
-    }
-
-    impl metrics::Recorder for CountingRecorder {
-        fn describe_counter(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-        fn describe_gauge(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-        fn describe_histogram(
-            &self,
-            _: metrics::KeyName,
-            _: Option<metrics::Unit>,
-            _: metrics::SharedString,
-        ) {
-        }
-
-        fn register_counter(
-            &self,
-            key: &metrics::Key,
-            _: &metrics::Metadata<'_>,
-        ) -> metrics::Counter {
-            if key.name() == self.name {
-                metrics::Counter::from_arc(Arc::clone(&self.hits))
-            } else {
-                metrics::Counter::noop()
-            }
-        }
-
-        fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
-            metrics::Gauge::noop()
-        }
-
-        fn register_histogram(
-            &self,
-            _: &metrics::Key,
-            _: &metrics::Metadata<'_>,
-        ) -> metrics::Histogram {
-            metrics::Histogram::noop()
-        }
-    }
-
-    /// Run `f` with a thread-local recorder counting `name`.
-    fn counted(name: &'static str, f: impl FnOnce()) -> u64 {
-        let hits = Arc::new(AtomicU64::new(0));
-        let recorder = CountingRecorder {
-            name,
-            hits: Arc::clone(&hits),
-        };
-        metrics::with_local_recorder(&recorder, f);
-        hits.load(Ordering::Acquire)
-    }
-
     #[test]
     fn each_error_counts_once_across_records_error_total() {
+        let capture = Capture::default();
         let manager = MetricsManager::with_config(scalo::metrics::MetricsConfig::offline(""));
-        let hits = counted("records_error_total", || {
+        metrics::with_local_recorder(&capture, || {
             let m = TransformMetrics::new(&manager, "0.1.0", "eeee");
             m.record_deser_error();
             m.record_transform_error();
             m.record_produce_error();
         });
-        assert_eq!(hits, 3, "three errors read as three across every stage");
+        assert_eq!(
+            capture.counter_total("records_error_total"),
+            3,
+            "three errors read as three across every stage"
+        );
+        for stage in ["deserialise", "transform", "produce"] {
+            assert_eq!(
+                capture.counter("records_error_total", &[("stage", stage)]),
+                Some(1),
+                "one {stage} error lands in its stage series"
+            );
+        }
     }
 
     #[test]
