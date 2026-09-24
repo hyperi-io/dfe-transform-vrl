@@ -56,8 +56,6 @@ bytes = ">=1.7, <2"
 #     (the transitive wasm-timer / instant 0.1.13 chain). The wrapper does
 #     no outbound HTTP; scalo's HttpClient was speculatively enabled and
 #     never wired up.
-#   - `transport-grpc` — would pull tonic + prost + tonic-prost-build +
-#     prost-build. The wrapper does Kafka in/out only.
 # When wiring HTTP/gRPC sinks (e.g. for enrichment refresh), re-enable the
 # specific feature at that point — don't pre-enable speculatively.
 #
@@ -66,7 +64,7 @@ bytes = ">=1.7, <2"
 # owns the inbound pause-partitions brake + AIMD byte budget over the shared
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
-scalo = { version = ">=2.12.3, <3", features = [
+scalo = { version = ">=2.12.6, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -176,7 +174,7 @@ testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = ">=2.12.3, <3", features = ["transport-memory"] }
+scalo = { version = ">=2.12.6, <3", features = ["transport-memory"] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
