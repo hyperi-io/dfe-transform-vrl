@@ -394,9 +394,9 @@ where
                         if let Some(ref bp) = transform_metrics.backpressure {
                             bp.record_event();
                         }
-                        // Terminal: skip commit, re-deliver the block. The
-                        // inbound brake + AIMD budget will ease intake.
-                        Err(EngineError::Sink("producer backpressured".to_string()))
+                        // Transient: the driver holds this block and re-sinks it
+                        // after a jittered backoff; nothing commits past it.
+                        Err(scalo::TransportError::Backpressure.into())
                     }
                     SendResult::Fatal(e) => {
                         // Sink unreachable -> open the outbound circuit latch so
