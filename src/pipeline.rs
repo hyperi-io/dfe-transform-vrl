@@ -26,8 +26,9 @@
 //!    runs the compiled VRL program in parallel on the worker pool, and
 //!    re-serialises the surviving events back to their original wire format.
 //!    Records dropped by a VRL `abort` or a transform error are removed from
-//!    the block; the block's `commit_tokens` (the source acks) flow through
-//!    untouched, so a fan-in NEVER under-acks the source.
+//!    the block, which then releases `Dropped`; the block's `commit_tokens`
+//!    (the source acks) flow through untouched, so a fan-in NEVER under-acks
+//!    the source.
 //! 3. The loop sends the whole out-batch via the sender's
 //!    [`TransportSender::send_batch`].
 //! 4. Only once the send returns `Ok` does the loop release the block's
@@ -380,9 +381,10 @@ where
     // ---- process: bytes -> VRL Value -> bytes, in parallel on the pool -------
     //
     // Runs the compiled VRL program across the block. Records dropped by a VRL
-    // `abort` or a transform/(de)serialise error are removed from the block; the
-    // commit_tokens flow through untouched via `map_records`, so a fan-in never
-    // under-acks the source offsets (at-least-once on the surviving set).
+    // `abort` or a transform/(de)serialise error are removed from the block and
+    // counted in a marker record the sink takes back out; the commit_tokens flow
+    // through untouched via `map_records`, so a fan-in never under-acks the
+    // source offsets (at-least-once on the surviving set).
     // `hot_config` is retained for its other live fields (validated + reloaded)
     // even though the partition-key path is dormant until scalo #37 lands.
     let _ = &hot_config;
@@ -393,7 +395,7 @@ where
         let sink_topic = Arc::<str>::from(sink_topic.as_str());
         move |batch: WorkBatch<R::Token>| -> Result<WorkBatch<R::Token>, EngineError> {
             Ok(batch.map_records(|records| {
-                transform_records(
+                transform_block(
                     records,
                     &program,
                     payload_format,
@@ -421,15 +423,22 @@ where
         move |out: &WorkBatch<R::Token>, pieces: &BlockPieces<'_>| {
             let transform_metrics = Arc::clone(&transform_metrics);
             let circuit_open = Arc::clone(&circuit_open);
-            // A piece per attempt, so a block the sender filtered out rather
-            // than sent is released `Dropped`, never `Delivered`.
-            let filtered = pieces.piece();
             // The engine's `Sink` bound returns an OWNED future (it cannot borrow
             // `out`), so clone the records into the async block. This is cheap:
             // `Record` is `Bytes` (refcount bump) + `Arc<str>` key -- N refcount
             // bumps, NOT N payload copies. Zero-copy on the wire is preserved.
-            let records: Vec<Record> = out.records.clone();
+            let (records, dropped) = split_dropped(&out.records);
+            if dropped > 0 {
+                // Records `process` removed: the block releases `Dropped`.
+                pieces.piece().report(DeliveryStatus::Dropped);
+            }
+            // A piece per attempt, so a block the sender filtered out rather
+            // than sent is released `Dropped`, never `Delivered`.
+            let filtered = (!records.is_empty()).then(|| pieces.piece());
             async move {
+                let Some(filtered) = filtered else {
+                    return Ok(());
+                };
                 let start = Instant::now();
                 let result = sender.send_batch(&records).await;
                 settle_send(
@@ -546,6 +555,69 @@ fn settle_send(
             Err(EngineError::Sink(format!("produce failed: {e}")))
         }
     }
+}
+
+/// Header of the marker record [`transform_block`] appends, carrying how many
+/// records the transform removed from the block.
+const DROPPED_HEADER: &str = "x-dfe-transform-vrl-dropped";
+
+/// [`transform_records`] over one block, with a marker record appended when
+/// the transform removed any.
+///
+/// `process` has no way to report a status of its own, so the count rides in
+/// the block to the sink, which takes the marker out and releases the block
+/// `Dropped`. A block whose every record was removed still reaches the sink
+/// that way.
+fn transform_block(
+    records: Vec<Record>,
+    program: &Program,
+    payload_format: PayloadFormat,
+    sink_topic: &Arc<str>,
+    transform_metrics: &TransformMetrics,
+    worker_pool: Option<&Arc<AdaptiveWorkerPool>>,
+) -> Vec<Record> {
+    let received = records.len();
+    let mut out = transform_records(
+        records,
+        program,
+        payload_format,
+        sink_topic,
+        transform_metrics,
+        worker_pool,
+    );
+    let dropped = received.saturating_sub(out.len());
+    if dropped > 0 {
+        out.push(Record {
+            payload: Bytes::new(),
+            key: None,
+            headers: vec![(DROPPED_HEADER.to_string(), dropped.to_string().into_bytes())],
+            metadata: RecordMeta {
+                timestamp_ms: None,
+                format: PayloadFormat::Json,
+            },
+        });
+    }
+    out
+}
+
+/// The records of a block to send, and how many [`transform_block`] removed.
+fn split_dropped(records: &[Record]) -> (Vec<Record>, u64) {
+    let mut dropped = 0_u64;
+    let send = records
+        .iter()
+        .filter(|record| {
+            let Some((_, count)) = record.headers.iter().find(|(k, _)| k == DROPPED_HEADER) else {
+                return true;
+            };
+            dropped += std::str::from_utf8(count)
+                .ok()
+                .and_then(|count| count.parse::<u64>().ok())
+                .unwrap_or(1);
+            false
+        })
+        .cloned()
+        .collect();
+    (send, dropped)
 }
 
 /// Transform a block of [`Record`]s through the VRL program.
@@ -755,6 +827,12 @@ fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8
 // destination topic (no slot for a partition key via `send`/`send_batch`), so
 // the produce path keys on the sink topic and there is nothing for an extractor
 // to feed. Re-introduce a per-record partition key once #37 lands.
+
+// The integration and e2e tests' port picker, so a listener here also binds below 10240.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+#[path = "../tests/common/ports.rs"]
+mod test_ports;
 
 #[cfg(test)]
 #[allow(
@@ -1143,6 +1221,169 @@ mod tests {
             capture.counter("records_received_total", &[]),
             Some(3),
             "three records received must count three"
+        );
+    }
+
+    /// JSON records carrying `keep`, for a program that aborts the rest.
+    fn keep_records(keep: &[bool]) -> Vec<Record> {
+        keep.iter()
+            .enumerate()
+            .map(|(i, keep)| Record {
+                payload: Bytes::from(format!(r#"{{"id":{i},"keep":{keep}}}"#)),
+                key: None,
+                headers: Vec::new(),
+                metadata: RecordMeta {
+                    timestamp_ms: None,
+                    format: PayloadFormat::Json,
+                },
+            })
+            .collect()
+    }
+
+    /// A program that aborts every record not marked `keep`.
+    fn abort_unkept() -> Program {
+        crate::engine::compiler::compile_vrl("if .keep != true { abort }", None)
+            .expect("VRL compile")
+            .program
+    }
+
+    /// The marker carries exactly the records the transform removed, and never
+    /// reaches the records the sink sends.
+    #[test]
+    fn a_block_counts_the_records_the_transform_removed() {
+        let program = abort_unkept();
+        let metrics = TransformMetrics::default();
+        let sink_topic: Arc<str> = Arc::from("out");
+        let block = |keep: &[bool]| {
+            let out = transform_block(
+                keep_records(keep),
+                &program,
+                PayloadFormat::Json,
+                &sink_topic,
+                &metrics,
+                None,
+            );
+            (out.len(), split_dropped(&out))
+        };
+
+        let (len, (send, dropped)) = block(&[true, false, true, false]);
+        assert_eq!((len, send.len(), dropped), (3, 2, 2));
+        assert!(
+            send.iter()
+                .all(|r| r.headers.is_empty() && !r.payload.is_empty())
+        );
+
+        let (len, (send, dropped)) = block(&[false, false]);
+        assert_eq!(
+            (len, send.len(), dropped),
+            (1, 0, 2),
+            "an all-dropped block still carries its marker to the sink"
+        );
+
+        let (len, (send, dropped)) = block(&[true, true]);
+        assert_eq!(
+            (len, send.len(), dropped),
+            (2, 2, 0),
+            "nothing removed, no marker"
+        );
+    }
+
+    use super::test_ports as ports;
+
+    /// Records VRL removes release their Push `Dropped`, never `Delivered`,
+    /// whether some of the request survives or none of it does.
+    #[test]
+    fn records_vrl_removes_release_their_push_dropped() {
+        let capture = Capture::default();
+        let sent = metrics::with_local_recorder(&capture, || {
+            this_thread_runtime().block_on(async {
+                let memory_guard =
+                    Arc::new(MemoryGuard::new(scalo::memory::MemoryGuardConfig::default()));
+                let mut bound = None;
+                for _ in 0..20 {
+                    let port = ports::free_port();
+                    let mut config = Config::default();
+                    config.source.transport = crate::config::Transport::Direct;
+                    config.source.listen = format!("127.0.0.1:{port}");
+                    if let Ok(listener) = start_push_listener(&config, None, &memory_guard).await {
+                        bound = Some((port, listener));
+                        break;
+                    }
+                }
+                let (port, listener) = bound.expect("a Push listener on a free port");
+                let pusher =
+                    GrpcTransport::new(&GrpcConfig::client(&format!("http://127.0.0.1:{port}")))
+                        .await
+                        .expect("push client");
+                let sink = MemoryTransport::new(&MemoryConfig {
+                    buffer_size: 16,
+                    recv_timeout_ms: 10,
+                    ..MemoryConfig::default()
+                })
+                .expect("memory sink");
+                let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+                    min_threads: 1,
+                    max_threads: 1,
+                    ..Default::default()
+                }));
+                let engine = BatchEngine::with_pool(pool, BatchProcessingConfig::default());
+                let shutdown = CancellationToken::new();
+                let transform_metrics = Arc::new(TransformMetrics::default());
+
+                let run = run_governed_pipeline(
+                    &engine,
+                    &listener,
+                    &sink,
+                    Arc::new(abort_unkept()),
+                    SharedConfig::new(HotConfig {
+                        batch_size: 10,
+                        batch_timeout_ms: 50,
+                        key_field: String::new(),
+                    }),
+                    PayloadFormat::Json,
+                    &transform_metrics,
+                    Arc::new(AtomicBool::new(false)),
+                    shutdown.clone(),
+                    None,
+                    "out".to_string(),
+                    Arc::new(AtomicBool::new(false)),
+                );
+                let push = async {
+                    // Each request is answered only once its records are released.
+                    for keep in [&[true, false][..], &[false, false], &[true]] {
+                        let answer = pusher.send_batch(&keep_records(keep)).await;
+                        assert!(matches!(answer, SendResult::Ok), "{keep:?}: {answer:?}");
+                    }
+                    let sent = scalo::transport::TransportReceiver::recv(&sink, 16)
+                        .await
+                        .expect("sink recv")
+                        .records;
+                    shutdown.cancel();
+                    sent
+                };
+                let (result, sent) = tokio::join!(run, push);
+                result.expect("pipeline");
+                sent
+            })
+        });
+
+        let released = |outcome| {
+            capture.counter(
+                "transport_ack_released_total",
+                &[("transport", "grpc"), ("outcome", outcome)],
+            )
+        };
+        assert_eq!(
+            released("dropped"),
+            Some(2),
+            "the two requests VRL cut into"
+        );
+        assert_eq!(released("delivered"), Some(1), "the request VRL kept whole");
+        assert_eq!(sent.len(), 2, "only the kept records are sent");
+        assert!(
+            sent.iter()
+                .all(|r| r.headers.is_empty() && !r.payload.is_empty()),
+            "the marker never reaches the sink's wire"
         );
     }
 

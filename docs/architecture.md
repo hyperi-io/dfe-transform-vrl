@@ -83,23 +83,9 @@ the batch send succeeds. A crash between send and release re-delivers the whole
 block, so **VRL programs must be idempotent**. There is no exactly-once path and
 no per-record commit to fall back on.
 
-**A Push is answered only once its records are delivered.** The Push listener is
-built armed, so from its first request a sender waits until the transformed
-records are confirmed downstream -- a Kafka delivery report, or the next hop's
-own answer. A failed or refused send is retried until the hold runs out (18 s at
-most, less when the sender's deadline is shorter), and the sender is then
-answered `UNAVAILABLE` and retries. The send deadline to the next hop is 15 s,
-inside that hold: the gRPC sink's deadline, or the Kafka producer's
-`message.timeout.ms`, capped there unless `librdkafka_options` sets it. A block
-the sink filters out rather than sends releases as dropped, never delivered.
-`source.acknowledgements.enabled: false` answers at receipt instead, and a
-crash or failed send then loses what was answered.
+**A Push is answered only once its records are delivered.** The listener is built armed, so a sender waits for a Kafka delivery report or the next hop's own answer. A failed or refused send is retried until the hold runs out (at most 18 s, less under a shorter sender deadline), then answered `UNAVAILABLE`. The next hop gets 15 s inside that hold: the gRPC sink's deadline, or Kafka's `message.timeout.ms` unless `librdkafka_options` sets it. `source.acknowledgements.enabled: false` answers at receipt, and a crash or failed send then loses what was answered.
 
-**Dropped records still ack.** When a VRL `abort` or a transform error removes a
-record from a block, the block's `commit_tokens` -- the source offsets -- flow
-through untouched. A transform that filters most of its input therefore never
-under-acks its source, and a pipeline cannot wedge because a batch emitted fewer
-records than it consumed.
+**Dropped records still ack.** When a VRL `abort` or a transform error removes a record from a block, the block's `commit_tokens` -- the source offsets -- flow through untouched, and the block releases as dropped, not delivered. A block the sink filters out rather than sends releases the same way. A transform that filters most of its input therefore never under-acks its source, and a pipeline cannot wedge because a batch emitted fewer records than it consumed.
 
 **The outbound drain is never gated.** Self-regulation brakes intake only.
 Applying the same backpressure to the producer would deadlock the pipeline: the

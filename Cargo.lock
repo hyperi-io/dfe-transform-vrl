@@ -1254,9 +1254,9 @@ dependencies = [
 
 [[package]]
 name = "domain"
-version = "0.12.1"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c469892dddfeff64ecfdbc64cf059c77fb0decaeccd4d5d484394bdd6312bac"
+checksum = "5b68712c02bff2348323c1441ab2e8528e32af4f8f9edf29356356290328c8e6"
 dependencies = [
  "bumpalo",
  "bytes",
@@ -1275,9 +1275,9 @@ dependencies = [
 
 [[package]]
 name = "domain-macros"
-version = "0.12.1"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fef7ef74e413e36d5364db163ca577ccb56f2f74377705d5f920ee3e1544127"
+checksum = "4fba8fbc4580c745dfeab102232dcb729f030ac3e2c9ff5374a9dfd6dc9ddf8e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1850,7 +1850,6 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
- "allocator-api2",
  "foldhash 0.2.0",
 ]
 
@@ -4506,7 +4505,7 @@ dependencies = [
 [[package]]
 name = "scalo"
 version = "2.12.0"
-source = "git+https://github.com/hyperi-io/scalo-rs?branch=fix%2Fat-least-once#42a88ba54d5f37f8dcc271fb7088639dd44fd828"
+source = "git+https://github.com/hyperi-io/scalo-rs?branch=fix%2Fat-least-once#c1a475f557d9c75e5803a964a6c0b98eb47f1ff9"
 dependencies = [
  "axum",
  "backon",
