@@ -51,7 +51,6 @@ pub struct TransformMetrics {
     pub deserialise_duration: metrics::Histogram,
     pub serialise_duration: metrics::Histogram,
     pub batch_duration: metrics::Histogram,
-    pub records_error: metrics::Counter,
     pub records_format: metrics::Counter,
     pub programs_loaded: metrics::Gauge,
     pub abort_total: metrics::Counter,
@@ -100,10 +99,6 @@ impl TransformMetrics {
                 "batch_duration_seconds",
                 "End-to-end batch latency (consume to commit)",
             ),
-            records_error: manager.counter(
-                "records_error_total",
-                "Records that failed processing, by stage",
-            ),
             records_format: manager.counter(
                 "records_format_total",
                 "Records received by detected format",
@@ -133,11 +128,13 @@ impl TransformMetrics {
     }
 
     /// Record a deserialise error.
+    ///
+    /// Each error lands in one `stage` series only. An unlabelled increment as
+    /// well would be a second series under the same name, and a `sum()` across
+    /// labels would count the error twice.
     #[inline]
     pub fn record_deser_error(&self) {
-        self.records_error.increment(1);
-        // Labelled counter for stage breakdown. Bare name -- the namespace
-        // prefix layer prepends `dfe_transform_vrl_` once.
+        // Bare name -- the namespace prefix layer prepends `dfe_transform_vrl_` once.
         metrics::counter!(
             "records_error_total",
             "stage" => "deserialise"
@@ -148,7 +145,6 @@ impl TransformMetrics {
     /// Record a VRL transform error.
     #[inline]
     pub fn record_transform_error(&self) {
-        self.records_error.increment(1);
         metrics::counter!(
             "records_error_total",
             "stage" => "transform"
@@ -159,7 +155,6 @@ impl TransformMetrics {
     /// Record a produce error.
     #[inline]
     pub fn record_produce_error(&self) {
-        self.records_error.increment(1);
         metrics::counter!(
             "records_error_total",
             "stage" => "produce"
@@ -266,7 +261,6 @@ impl Default for TransformMetrics {
             deserialise_duration: metrics::histogram!("deserialise_duration_seconds"),
             serialise_duration: metrics::histogram!("serialise_duration_seconds"),
             batch_duration: metrics::histogram!("batch_duration_seconds"),
-            records_error: metrics::counter!("records_error_total"),
             records_format: metrics::counter!("records_format_total"),
             programs_loaded: metrics::gauge!("programs_loaded"),
             abort_total: metrics::counter!("abort_total"),
@@ -338,6 +332,18 @@ pub(crate) mod capture {
                 .iter()
                 .find(|(key, _)| is_series(key, name, labels))
                 .map(|(_, cell)| cell.load(Ordering::Acquire))
+        }
+
+        /// Sum of the counter `name` across every label set, as a `sum()` over
+        /// the name reads it.
+        pub fn counter_total(&self, name: &str) -> u64 {
+            self.counters
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| key.name() == name)
+                .map(|(_, cell)| cell.load(Ordering::Acquire))
+                .sum()
         }
 
         /// Whether the histogram series `name` with exactly `labels` was registered.
@@ -608,6 +614,30 @@ mod tests {
         m.set_enrichment_rows("geo", 10_000);
         m.set_enrichment_rows("services", 50);
         m.set_enrichment_rows("empty", 0);
+    }
+
+    #[test]
+    fn each_error_counts_once_across_records_error_total() {
+        let capture = Capture::default();
+        let manager = MetricsManager::with_config(scalo::metrics::MetricsConfig::offline(""));
+        metrics::with_local_recorder(&capture, || {
+            let m = TransformMetrics::new(&manager, "0.1.0", "eeee");
+            m.record_deser_error();
+            m.record_transform_error();
+            m.record_produce_error();
+        });
+        assert_eq!(
+            capture.counter_total("records_error_total"),
+            3,
+            "three errors read as three across every stage"
+        );
+        for stage in ["deserialise", "transform", "produce"] {
+            assert_eq!(
+                capture.counter("records_error_total", &[("stage", stage)]),
+                Some(1),
+                "one {stage} error lands in its stage series"
+            );
+        }
     }
 
     #[test]
