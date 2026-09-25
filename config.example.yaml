@@ -37,7 +37,6 @@ pipeline:
 #   topics:
 #     - "raw_events_land"
 #   group_id: "dfe-transform-vrl-my-pipeline"
-#   format: "auto"                     # auto, json, msgpack
 #   max_buffer_bytes: 67108864         # 64 MiB consumer buffer
 #   auto_offset_reset: "latest"        # latest, earliest
 #   session_timeout_ms: 30000

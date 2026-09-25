@@ -24,7 +24,6 @@
           "events"
         ],
         "group_id": "dfe-transform-vrl",
-        "format": "auto",
         "max_buffer_bytes": 67108864,
         "sasl": {
           "enabled": false,
@@ -152,11 +151,6 @@
         "group_id": {
           "type": "string",
           "default": "dfe-transform-vrl"
-        },
-        "format": {
-          "description": "Payload format: auto, json, msgpack.",
-          "type": "string",
-          "default": "auto"
         },
         "max_buffer_bytes": {
           "description": "Maximum consumer buffer size in bytes.",

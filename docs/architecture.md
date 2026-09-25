@@ -2,18 +2,13 @@
 
 ## The problem this shape solves
 
-Reshaping events with Vector costs two things DFE cannot afford at volume.
+Reshaping events with Vector costs memory DFE cannot afford at volume.
 
 Vector has no configurable memory cap. Its internal buffers grow with
 throughput, so a Kubernetes memory limit has to be sized for the worst case
 Vector might ever reach rather than the work actually queued.
 
-Vector also has no MessagePack codec, and msgpack is the platform's primary wire
-format. Running a msgpack stream through Vector means
-`msgpack -> JSON -> VRL -> JSON -> msgpack`, which spends the CPU and the
-allocations that choosing msgpack was meant to save.
-
-Both costs buy access to Vector's non-VRL transforms, which most pipelines never
+That cost buys access to Vector's non-VRL transforms, which most pipelines never
 use. So the shape is: keep VRL, drop Vector. Compile the VRL crate into the
 binary, and let the wrapper own the buffers and the wire format.
 

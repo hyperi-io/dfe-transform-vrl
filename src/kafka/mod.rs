@@ -9,12 +9,11 @@
 //! Kafka transport layer using scalo `transport-kafka`.
 //!
 //! Wraps scalo's `KafkaTransport` to provide the consume/produce/commit
-//! cycle with format detection via scalo's `FormatDetector`.
+//! cycle.
 
 use std::collections::HashMap;
 
 use scalo::kafka_config::{KafkaSource, ServiceRole};
-use scalo::transport::PayloadFormat;
 use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
 
 use crate::config;
@@ -103,15 +102,6 @@ pub async fn create_producer(config: &KafkaConfig) -> crate::Result<KafkaTranspo
     KafkaTransport::new(config)
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))
-}
-
-/// Map our source format config to scalo's `PayloadFormat`.
-pub fn parse_format(format_str: &str) -> PayloadFormat {
-    match format_str {
-        "json" => PayloadFormat::Json,
-        "msgpack" => PayloadFormat::MsgPack,
-        _ => PayloadFormat::Auto,
-    }
 }
 
 /// Derive a `KafkaSource` from the first configured source topic.
@@ -321,27 +311,6 @@ mod tests {
             config.librdkafka_overrides.get("linger.ms"),
             Some(&"5".to_string())
         );
-    }
-
-    #[test]
-    fn test_parse_format_json() {
-        assert_eq!(parse_format("json"), PayloadFormat::Json);
-    }
-
-    #[test]
-    fn test_parse_format_msgpack() {
-        assert_eq!(parse_format("msgpack"), PayloadFormat::MsgPack);
-    }
-
-    #[test]
-    fn test_parse_format_auto() {
-        assert_eq!(parse_format("auto"), PayloadFormat::Auto);
-    }
-
-    #[test]
-    fn test_parse_format_unknown_defaults_to_auto() {
-        assert_eq!(parse_format("avro"), PayloadFormat::Auto);
-        assert_eq!(parse_format(""), PayloadFormat::Auto);
     }
 
     #[test]

@@ -9,7 +9,6 @@ source:
   topics:
     - raw_events
   group_id: dfe-transform-vrl-prod
-  format: msgpack
   sasl:
     enabled: true
     mechanism: scram_sha_512

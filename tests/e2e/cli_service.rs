@@ -67,7 +67,6 @@ fn build_test_config(
     config.source.brokers = kf.brokers.split(',').map(String::from).collect();
     config.source.group_id = group.to_string();
     config.source.topics = vec![source_topic.to_string()];
-    config.source.format = "json".to_string();
     config.source.auto_offset_reset = "earliest".to_string();
     config.source.sasl = sasl.clone();
     config.source.tls = tls.clone();

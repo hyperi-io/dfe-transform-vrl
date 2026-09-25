@@ -282,8 +282,6 @@ pub struct SourceConfig {
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
-    /// Payload format: auto, json, msgpack.
-    pub format: String,
     /// Maximum consumer buffer size in bytes.
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
@@ -313,7 +311,6 @@ impl Default for SourceConfig {
             brokers: vec!["localhost:9092".to_string()],
             topics: vec!["events".to_string()],
             group_id: "dfe-transform-vrl".to_string(),
-            format: "auto".to_string(),
             max_buffer_bytes: 67_108_864, // 64 MiB
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
@@ -544,9 +541,6 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env_string(prefix, "SOURCE_GROUP_ID") {
             self.source.group_id = v;
-        }
-        if let Some(v) = flat_env_string(prefix, "SOURCE_FORMAT") {
-            self.source.format = v;
         }
         if let Some(v) = flat_env_string(prefix, "SOURCE_SASL_USERNAME") {
             self.source.sasl.username = v;
@@ -810,7 +804,6 @@ mod tests {
         assert_eq!(config.pipeline.name, "default");
         assert_eq!(config.pipeline.batch_size, 1000);
         assert_eq!(config.pipeline.batch_timeout_ms, 100);
-        assert_eq!(config.source.format, "auto");
         assert_eq!(config.sink.compression, "zstd");
         assert_eq!(config.source.transport, Transport::Bus);
         assert_eq!(config.sink.transport, Transport::Bus);
@@ -937,7 +930,16 @@ sink:
         let deserialized: Config = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(config.pipeline.name, deserialized.pipeline.name);
         assert_eq!(config.pipeline.batch_size, deserialized.pipeline.batch_size);
-        assert_eq!(config.source.format, deserialized.source.format);
+        assert_eq!(config.source.group_id, deserialized.source.group_id);
+    }
+
+    #[test]
+    fn a_source_from_an_older_render_still_loads() {
+        // An engine render from before JSON-only still carries source.format.
+        let yaml = "source:\n  format: auto\n  group_id: cg\n";
+        let config: Config =
+            serde_yaml_ng::from_str(yaml).expect("the removed key is ignored, not refused");
+        assert_eq!(config.source.group_id, "cg");
     }
 
     #[test]
@@ -1121,7 +1123,6 @@ enrichment_tables:
             ("DFE_TRANSFORM_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
             ("DFE_TRANSFORM_SOURCE_TOPICS", Some("t1,t2")),
             ("DFE_TRANSFORM_SOURCE_GROUP_ID", Some("cg")),
-            ("DFE_TRANSFORM_SOURCE_FORMAT", Some("json")),
             ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
             ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
             ("DFE_TRANSFORM_SINK_BROKERS", Some("b3:9092")),
@@ -1143,7 +1144,6 @@ enrichment_tables:
         assert_eq!(config.source.brokers, vec!["b1:9092", "b2:9092"]);
         assert_eq!(config.source.topics, vec!["t1", "t2"]);
         assert_eq!(config.source.group_id, "cg");
-        assert_eq!(config.source.format, "json");
         assert_eq!(config.source.sasl.username, "src-user");
         assert_eq!(config.source.sasl.password.expose(), "src-pass");
         assert_eq!(config.sink.brokers, vec!["b3:9092"]);

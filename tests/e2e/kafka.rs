@@ -26,7 +26,7 @@ use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
 use scalo::config::shared::SharedConfig;
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile, KafkaTransport};
-use scalo::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
+use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
@@ -131,7 +131,6 @@ async fn round_trip(
     name: &str,
     inputs: Vec<Vec<u8>>,
     vrl: &str,
-    format: PayloadFormat,
     want: usize,
 ) -> Vec<Bytes> {
     let source_topic = common::test_topic(&format!("{name}-src"));
@@ -183,7 +182,6 @@ async fn round_trip(
                 &producer,
                 program,
                 default_hot_config(),
-                format,
                 &Arc::new(TransformMetrics::default()),
                 ready,
                 shutdown,
@@ -236,7 +234,6 @@ async fn test_produce_consume_json_transform() {
         "json",
         inputs,
         ".transformed = true\n.level = upcase!(.level)",
-        PayloadFormat::Json,
         5,
     )
     .await;
@@ -247,36 +244,6 @@ async fn test_produce_consume_json_transform() {
         assert_eq!(value["transformed"], true);
         assert_eq!(value["level"], "INFO");
     }
-}
-
-#[tokio::test]
-#[ignore = "requires live Kafka broker or testcontainers. \
-    Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
-async fn test_produce_consume_msgpack_transform() {
-    let env = ensure_kafka_or_skip!("produce-consume-msgpack-transform");
-    let kf = env.config();
-
-    let inputs = (0..3)
-        .map(|i| {
-            rmp_serde::to_vec(&serde_json::json!({
-                "seq": i,
-                "data": "msgpack-test"
-            }))
-            .unwrap()
-        })
-        .collect();
-    let received = round_trip(
-        kf,
-        "mp",
-        inputs,
-        r#".format = "msgpack""#,
-        PayloadFormat::Auto,
-        3,
-    )
-    .await;
-
-    assert_eq!(received.len(), 3, "every seeded event reaches the sink");
 }
 
 #[tokio::test]
@@ -299,15 +266,7 @@ async fn test_vrl_abort_drops_events() {
     // `!.keep` does not compile: a path resolves to `any`, and VRL refuses to
     // negate a non-boolean. Comparing against `true` carries the same intent
     // (drop anything not explicitly kept) for any incoming type.
-    let received = round_trip(
-        kf,
-        "abort",
-        inputs,
-        "if .keep != true { abort }",
-        PayloadFormat::Json,
-        2,
-    )
-    .await;
+    let received = round_trip(kf, "abort", inputs, "if .keep != true { abort }", 2).await;
 
     assert_eq!(
         received.len(),

@@ -81,7 +81,6 @@ pub fn contract() -> DeploymentContract {
                 "brokers": ["kafka:9092"],
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vrl-default",
-                "format": "auto",
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false },
                 "acknowledgements": { "enabled": true }

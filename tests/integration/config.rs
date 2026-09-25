@@ -24,7 +24,6 @@ fn test_load_minimal_config() {
     assert_eq!(config.source.brokers, vec!["localhost:9092"]);
     assert_eq!(config.source.topics, vec!["test-input"]);
     assert_eq!(config.source.group_id, "test-group");
-    assert_eq!(config.source.format, "auto");
     assert_eq!(config.sink.topic, "test-output");
 }
 

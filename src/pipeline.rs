@@ -22,11 +22,11 @@
 //!    pressure -- the member stays in the group, no rebalance), or the Push
 //!    listener on the direct transport (pushes are refused `UNAVAILABLE` under
 //!    pressure).
-//! 2. `process` deserialises each record to a VRL `Value` (auto-sensing format),
-//!    runs the compiled VRL program in parallel on the worker pool, and
-//!    re-serialises the surviving events back to their original wire format.
-//!    Records dropped by a VRL `abort` or a transform error are removed from
-//!    the block, which then releases `Dropped`; the block's `commit_tokens`
+//! 2. `process` parses each record's JSON into a VRL `Value`, runs the
+//!    compiled VRL program in parallel on the worker pool, and serialises the
+//!    surviving events back to JSON. Records that are not JSON, or that a VRL
+//!    `abort` or a transform error drops, are removed from the block, which
+//!    then releases `Dropped`; the block's `commit_tokens`
 //!    (the source acks) flow through untouched, so a fan-in NEVER under-acks
 //!    the source.
 //! 3. The loop sends the whole out-batch via the sender's
@@ -92,15 +92,14 @@ static FILTERED_BLOCKS: AtomicU64 = AtomicU64::new(0);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
-/// Per-record deserialise outcome: `(value, format, index)` on success, or
-/// `(index, format, error)` on failure (the index/format keep the failed
-/// record traceable for metrics).
-type DeserResult = Result<(Value, PayloadFormat, usize), (usize, PayloadFormat, String)>;
+/// Per-record deserialise outcome: `(value, index)` on success, or
+/// `(index, error)` on failure.
+type DeserResult = Result<(Value, usize), (usize, String)>;
 
-/// Per-record VRL outcome: `(value, format, index)` on success, or
-/// `(index, error)` on failure (abort vs runtime error discriminated by the
-/// [`crate::Error`] variant).
-type VrlResult = Result<(Value, PayloadFormat, usize), (usize, crate::Error)>;
+/// Per-record VRL outcome: `(value, index)` on success, or `(index, error)` on
+/// failure (abort vs runtime error discriminated by the [`crate::Error`]
+/// variant).
+type VrlResult = Result<(Value, usize), (usize, crate::Error)>;
 
 use crate::config::Config;
 use crate::config::hot::HotConfig;
@@ -128,15 +127,12 @@ pub async fn run(
     scaling: Option<Arc<ScalingPressure>>,
     memory_guard: Arc<MemoryGuard>,
 ) -> crate::Result<()> {
-    let payload_format = kafka::parse_format(&config.source.format);
-
     info!(
         pipeline = %config.pipeline.name,
         source_transport = ?config.source.transport,
         source_topics = ?config.source.topics,
         sink_transport = ?config.sink.transport,
         sink_topic = %config.sink.topic,
-        format = %config.source.format,
         self_regulation = governor.is_some(),
         "initialising pipeline"
     );
@@ -156,7 +152,6 @@ pub async fn run(
             &producer,
             program,
             hot_config,
-            payload_format,
             &transform_metrics,
             ready_flag,
             shutdown,
@@ -245,7 +240,6 @@ pub async fn run(
         &producer,
         program,
         hot_config,
-        payload_format,
         &transform_metrics,
         ready_flag,
         shutdown,
@@ -360,7 +354,6 @@ pub async fn run_governed_pipeline<R, S>(
     sender: &S,
     program: Arc<Program>,
     hot_config: SharedConfig<HotConfig>,
-    payload_format: PayloadFormat,
     transform_metrics: &Arc<TransformMetrics>,
     ready_flag: Arc<AtomicBool>,
     shutdown: CancellationToken,
@@ -398,7 +391,6 @@ where
                 transform_block(
                     records,
                     &program,
-                    payload_format,
                     &sink_topic,
                     &transform_metrics,
                     worker_pool.as_ref(),
@@ -571,20 +563,12 @@ const DROPPED_HEADER: &str = "x-dfe-transform-vrl-dropped";
 fn transform_block(
     records: Vec<Record>,
     program: &Program,
-    payload_format: PayloadFormat,
     sink_topic: &Arc<str>,
     transform_metrics: &TransformMetrics,
     worker_pool: Option<&Arc<AdaptiveWorkerPool>>,
 ) -> Vec<Record> {
     let received = records.len();
-    let mut out = transform_records(
-        records,
-        program,
-        payload_format,
-        sink_topic,
-        transform_metrics,
-        worker_pool,
-    );
+    let mut out = transform_records(records, program, sink_topic, transform_metrics, worker_pool);
     let dropped = received.saturating_sub(out.len());
     if dropped > 0 {
         out.push(Record {
@@ -622,10 +606,10 @@ fn split_dropped(records: &[Record]) -> (Vec<Record>, u64) {
 
 /// Transform a block of [`Record`]s through the VRL program.
 ///
-/// Deserialise -> VRL eval (parallel on the worker pool when available) ->
-/// re-serialise. Returns ONLY the surviving records; records dropped by a VRL
-/// `abort`, a transform error, or a (de)serialise error are removed (and
-/// metered). Each surviving record's `key` is set to the sink topic so the
+/// JSON parse -> VRL eval (parallel on the worker pool when available) ->
+/// JSON serialise. Returns ONLY the surviving records; a record that is not
+/// JSON, or that a VRL `abort`, a transform error or a serialise error drops,
+/// is removed (and metered). Each surviving record's `key` is set to the sink topic so the
 /// Kafka producer routes it correctly (scalo #37: `send`'s key arg IS the
 /// destination topic).
 #[allow(
@@ -636,7 +620,6 @@ fn split_dropped(records: &[Record]) -> (Vec<Record>, u64) {
 fn transform_records(
     records: Vec<Record>,
     program: &Program,
-    payload_format: PayloadFormat,
     sink_topic: &Arc<str>,
     transform_metrics: &TransformMetrics,
     worker_pool: Option<&Arc<AdaptiveWorkerPool>>,
@@ -660,25 +643,18 @@ fn transform_records(
     // Layer 3: app-specific
     transform_metrics.batch_size.record(batch_len as f64);
 
-    // Phase 1: deserialise (CPU-bound parsing) -- parallel via the pool.
+    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool.
     let deser_start = Instant::now();
-    let indexed: Vec<(usize, PayloadFormat, Bytes)> = records
+    let indexed: Vec<(usize, Bytes)> = records
         .iter()
         .enumerate()
-        .map(|(idx, rec)| {
-            let format = if payload_format == PayloadFormat::Auto {
-                rec.metadata.format
-            } else {
-                payload_format
-            };
-            (idx, format, rec.payload.clone())
-        })
+        .map(|(idx, rec)| (idx, rec.payload.clone()))
         .collect();
 
-    let deser = |(idx, format, payload): &(usize, PayloadFormat, Bytes)| -> DeserResult {
-        match deserialize_event(payload, *format) {
-            Ok(v) => Ok((v, *format, *idx)),
-            Err(e) => Err((*idx, *format, e.to_string())),
+    let deser = |(idx, payload): &(usize, Bytes)| -> DeserResult {
+        match deserialize_event(payload) {
+            Ok(v) => Ok((v, *idx)),
+            Err(e) => Err((*idx, e.to_string())),
         }
     };
     let deser_results: Vec<DeserResult> = match worker_pool {
@@ -686,20 +662,11 @@ fn transform_records(
         None => indexed.iter().map(deser).collect(),
     };
 
-    let mut events: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(batch_len);
-    let mut json_count: u64 = 0;
-    let mut msgpack_count: u64 = 0;
+    let mut events: Vec<(Value, usize)> = Vec::with_capacity(batch_len);
     for result in deser_results {
         match result {
-            Ok(item) => {
-                match item.1 {
-                    PayloadFormat::Json => json_count += 1,
-                    PayloadFormat::MsgPack => msgpack_count += 1,
-                    PayloadFormat::Auto => {}
-                }
-                events.push(item);
-            }
-            Err((_idx, _format, e)) => {
+            Ok(item) => events.push(item),
+            Err((_idx, e)) => {
                 if log_sampled(&DESER_ERRORS, 1000) {
                     warn!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
                 }
@@ -711,19 +678,16 @@ fn transform_records(
     transform_metrics
         .deserialise_duration
         .record(deser_start.elapsed().as_secs_f64());
-    if json_count > 0 {
-        transform_metrics.record_format("json", json_count);
-    }
-    if msgpack_count > 0 {
-        transform_metrics.record_format("msgpack", msgpack_count);
+    if !events.is_empty() {
+        transform_metrics.record_format("json", events.len() as u64);
     }
 
     // Phase 2: VRL transform (CPU-bound) -- parallel via the pool.
     let vrl_start = Instant::now();
-    let vrl = |(value, format, idx): &(Value, PayloadFormat, usize)| -> VrlResult {
+    let vrl = |(value, idx): &(Value, usize)| -> VrlResult {
         let mut value = value.clone();
         match run_vrl(program, &mut value) {
-            Ok(_) => Ok((value, *format, *idx)),
+            Ok(_) => Ok((value, *idx)),
             Err(e) => Err((*idx, e)),
         }
     };
@@ -732,7 +696,7 @@ fn transform_records(
         None => events.iter().map(vrl).collect(),
     };
 
-    let mut transformed: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(vrl_results.len());
+    let mut transformed: Vec<(Value, usize)> = Vec::with_capacity(vrl_results.len());
     for result in vrl_results {
         match result {
             Ok(item) => transformed.push(item),
@@ -757,16 +721,16 @@ fn transform_records(
         .execute_duration
         .record(vrl_start.elapsed().as_secs_f64());
 
-    // Phase 3: serialise the surviving events back to their wire format and
-    // build the output records. The Kafka producer routes each record to its
+    // Phase 3: serialise the surviving events back to JSON and build the
+    // output records. The Kafka producer routes each record to its
     // `key` (= the sink topic). Partition keying via the routing field is NOT
     // settable through the sender trait (scalo #37: `send`'s key arg IS the
     // destination topic, so there is no slot for a partition key); the routing
     // field stays a config surface only until #37 lands.
     let ser_start = Instant::now();
     let mut out_records: Vec<Record> = Vec::with_capacity(transformed.len());
-    for (value, format, _idx) in &transformed {
-        match serialize_event(value, *format) {
+    for (value, _idx) in &transformed {
+        match serialize_event(value) {
             Ok(serialized) => {
                 out_records.push(Record {
                     payload: Bytes::from(serialized),
@@ -774,7 +738,7 @@ fn transform_records(
                     headers: Vec::new(),
                     metadata: RecordMeta {
                         timestamp_ms: None,
-                        format: *format,
+                        format: PayloadFormat::Json,
                     },
                 });
             }
@@ -793,33 +757,19 @@ fn transform_records(
     out_records
 }
 
-/// Deserialise raw bytes to VRL Value using the detected format.
+/// Parse a JSON payload into a VRL Value.
 ///
-/// Uses `sonic_rs` for JSON (SIMD-accelerated, 2-4x faster than `serde_json`).
-/// Both produce the same `vrl::value::Value` via serde `Deserialize`.
-fn deserialize_event(payload: &[u8], format: PayloadFormat) -> crate::Result<Value> {
-    match format {
-        PayloadFormat::Json => sonic_rs::from_slice(payload)
-            .map_err(|e| crate::Error::Serialisation(format!("JSON deserialise: {e}"))),
-        PayloadFormat::MsgPack => rmp_serde::from_slice(payload)
-            .map_err(|e| crate::Error::Serialisation(format!("msgpack deserialise: {e}"))),
-        PayloadFormat::Auto => {
-            let detected = PayloadFormat::detect(payload);
-            deserialize_event(payload, detected)
-        }
-    }
+/// Uses `sonic_rs` (SIMD-accelerated, 2-4x faster than `serde_json`).
+fn deserialize_event(payload: &[u8]) -> crate::Result<Value> {
+    sonic_rs::from_slice(payload)
+        .map_err(|e| crate::Error::Serialisation(format!("payload is not JSON: {e}")))
 }
 
-/// Serialise VRL Value back to the original format.
+/// Serialise a VRL Value to JSON.
 ///
-/// Uses `sonic_rs` for JSON (SIMD-accelerated, matching the deserialise path).
-fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8>> {
-    match format {
-        PayloadFormat::Json | PayloadFormat::Auto => sonic_rs::to_vec(value)
-            .map_err(|e| crate::Error::Serialisation(format!("JSON serialise: {e}"))),
-        PayloadFormat::MsgPack => rmp_serde::to_vec(value)
-            .map_err(|e| crate::Error::Serialisation(format!("msgpack serialise: {e}"))),
-    }
+/// Uses `sonic_rs` (SIMD-accelerated, matching the parse path).
+fn serialize_event(value: &Value) -> crate::Result<Vec<u8>> {
+    sonic_rs::to_vec(value).map_err(|e| crate::Error::Serialisation(format!("JSON serialise: {e}")))
 }
 
 // NB: the dot-path partition-key extractor (`extract_key`) was removed in the
@@ -846,50 +796,29 @@ mod tests {
     #[test]
     fn test_deserialize_json() {
         let json = br#"{"key": "value"}"#;
-        let value = deserialize_event(json, PayloadFormat::Json).unwrap();
+        let value = deserialize_event(json).unwrap();
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get("key"), Some(&Value::from("value")));
     }
 
     #[test]
-    fn test_deserialize_msgpack() {
-        let data = rmp_serde::to_vec(&serde_json::json!({"x": 42})).unwrap();
-        let value = deserialize_event(&data, PayloadFormat::MsgPack).unwrap();
-        let obj = value.as_object().unwrap();
-        assert!(obj.get("x").is_some());
+    fn a_payload_that_is_not_json_is_refused_by_name() {
+        let err = deserialize_event(b"\x00\x00\x02\x00").unwrap_err();
+        assert!(
+            err.to_string().contains("payload is not JSON"),
+            "the refusal must say why, got: {err}"
+        );
     }
 
     #[test]
     fn test_serialize_roundtrip_json() {
         let original = Value::from(serde_json::json!({"a": 1, "b": "hello"}));
-        let bytes = serialize_event(&original, PayloadFormat::Json).unwrap();
-        let recovered = deserialize_event(&bytes, PayloadFormat::Json).unwrap();
+        let bytes = serialize_event(&original).unwrap();
+        let recovered = deserialize_event(&bytes).unwrap();
         assert_eq!(
             original.as_object().unwrap().get("a"),
             recovered.as_object().unwrap().get("a"),
         );
-    }
-
-    #[test]
-    fn test_serialize_roundtrip_msgpack() {
-        let original = Value::from(serde_json::json!({"x": 99}));
-        let bytes = serialize_event(&original, PayloadFormat::MsgPack).unwrap();
-        let recovered = deserialize_event(&bytes, PayloadFormat::MsgPack).unwrap();
-        assert!(recovered.as_object().unwrap().get("x").is_some());
-    }
-
-    #[test]
-    fn test_auto_detect_json() {
-        let json = br#"{"key": "value"}"#;
-        let value = deserialize_event(json, PayloadFormat::Auto).unwrap();
-        assert!(value.as_object().is_some());
-    }
-
-    #[test]
-    fn test_auto_detect_msgpack() {
-        let data = rmp_serde::to_vec(&serde_json::json!({"y": true})).unwrap();
-        let value = deserialize_event(&data, PayloadFormat::Auto).unwrap();
-        assert!(value.as_object().is_some());
     }
 
     /// The `WorkBatch` process path: deserialise -> VRL -> serialise across a
@@ -939,16 +868,8 @@ mod tests {
         let metrics = TransformMetrics::default();
         let sink_topic: Arc<str> = Arc::from("out");
 
-        let out = batch.map_records(|recs| {
-            transform_records(
-                recs,
-                &program,
-                PayloadFormat::Json,
-                &sink_topic,
-                &metrics,
-                None,
-            )
-        });
+        let out = batch
+            .map_records(|recs| transform_records(recs, &program, &sink_topic, &metrics, None));
 
         // 2 survived the abort fan-in...
         assert_eq!(out.records.len(), 2, "two records dropped by abort");
@@ -957,7 +878,7 @@ mod tests {
         // surviving records route to the sink topic.
         for r in &out.records {
             assert_eq!(r.key.as_deref(), Some("out"));
-            let v = deserialize_event(&r.payload, PayloadFormat::Json).unwrap();
+            let v = deserialize_event(&r.payload).unwrap();
             assert_eq!(
                 v.as_object().unwrap().get("processed"),
                 Some(&Value::Boolean(true))
@@ -997,14 +918,7 @@ mod tests {
 
         let metrics = TransformMetrics::default();
         let sink_topic: Arc<str> = Arc::from("out");
-        let out = transform_records(
-            records,
-            &program,
-            PayloadFormat::Json,
-            &sink_topic,
-            &metrics,
-            None,
-        );
+        let out = transform_records(records, &program, &sink_topic, &metrics, None);
         assert_eq!(out.len(), 1, "only the valid record survives");
     }
 
@@ -1206,14 +1120,7 @@ mod tests {
 
         let out = metrics::with_local_recorder(&capture, || {
             let m = TransformMetrics::new(&manager, "0.1.0", "ffff");
-            transform_records(
-                json_records(3),
-                &program,
-                PayloadFormat::Json,
-                &sink_topic,
-                &m,
-                None,
-            )
+            transform_records(json_records(3), &program, &sink_topic, &m, None)
         });
 
         assert_eq!(out.len(), 3);
@@ -1255,14 +1162,7 @@ mod tests {
         let metrics = TransformMetrics::default();
         let sink_topic: Arc<str> = Arc::from("out");
         let block = |keep: &[bool]| {
-            let out = transform_block(
-                keep_records(keep),
-                &program,
-                PayloadFormat::Json,
-                &sink_topic,
-                &metrics,
-                None,
-            );
+            let out = transform_block(keep_records(keep), &program, &sink_topic, &metrics, None);
             (out.len(), split_dropped(&out))
         };
 
@@ -1340,7 +1240,6 @@ mod tests {
                         batch_timeout_ms: 50,
                         key_field: String::new(),
                     }),
-                    PayloadFormat::Json,
                     &transform_metrics,
                     Arc::new(AtomicBool::new(false)),
                     shutdown.clone(),
@@ -1438,7 +1337,6 @@ mod tests {
             sink,
             program,
             hot_config,
-            PayloadFormat::Auto,
             &metrics,
             Arc::new(AtomicBool::new(false)),
             shutdown.clone(),

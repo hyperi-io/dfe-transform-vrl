@@ -226,7 +226,6 @@ async fn run_transform_service(
         brokers = ?config.source.brokers,
         group_id = %config.source.group_id,
         topics = ?config.source.topics,
-        input_format = %config.source.format,
         sink_brokers = ?config.sink.brokers,
         sink_topic = %config.sink.topic,
         key_field = %config.sink.key_field,

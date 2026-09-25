@@ -90,7 +90,6 @@ config:
     topics:
     - raw_events
     group_id: dfe-transform-vrl-default
-    format: auto
     sasl:
       enabled: true
       mechanism: scram_sha_512

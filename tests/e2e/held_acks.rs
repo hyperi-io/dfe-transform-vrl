@@ -34,8 +34,7 @@ use scalo::memory::{MemoryGuard, MemoryGuardConfig};
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
 use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile, KafkaTransport};
 use scalo::transport::{
-    AcknowledgementsConfig, PayloadFormat, SendResult, TransportBase, TransportReceiver,
-    TransportSender,
+    AcknowledgementsConfig, SendResult, TransportBase, TransportReceiver, TransportSender,
 };
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
@@ -93,7 +92,6 @@ impl Transform {
         let mut config = Config::default();
         config.pipeline.name = format!("held-acks-{acknowledgements}");
         config.source.transport = Transport::Direct;
-        config.source.format = "json".to_string();
         config.source.acknowledgements = AcknowledgementsConfig::new(acknowledgements);
         config.sink.brokers = kf.brokers.split(',').map(String::from).collect();
         config.sink.topic = SINK_TOPIC.to_string();
@@ -142,7 +140,6 @@ impl Transform {
                     &sender,
                     program,
                     hot_config,
-                    PayloadFormat::Json,
                     &Arc::new(TransformMetrics::default()),
                     Arc::new(AtomicBool::new(false)),
                     shutdown,

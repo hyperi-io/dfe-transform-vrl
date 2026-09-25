@@ -31,9 +31,7 @@ use scalo::memory::{MemoryGuard, MemoryGuardConfig, UsageSource};
 use scalo::transport::grpc::proto::transport_client::TransportClient;
 use scalo::transport::grpc::proto::{Format, PushRequest};
 use scalo::transport::grpc::{GrpcConfig, GrpcToken, GrpcTransport};
-use scalo::transport::{
-    AnySender, DeliveryStatus, PayloadFormat, SendResult, TransportReceiver, TransportSender,
-};
+use scalo::transport::{AnySender, DeliveryStatus, SendResult, TransportReceiver, TransportSender};
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio::task::JoinHandle;
@@ -168,7 +166,6 @@ async fn start_transform(
                 &sender,
                 program,
                 hot_config,
-                PayloadFormat::Auto,
                 &Arc::new(TransformMetrics::default()),
                 Arc::new(AtomicBool::new(false)),
                 shutdown,
@@ -241,7 +238,6 @@ async fn a_batch_pushed_over_grpc_comes_out_the_grpc_sink_transformed() {
             &sink,
             program,
             hot_config,
-            PayloadFormat::Auto,
             &Arc::new(TransformMetrics::default()),
             Arc::new(AtomicBool::new(false)),
             pipeline_shutdown,
