@@ -371,7 +371,7 @@
           }
         },
         "message_timeout_ms": {
-          "description": "Producer delivery timeout (ms).",
+          "description": "Producer delivery timeout (ms). Capped at 15 s while a direct source\nholds its acknowledgements, so a report arrives inside the hold;\n`librdkafka_options.message.timeout.ms` overrides the cap.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,

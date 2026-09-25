@@ -27,7 +27,7 @@ use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
 use scalo::config::shared::SharedConfig;
 use scalo::memory::{MemoryGuard, MemoryGuardConfig};
-use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
+use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile, KafkaTransport};
 use scalo::transport::{TransportBase, TransportSender};
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
@@ -118,8 +118,14 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
         kf.brokers
     );
 
-    // 1. Seed the source topic with a few events
+    // 1. Seed the source topic with a few events. Both topics exist first, so
+    //    neither the pipeline nor the verifier polls a topic that is not there.
     let seed_cfg = seed_producer_config(kf, &source_topic);
+    KafkaAdmin::new(&seed_cfg)
+        .expect("admin client")
+        .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+        .await
+        .expect("create the source and sink topics");
     let seed = tokio::time::timeout(Duration::from_secs(15), KafkaTransport::new(&seed_cfg))
         .await
         .expect("seed producer create timed out")
@@ -131,12 +137,14 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             "value": i * 10,
         }))
         .unwrap();
-        let _ = tokio::time::timeout(
+        // `send`'s first argument is the destination topic, not a key.
+        let seeded = tokio::time::timeout(
             Duration::from_secs(10),
-            seed.send(&format!("e2e-{i}"), Bytes::from(payload)),
+            seed.send(&source_topic, Bytes::from(payload)),
         )
         .await
         .expect("seed send timed out");
+        assert!(seeded.is_ok(), "seeding {source_topic} failed: {seeded:?}");
     }
     let _ = tokio::time::timeout(Duration::from_secs(5), seed.close()).await;
     eprintln!("Seeded 3 events to {source_topic}");
@@ -190,10 +198,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
         .await
     });
 
-    // 4. Let the pipeline drain the seeded events
-    tokio::time::sleep(Duration::from_secs(8)).await;
-
-    // 5. Verify by consuming sink topic
+    // 4. Read the sink topic until every seeded event has come through
     let verify_cfg = seed_producer_config(kf, &sink_topic);
     // Use a consumer config (for recv); reuse the helper but change group
     let verify_kafka = KafkaConfig {
@@ -209,31 +214,33 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             .expect("verifier create failed");
 
     use scalo::transport::TransportReceiver;
-    let batch = tokio::time::timeout(Duration::from_secs(15), verifier.recv(10))
-        .await
-        .expect("verifier recv timed out")
-        .expect("verifier recv error");
+    let mut records = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while records.len() < 3 && tokio::time::Instant::now() < deadline {
+        if let Ok(batch) = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10)).await {
+            records.extend(batch.expect("verifier recv error").records);
+        }
+    }
 
-    eprintln!(
-        "Verifier received {} records from sink",
-        batch.records.len()
-    );
+    eprintln!("Verifier received {} records from sink", records.len());
 
-    // 6. Shutdown pipeline cleanly
+    // 5. Shutdown pipeline cleanly
     shutdown.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(10), pipeline_handle).await;
+    let stopped = tokio::time::timeout(Duration::from_secs(10), pipeline_handle)
+        .await
+        .expect("the pipeline stops within 10s of shutdown")
+        .expect("pipeline task");
     let _ = verifier.close().await;
+    assert!(stopped.is_ok(), "pipeline::run stopped with {stopped:?}");
 
-    // We seeded 3 events; some may have been delivered (depends on partition
-    // assignment timing). Assert at least one round-tripped to validate
-    // that pipeline::run actually wired everything correctly.
-    assert!(
-        !batch.is_empty(),
-        "expected at least one transformed event in {sink_topic}"
+    assert_eq!(
+        records.len(),
+        3,
+        "every seeded event must reach {sink_topic}"
     );
 
     // Verify VRL transform actually ran
-    for record in &batch.records {
+    for record in &records {
         let val: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
         assert_eq!(val["tag"], "cli-e2e-pass", "VRL .tag should be set");
     }

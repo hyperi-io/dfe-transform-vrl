@@ -84,7 +84,10 @@ pipeline:
 #   key_field: ".org_id"
 #   compression: "zstd"                # none, gzip, lz4, snappy, zstd
 #   max_buffer_bytes: 67108864         # 64 MiB producer buffer
-#   message_timeout_ms: 300000         # producer delivery timeout
+#   # Producer delivery timeout. Capped at 15000 while a direct source holds
+#   # its acknowledgements, so the report lands inside the 18 s hold; set
+#   # librdkafka_options message.timeout.ms to override the cap.
+#   message_timeout_ms: 300000
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"

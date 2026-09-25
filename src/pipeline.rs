@@ -56,13 +56,14 @@ use scalo::logger::{log_sampled, security};
 use scalo::memory::MemoryGuard;
 use scalo::scaling::ScalingPressure;
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
-use scalo::transport::kafka::{KafkaTransport, total_consumer_lag};
+use scalo::transport::kafka::{KafkaConfig, KafkaTransport, total_consumer_lag};
 use scalo::transport::{
-    AnySender, PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch,
+    AnySender, DeliveryStatus, PayloadFormat, PieceFinalizer, Record, RecordMeta, SendResult,
+    TransportSender, WorkBatch,
 };
 use scalo::worker::AdaptiveWorkerPool;
 use scalo::worker::BatchEngine;
-use scalo::worker::engine::EngineError;
+use scalo::worker::engine::{BlockPieces, EngineError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -78,13 +79,15 @@ const SCALING_SIGNAL_INTERVAL_SECS: u64 = 5;
 /// deadline, so it is answered before that sender gives up.
 pub const PUSH_MAX_HOLD: Duration = Duration::from_secs(18);
 
-/// Send deadline to the next hop's Push listener: inside this stage's own
-/// [`PUSH_MAX_HOLD`], so a slow hop is retried before the hold runs out.
+/// Send deadline to the next hop -- a Push listener, or a Kafka delivery
+/// report while a Push is held: inside this stage's own [`PUSH_MAX_HOLD`], so
+/// a slow hop is retried before the hold runs out.
 pub const NEXT_HOP_SEND_TIMEOUT_MS: u64 = 15_000;
 
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
 static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
+static FILTERED_BLOCKS: AtomicU64 = AtomicU64::new(0);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
@@ -308,11 +311,33 @@ pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
         return Ok(AnySender::Grpc(transport));
     }
 
-    let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
-    let transport = KafkaTransport::new(&producer_config)
+    let transport = KafkaTransport::new(&producer_config(config))
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))?;
     Ok(AnySender::Kafka(transport))
+}
+
+/// The bus sink's producer config.
+///
+/// While a direct source holds its acknowledgements, a delivery report that
+/// comes after the hold is spent is a duplicate in waiting: the sender was
+/// already told to retry. So `message.timeout.ms` is capped at
+/// [`NEXT_HOP_SEND_TIMEOUT_MS`], unless `sink.librdkafka_options` sets it.
+fn producer_config(config: &Config) -> KafkaConfig {
+    let mut producer = kafka::build_producer_config(&config.sink, &config.pipeline.name);
+    let holds = config.source.transport.is_direct() && config.source.acknowledgements.enabled;
+    if holds
+        && !config
+            .sink
+            .librdkafka_options
+            .contains_key("message.timeout.ms")
+    {
+        let capped = u64::from(config.sink.message_timeout_ms).min(NEXT_HOP_SEND_TIMEOUT_MS);
+        producer
+            .librdkafka_overrides
+            .insert("message.timeout.ms".to_string(), capped.to_string());
+    }
+    producer
 }
 
 /// Drive the mid-tier transform through [`BatchEngine::pipeline`].
@@ -393,9 +418,12 @@ where
     let sink = {
         let transform_metrics = Arc::clone(transform_metrics);
         let circuit_open = Arc::clone(&circuit_open);
-        move |out: &WorkBatch<R::Token>| {
+        move |out: &WorkBatch<R::Token>, pieces: &BlockPieces<'_>| {
             let transform_metrics = Arc::clone(&transform_metrics);
             let circuit_open = Arc::clone(&circuit_open);
+            // A piece per attempt, so a block the sender filtered out rather
+            // than sent is released `Dropped`, never `Delivered`.
+            let filtered = pieces.piece();
             // The engine's `Sink` bound returns an OWNED future (it cannot borrow
             // `out`), so clone the records into the async block. This is cheap:
             // `Record` is `Bytes` (refcount bump) + `Arc<str>` key -- N refcount
@@ -411,6 +439,7 @@ where
                     sink_backend,
                     &transform_metrics,
                     &circuit_open,
+                    filtered,
                 )
             }
         }
@@ -422,7 +451,7 @@ where
         .pipeline(receiver)
         .shutdown(shutdown)
         .sender(sender)
-        .run(process, sink)
+        .run_with_pieces(process, sink)
         .await;
 
     ready_flag.store(false, Ordering::Release);
@@ -443,6 +472,11 @@ where
 /// holds the block and sends it again after a backoff -- or, for a Push
 /// source, answers `UNAVAILABLE` at the hold deadline so the sender retries.
 /// Only a permanent failure stops the loop.
+///
+/// `filtered` reports `Dropped` when the sender filtered the block out
+/// instead of sending it, which releases the source without calling the
+/// records delivered. Otherwise it reports `Delivered`, the floor of the
+/// merge, and leaves the block's status to the loop's own piece.
 fn settle_send(
     result: SendResult,
     record_count: u64,
@@ -450,7 +484,13 @@ fn settle_send(
     sink_backend: &'static str,
     transform_metrics: &TransformMetrics,
     circuit_open: &AtomicBool,
+    filtered: PieceFinalizer,
 ) -> Result<(), EngineError> {
+    filtered.report(if matches!(result, SendResult::FilteredDlq) {
+        DeliveryStatus::Dropped
+    } else {
+        DeliveryStatus::Delivered
+    });
     match result {
         SendResult::Ok => {
             // Sink reachable -> clear the outbound circuit latch (the scaling
@@ -469,9 +509,17 @@ fn settle_send(
             Ok(())
         }
         SendResult::FilteredDlq => {
-            // The whole block was outbound-filtered to DLQ. Treat as delivered
-            // for release purposes (the records left the sender via the
-            // outbound filter), but surface it.
+            // Records the screen should have taken out of the block: the same
+            // bytes are refused on every retry, so they are dropped, not sent.
+            if log_sampled(&FILTERED_BLOCKS, 100) {
+                warn!(
+                    records = record_count,
+                    backend = sink_backend,
+                    total = FILTERED_BLOCKS.load(Ordering::Relaxed),
+                    "the sink filtered out a whole block instead of sending it; its \
+                     records are dropped (sampled 1/100)"
+                );
+            }
             if let Some(ref dfe) = transform_metrics.dfe {
                 dfe.records_filtered(record_count);
             }
@@ -889,7 +937,10 @@ mod tests {
     fn a_recoverable_send_failure_holds_the_block_for_a_retry() {
         let metrics = TransformMetrics::default();
         let circuit_open = AtomicBool::new(false);
-        let settle = |result| settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open);
+        let settle = |result| {
+            let (piece, _merged) = one_piece();
+            settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece)
+        };
 
         for verdict in [
             settle(SendResult::Backpressured),
@@ -916,6 +967,7 @@ mod tests {
             scalo::TransportError::Send("topic authorisation failed".into()),
             scalo::TransportError::Closed,
         ] {
+            let (piece, _merged) = one_piece();
             let verdict = settle_send(
                 SendResult::Fatal(permanent),
                 3,
@@ -923,16 +975,119 @@ mod tests {
                 "kafka",
                 &metrics,
                 &circuit_open,
+                piece,
             );
             assert!(matches!(verdict, Err(EngineError::Sink(_))), "{verdict:?}");
             assert!(circuit_open.load(Ordering::Acquire));
         }
 
-        let delivered = settle_send(SendResult::Ok, 3, 0.1, "kafka", &metrics, &circuit_open);
+        let (piece, _merged) = one_piece();
+        let delivered = settle_send(
+            SendResult::Ok,
+            3,
+            0.1,
+            "kafka",
+            &metrics,
+            &circuit_open,
+            piece,
+        );
         assert!(delivered.is_ok());
         assert!(
             !circuit_open.load(Ordering::Acquire),
             "a delivered block closes the circuit again"
+        );
+    }
+
+    /// The piece a sink call reports into, sealed as the loop seals it, and
+    /// the status the block is released with.
+    fn one_piece() -> (PieceFinalizer, std::sync::mpsc::Receiver<DeliveryStatus>) {
+        let (released, merged) = std::sync::mpsc::channel();
+        let block = scalo::transport::BatchFinalizer::new(move |status| {
+            let _ = released.send(status);
+        });
+        let piece = block.piece();
+        block.seal();
+        (piece, merged)
+    }
+
+    /// A block the sender filtered out still releases its source, so it is not
+    /// sent again, but as dropped: none of its records was delivered.
+    #[test]
+    fn a_filtered_block_is_released_dropped_not_delivered() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+        let released = |result| {
+            let (piece, merged) = one_piece();
+            let verdict = settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece);
+            (verdict, merged.try_recv().expect("the piece reported"))
+        };
+
+        let (verdict, status) = released(SendResult::FilteredDlq);
+        assert!(
+            verdict.is_ok(),
+            "a filtered block is not retried: {verdict:?}"
+        );
+        assert_eq!(status, DeliveryStatus::Dropped);
+
+        // Any other result leaves the block's status to the loop's own piece.
+        for result in [
+            SendResult::Ok,
+            SendResult::Backpressured,
+            SendResult::Fatal(scalo::TransportError::Closed),
+        ] {
+            let (_, status) = released(result);
+            assert_eq!(status, DeliveryStatus::Delivered);
+        }
+    }
+
+    /// The `message.timeout.ms` the bus sink's producer is built with.
+    fn delivery_timeout(config: &Config) -> Option<String> {
+        producer_config(config)
+            .librdkafka_overrides
+            .get("message.timeout.ms")
+            .cloned()
+    }
+
+    /// A delivery report after the hold is spent comes back to a sender that
+    /// was already told to retry, so a held Push caps the producer's timeout.
+    #[test]
+    fn a_held_push_caps_the_producer_delivery_timeout_inside_the_hold() {
+        let mut config = Config::default();
+        config.sink.topic = "out".to_string();
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("300000"),
+            "the bus source holds no Push, so the configured timeout stands"
+        );
+
+        config.source.transport = crate::config::Transport::Direct;
+        assert_eq!(delivery_timeout(&config).as_deref(), Some("15000"));
+        assert!(u128::from(NEXT_HOP_SEND_TIMEOUT_MS) < PUSH_MAX_HOLD.as_millis());
+
+        config.sink.message_timeout_ms = 5_000;
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("5000"),
+            "a shorter configured timeout is kept"
+        );
+
+        config.sink.message_timeout_ms = 300_000;
+        config.source.acknowledgements = scalo::transport::AcknowledgementsConfig::new(false);
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("300000"),
+            "a source answered at receipt holds nothing"
+        );
+
+        config.source.acknowledgements = scalo::transport::AcknowledgementsConfig::new(true);
+        config
+            .sink
+            .librdkafka_options
+            .insert("message.timeout.ms".to_string(), "60000".to_string());
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("60000"),
+            "an explicit librdkafka setting is the operator's"
         );
     }
 

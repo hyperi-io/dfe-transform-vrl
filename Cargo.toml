@@ -229,5 +229,5 @@ strip = false
 # Temporary: the held-ack pipeline entry is on this scalo branch until 2.13.0
 # publishes. Remove this block and the deny.toml allow-git entry together.
 [patch.crates-io]
-scalo = { git = "https://github.com/hyperi-io/scalo-rs", branch = "fix/grpc-held-acks-armed" }
+scalo = { git = "https://github.com/hyperi-io/scalo-rs", branch = "fix/at-least-once" }
 

@@ -346,7 +346,9 @@ pub struct SinkConfig {
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
     pub tls: TlsConfig,
-    /// Producer delivery timeout (ms).
+    /// Producer delivery timeout (ms). Capped at 15 s while a direct source
+    /// holds its acknowledgements, so a report arrives inside the hold;
+    /// `librdkafka_options.message.timeout.ms` overrides the cap.
     pub message_timeout_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,

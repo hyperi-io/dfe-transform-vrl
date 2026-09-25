@@ -89,8 +89,11 @@ records are confirmed downstream -- a Kafka delivery report, or the next hop's
 own answer. A failed or refused send is retried until the hold runs out (18 s at
 most, less when the sender's deadline is shorter), and the sender is then
 answered `UNAVAILABLE` and retries. The send deadline to the next hop is 15 s,
-inside that hold. `source.acknowledgements.enabled: false` answers at receipt
-instead, and a crash or failed send then loses what was answered.
+inside that hold: the gRPC sink's deadline, or the Kafka producer's
+`message.timeout.ms`, capped there unless `librdkafka_options` sets it. A block
+the sink filters out rather than sends releases as dropped, never delivered.
+`source.acknowledgements.enabled: false` answers at receipt instead, and a
+crash or failed send then loses what was answered.
 
 **Dropped records still ack.** When a VRL `abort` or a transform error removes a
 record from a block, the block's `commit_tokens` -- the source offsets -- flow
