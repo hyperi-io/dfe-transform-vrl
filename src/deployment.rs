@@ -83,7 +83,8 @@ pub fn contract() -> DeploymentContract {
                 "group_id": "dfe-transform-vrl-default",
                 "format": "auto",
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
-                "tls": { "enabled": false }
+                "tls": { "enabled": false },
+                "acknowledgements": { "enabled": true }
             },
             "sink": {
                 "transport": "bus",

@@ -8,39 +8,46 @@
 
 //! Event processing pipeline.
 //!
-//! The mid-tier transform stage (Kafka consume -> VRL transform -> Kafka
-//! produce -> commit) is driven by scalo's unified `WorkBatch` engine
-//! ([`BatchEngine::run_governed`]). The driver owns the
-//! `recv -> process -> send -> commit` loop with full self-regulation
-//! (inbound pause-partitions gate + AIMD byte-budget streaming + at-least-once
-//! ack barrier). This crate supplies only the VRL-specific `process` closure
-//! and the produce `sink`.
+//! The mid-tier transform stage (consume -> VRL transform -> produce ->
+//! release) is driven by scalo's `WorkBatch` pipeline loop
+//! ([`BatchEngine::pipeline`]). The loop owns `recv -> process -> send ->
+//! release` with full self-regulation (inbound gate + AIMD byte-budget
+//! streaming), and holds each block's source acknowledgement until the sink
+//! has delivered it. This crate supplies only the VRL-specific `process`
+//! closure and the produce `sink`.
 //!
 //! Data flow per block:
-//! 1. The driver receives a [`WorkBatch`] of [`Record`]s from the governed
-//!    Kafka consumer (inbound brake attached; intake pauses under memory
-//!    pressure -- the member stays in the group, no rebalance).
+//! 1. The loop receives a [`WorkBatch`] of [`Record`]s from the source: the
+//!    governed Kafka consumer on the bus transport (intake pauses under memory
+//!    pressure -- the member stays in the group, no rebalance), or the Push
+//!    listener on the direct transport (pushes are refused `UNAVAILABLE` under
+//!    pressure).
 //! 2. `process` deserialises each record to a VRL `Value` (auto-sensing format),
 //!    runs the compiled VRL program in parallel on the worker pool, and
 //!    re-serialises the surviving events back to their original wire format.
 //!    Records dropped by a VRL `abort` or a transform error are removed from
-//!    the block; the block's `commit_tokens` (the source offsets) flow through
+//!    the block; the block's `commit_tokens` (the source acks) flow through
 //!    untouched, so a fan-in NEVER under-acks the source.
-//! 3. The driver sends the whole out-batch via the producer's
+//! 3. The loop sends the whole out-batch via the sender's
 //!    [`TransportSender::send_batch`].
-//! 4. The driver commits the block's source offsets ([`CommitMode::Auto`])
-//!    AFTER the send returns `Ok` -- batch-level at-least-once, not per record.
+//! 4. Only once the send returns `Ok` does the loop release the block's
+//!    source: Kafka commits the offsets, the Push listener answers its sender
+//!    OK. A failed send leaves it unreleased -- Kafka re-reads the block after
+//!    a restart, and a Push sender is answered `UNAVAILABLE` and retries.
+//!    Batch-level at-least-once, not per record. With
+//!    `source.acknowledgements.enabled: false` the source is released at
+//!    receipt instead.
 //!
 //! Self-regulation is default-ON (opt out via `self_regulation.enabled =
 //! false`). The byte-budget lever is wired into the engine by the
-//! `ServiceRuntime`; the inbound pause-partitions gate is attached to the Kafka
-//! consumer here via [`SelfRegulationGovernor::attach_kafka_gate`]. The OUTBOUND
-//! producer drain is NEVER gated -- gating the sink would deadlock the pipeline
-//! (see `docs/BACKPRESSURE.md`).
+//! `ServiceRuntime`; the inbound gate is attached here, to the Kafka consumer
+//! via [`SelfRegulationGovernor::attach_kafka_gate`] and to the Push listener
+//! through its builder. The OUTBOUND producer drain is NEVER gated -- gating
+//! the sink would deadlock the pipeline (scalo `docs/backpressure.md`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use scalo::SelfRegulationGovernor;
@@ -55,7 +62,7 @@ use scalo::transport::{
 };
 use scalo::worker::AdaptiveWorkerPool;
 use scalo::worker::BatchEngine;
-use scalo::worker::engine::{CommitMode, EngineError};
+use scalo::worker::engine::EngineError;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -66,6 +73,14 @@ use tracing::{debug, info, trace, warn};
 /// autoscaler poll, and cheap (one `librdkafka` stats read per tick). Mirrors
 /// the loader's 5s flush-tick push cadence.
 const SCALING_SIGNAL_INTERVAL_SECS: u64 = 5;
+
+/// Longest a Push is held for delivery: inside the stage in front's 20 s send
+/// deadline, so it is answered before that sender gives up.
+pub const PUSH_MAX_HOLD: Duration = Duration::from_secs(18);
+
+/// Send deadline to the next hop's Push listener: inside this stage's own
+/// [`PUSH_MAX_HOLD`], so a slow hop is retried before the hold runs out.
+pub const NEXT_HOP_SEND_TIMEOUT_MS: u64 = 15_000;
 
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -89,11 +104,12 @@ use crate::engine::runner::run_vrl;
 use crate::kafka;
 use crate::metrics::TransformMetrics;
 
-/// Run the transform pipeline with Kafka transports (production entry point).
+/// Run the transform pipeline (production entry point).
 ///
-/// Builds the governed Kafka consumer (inbound pause-partitions gate attached
-/// when self-regulation is on) and the plain Kafka producer, then hands the
-/// `recv -> process -> send -> commit` loop to [`BatchEngine::run_governed`].
+/// Builds the source -- the governed Kafka consumer (inbound pause-partitions
+/// gate attached when self-regulation is on) or the armed Push listener -- and
+/// the sink, then hands the `recv -> process -> send -> release` loop to
+/// [`BatchEngine::pipeline`].
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: &Config,
@@ -128,9 +144,7 @@ pub async fn run(
     // The direct transport has no consumer group and no lag, so the Kafka gate
     // and the lag ticker belong to the bus form alone.
     if config.source.transport.is_direct() {
-        let listener = GrpcTransport::new(&GrpcConfig::server(&config.source.listen))
-            .await
-            .map_err(|e| crate::Error::Kafka(format!("failed to start Push listener: {e}")))?;
+        let listener = start_push_listener(config, governor.as_ref(), &memory_guard).await?;
         info!(listen = %config.source.listen, "Push listener started");
         return run_governed_pipeline(
             &engine,
@@ -157,7 +171,8 @@ pub async fn run(
     // consumer is used (byte-identical to the pre-governor data path).
     let consumer = KafkaTransport::new(&consumer_config)
         .await
-        .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?;
+        .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?
+        .with_acknowledgements(config.source.acknowledgements);
     let consumer = match governor.as_ref() {
         Some(gov) => gov.attach_kafka_gate(consumer),
         None => consumer,
@@ -243,13 +258,49 @@ pub async fn run(
     result
 }
 
+/// Start the direct transport's Push listener, armed from its first request.
+///
+/// Armed, a Push is answered only once its records are released, so no push
+/// is acknowledged before the pipeline loop is running to deliver it. While
+/// the governor's pressure holds the listener refuses pushes `UNAVAILABLE`,
+/// and the responses it holds are leased on the memory guard.
+///
+/// # Errors
+///
+/// The listen address is invalid or cannot be bound.
+pub async fn start_push_listener(
+    config: &Config,
+    governor: Option<&SelfRegulationGovernor>,
+    memory_guard: &Arc<MemoryGuard>,
+) -> crate::Result<GrpcTransport> {
+    let grpc = GrpcConfig::server(&config.source.listen);
+    let builder = GrpcTransport::builder(&grpc)
+        .acknowledgements(config.source.acknowledgements)
+        .armed(true)
+        .max_hold(PUSH_MAX_HOLD)
+        .memory_guard(Arc::clone(memory_guard));
+    let builder = match governor {
+        Some(governor) => builder.pressure(governor.pressure()),
+        None => builder,
+    };
+    builder
+        .start()
+        .await
+        .map_err(|e| crate::Error::Kafka(format!("failed to start Push listener: {e}")))
+}
+
 /// Build the sink for this deployment's transport.
 ///
 /// `AnySender` keeps the driver one code path across both, and delegates
 /// `send_batch` to the backend's native batch RPC.
-async fn build_sender(config: &Config) -> crate::Result<AnySender> {
+///
+/// # Errors
+///
+/// The sink transport cannot be created from `config.sink`.
+pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
     if config.sink.transport.is_direct() {
-        let grpc = GrpcConfig::client(&config.sink.endpoint);
+        let mut grpc = GrpcConfig::client(&config.sink.endpoint);
+        grpc.send_timeout_ms = NEXT_HOP_SEND_TIMEOUT_MS;
         let transport = GrpcTransport::new(&grpc)
             .await
             .map_err(|e| crate::Error::Kafka(format!("failed to create gRPC sink: {e}")))?;
@@ -264,12 +315,14 @@ async fn build_sender(config: &Config) -> crate::Result<AnySender> {
     Ok(AnySender::Kafka(transport))
 }
 
-/// Drive the mid-tier transform via [`BatchEngine::run_governed`].
+/// Drive the mid-tier transform through [`BatchEngine::pipeline`].
 ///
-/// `receiver` is the (optionally gated) Kafka consumer; `sender` is the Kafka
-/// producer. The VRL transform is the `process` closure and the produce is the
-/// `sink` closure. The driver owns batching, streaming sub-blocks under
-/// pressure, and the at-least-once commit barrier.
+/// `receiver` is the source (the optionally gated Kafka consumer, or the Push
+/// listener); `sender` is the sink. The VRL transform is the `process` closure
+/// and the produce is the `sink` closure. The loop owns batching, streaming
+/// sub-blocks under pressure, and holding each block's source acknowledgement
+/// until the sink has delivered it. Records `sender` would dead-letter rather
+/// than send are taken out of the block before the sink is called.
 ///
 /// Exposed `pub` so the e2e integration tests can drive a real Kafka round-trip
 /// with pre-built transports + a stand-alone engine, without going through the
@@ -330,101 +383,46 @@ where
     // ---- sink: send the whole out-batch via the producer ---------------------
     //
     // `send_batch` routes each record to its `key` (the Kafka destination topic
-    // -- set to the configured sink topic in `transform_records`). A non-Ok
-    // result is a TERMINAL ack-barrier error: the driver skips the commit and the
-    // whole block is re-delivered (at-least-once -- duplicates, never loss).
+    // -- set to the configured sink topic in `transform_records`). The loop
+    // releases the block's source only on `Ok`; see `settle_send` for how every
+    // other result holds it.
     //
     // The sender counts its own `transport_*` series under its own transport
     // label, so the sink records only the metrics no transport emits.
     let sink_backend = sender.name();
     let sink = {
         let transform_metrics = Arc::clone(transform_metrics);
-        let sink_topic = sink_topic.clone();
         let circuit_open = Arc::clone(&circuit_open);
         move |out: &WorkBatch<R::Token>| {
             let transform_metrics = Arc::clone(&transform_metrics);
-            let sink_topic = sink_topic.clone();
             let circuit_open = Arc::clone(&circuit_open);
-            let record_count = out.records.len() as u64;
             // The engine's `Sink` bound returns an OWNED future (it cannot borrow
             // `out`), so clone the records into the async block. This is cheap:
             // `Record` is `Bytes` (refcount bump) + `Arc<str>` key -- N refcount
             // bumps, NOT N payload copies. Zero-copy on the wire is preserved.
             let records: Vec<Record> = out.records.clone();
             async move {
-                if record_count == 0 {
-                    return Ok(());
-                }
                 let start = Instant::now();
                 let result = sender.send_batch(&records).await;
-                let elapsed = start.elapsed().as_secs_f64();
-                match result {
-                    SendResult::Ok => {
-                        // Sink reachable -> clear the outbound circuit latch (the
-                        // scaling ticker reads it for `set_circuit_open`).
-                        circuit_open.store(false, Ordering::Release);
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.records_delivered(record_count);
-                        }
-                        if let Some(ref app) = transform_metrics.app {
-                            app.record_processed(record_count);
-                        }
-                        if let Some(ref sm) = transform_metrics.sink {
-                            sm.record_duration(sink_backend, elapsed);
-                        }
-                        trace!(
-                            records = record_count,
-                            topic = %sink_topic,
-                            "produced batch"
-                        );
-                        Ok(())
-                    }
-                    SendResult::FilteredDlq => {
-                        // The whole block was outbound-filtered to DLQ. Treat as
-                        // delivered for commit purposes (the records left the
-                        // sender via the outbound filter), but surface it.
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.records_filtered(record_count);
-                        }
-                        Ok(())
-                    }
-                    SendResult::Backpressured => {
-                        if let Some(ref bp) = transform_metrics.backpressure {
-                            bp.record_event();
-                        }
-                        // Transient: the driver holds this block and re-sinks it
-                        // after a jittered backoff; nothing commits past it.
-                        Err(scalo::TransportError::Backpressure.into())
-                    }
-                    SendResult::Fatal(e) => {
-                        // Sink unreachable -> open the outbound circuit latch so
-                        // the scaling composite gates to 0 (more pods cannot
-                        // relieve a dead broker; the circuit is the gate).
-                        circuit_open.store(true, Ordering::Release);
-                        transform_metrics.record_produce_error();
-                        Err(EngineError::Sink(format!("produce failed: {e}")))
-                    }
-                }
+                settle_send(
+                    result,
+                    records.len() as u64,
+                    start.elapsed().as_secs_f64(),
+                    sink_backend,
+                    &transform_metrics,
+                    &circuit_open,
+                )
             }
         }
     };
 
-    // No periodic ticker: the produce is synchronous per block (no buffered
-    // sink to flush on a timer), so there is nothing to fire between blocks.
-    let no_ticker = None::<(
-        std::time::Duration,
-        fn() -> std::future::Ready<Result<(), EngineError>>,
-    )>;
-
+    // No ticker: the produce is synchronous per block (no buffered sink to
+    // flush on a timer), so there is nothing to fire between blocks.
     let run_result = engine
-        .run_governed(
-            receiver,
-            shutdown,
-            process,
-            sink,
-            CommitMode::Auto,
-            no_ticker,
-        )
+        .pipeline(receiver)
+        .shutdown(shutdown)
+        .sender(sender)
+        .run(process, sink)
         .await;
 
     ready_flag.store(false, Ordering::Release);
@@ -437,6 +435,69 @@ where
     let _ = sender.close().await;
 
     run_result.map_err(|e| crate::Error::Kafka(format!("pipeline engine error: {e}")))
+}
+
+/// Meter one sink call and turn its [`SendResult`] into the loop's verdict.
+///
+/// A failure the sender calls recoverable is returned transient, so the loop
+/// holds the block and sends it again after a backoff -- or, for a Push
+/// source, answers `UNAVAILABLE` at the hold deadline so the sender retries.
+/// Only a permanent failure stops the loop.
+fn settle_send(
+    result: SendResult,
+    record_count: u64,
+    elapsed_secs: f64,
+    sink_backend: &'static str,
+    transform_metrics: &TransformMetrics,
+    circuit_open: &AtomicBool,
+) -> Result<(), EngineError> {
+    match result {
+        SendResult::Ok => {
+            // Sink reachable -> clear the outbound circuit latch (the scaling
+            // ticker reads it for `set_circuit_open`).
+            circuit_open.store(false, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.records_delivered(record_count);
+            }
+            if let Some(ref app) = transform_metrics.app {
+                app.record_processed(record_count);
+            }
+            if let Some(ref sm) = transform_metrics.sink {
+                sm.record_duration(sink_backend, elapsed_secs);
+            }
+            trace!(records = record_count, "produced batch");
+            Ok(())
+        }
+        SendResult::FilteredDlq => {
+            // The whole block was outbound-filtered to DLQ. Treat as delivered
+            // for release purposes (the records left the sender via the
+            // outbound filter), but surface it.
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.records_filtered(record_count);
+            }
+            Ok(())
+        }
+        SendResult::Backpressured => {
+            if let Some(ref bp) = transform_metrics.backpressure {
+                bp.record_event();
+            }
+            Err(scalo::TransportError::Backpressure.into())
+        }
+        SendResult::Fatal(e) if e.is_recoverable() => {
+            if let Some(ref bp) = transform_metrics.backpressure {
+                bp.record_event();
+            }
+            Err(EngineError::Transport(e))
+        }
+        SendResult::Fatal(e) => {
+            // Sink unreachable -> open the outbound circuit latch so the
+            // scaling composite gates to 0 (more pods cannot relieve a dead
+            // broker; the circuit is the gate).
+            circuit_open.store(true, Ordering::Release);
+            transform_metrics.record_produce_error();
+            Err(EngineError::Sink(format!("produce failed: {e}")))
+        }
+    }
 }
 
 /// Transform a block of [`Record`]s through the VRL program.
@@ -819,6 +880,60 @@ mod tests {
             None,
         );
         assert_eq!(out.len(), 1, "only the valid record survives");
+    }
+
+    /// scalo's loop retries an `EngineError::Transport` whose error is
+    /// recoverable and stops on anything else, so this is the line between a
+    /// held block and a stopped pipeline.
+    #[test]
+    fn a_recoverable_send_failure_holds_the_block_for_a_retry() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+        let settle = |result| settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open);
+
+        for verdict in [
+            settle(SendResult::Backpressured),
+            settle(SendResult::Fatal(scalo::TransportError::Timeout)),
+            settle(SendResult::Fatal(scalo::TransportError::Backpressure)),
+        ] {
+            assert!(
+                matches!(verdict, Err(EngineError::Transport(ref e)) if e.is_recoverable()),
+                "a recoverable failure must come back retryable, got {verdict:?}"
+            );
+        }
+        assert!(
+            !circuit_open.load(Ordering::Acquire),
+            "a failure worth retrying leaves the outbound circuit closed"
+        );
+    }
+
+    #[test]
+    fn a_permanent_send_failure_stops_the_loop_and_opens_the_circuit() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+
+        for permanent in [
+            scalo::TransportError::Send("topic authorisation failed".into()),
+            scalo::TransportError::Closed,
+        ] {
+            let verdict = settle_send(
+                SendResult::Fatal(permanent),
+                3,
+                0.1,
+                "kafka",
+                &metrics,
+                &circuit_open,
+            );
+            assert!(matches!(verdict, Err(EngineError::Sink(_))), "{verdict:?}");
+            assert!(circuit_open.load(Ordering::Acquire));
+        }
+
+        let delivered = settle_send(SendResult::Ok, 3, 0.1, "kafka", &metrics, &circuit_open);
+        assert!(delivered.is_ok());
+        assert!(
+            !circuit_open.load(Ordering::Acquire),
+            "a delivered block closes the circuit again"
+        );
     }
 
     use std::time::Duration;

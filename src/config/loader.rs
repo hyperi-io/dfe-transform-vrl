@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use scalo::SensitiveString;
+use scalo::transport::AcknowledgementsConfig;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -297,6 +298,11 @@ pub struct SourceConfig {
     pub statistics_interval_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,
+    /// On (the default), the source is acknowledged -- a Kafka offset commit, a
+    /// Push answered OK -- only once the transformed records are delivered to
+    /// the sink, so a crash or a failed send re-delivers rather than loses them.
+    /// Off, it is acknowledged at receipt.
+    pub acknowledgements: AcknowledgementsConfig,
 }
 
 impl Default for SourceConfig {
@@ -316,6 +322,7 @@ impl Default for SourceConfig {
             commit_interval_ms: 5_000,
             statistics_interval_ms: 5_000,
             librdkafka_options: BTreeMap::new(),
+            acknowledgements: AcknowledgementsConfig::default(),
         }
     }
 }
@@ -805,6 +812,21 @@ mod tests {
         assert_eq!(config.sink.compression, "zstd");
         assert_eq!(config.source.transport, Transport::Bus);
         assert_eq!(config.sink.transport, Transport::Bus);
+    }
+
+    #[test]
+    fn source_acknowledgements_are_on_unless_the_file_turns_them_off() {
+        assert!(Config::default().source.acknowledgements.enabled);
+
+        let untouched: Config = serde_yaml_ng::from_str("source:\n  topics: [events]\n").unwrap();
+        assert!(
+            untouched.source.acknowledgements.enabled,
+            "a source section without the key keeps the default"
+        );
+
+        let off: Config =
+            serde_yaml_ng::from_str("source:\n  acknowledgements:\n    enabled: false\n").unwrap();
+        assert!(!off.source.acknowledgements.enabled);
     }
 
     #[test]

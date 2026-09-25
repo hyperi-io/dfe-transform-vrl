@@ -64,6 +64,11 @@ pipeline:
 #   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
+#   # On: the offsets are committed, or the Push answered OK, only once the
+#   # transformed records are delivered to the sink. Off: at receipt, and a
+#   # crash or a failed send loses what was acknowledged.
+#   acknowledgements:
+#     enabled: true
 
 # -----------------------------------------------------------------------------
 # Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)

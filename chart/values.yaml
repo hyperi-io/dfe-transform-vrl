@@ -96,6 +96,8 @@ config:
       mechanism: scram_sha_512
     tls:
       enabled: false
+    acknowledgements:
+      enabled: true
   sink:
     transport: bus
     endpoint: http://dfe-loader:6000

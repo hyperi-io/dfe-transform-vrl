@@ -42,7 +42,10 @@
         "session_timeout_ms": 30000,
         "commit_interval_ms": 5000,
         "statistics_interval_ms": 5000,
-        "librdkafka_options": {}
+        "librdkafka_options": {},
+        "acknowledgements": {
+          "enabled": true
+        }
       }
     },
     "sink": {
@@ -210,6 +213,13 @@
             "type": "string"
           },
           "default": {}
+        },
+        "acknowledgements": {
+          "description": "On (the default), the source is acknowledged -- a Kafka offset commit, a\nPush answered OK -- only once the transformed records are delivered to\nthe sink, so a crash or a failed send re-delivers rather than loses them.\nOff, it is acknowledged at receipt.",
+          "$ref": "#/$defs/AcknowledgementsConfig",
+          "default": {
+            "enabled": true
+          }
         }
       }
     },
@@ -284,6 +294,17 @@
         "skip_verify": {
           "type": "boolean",
           "default": false
+        }
+      }
+    },
+    "AcknowledgementsConfig": {
+      "description": "The `acknowledgements` section of an ack-capable transport.\n\nWith `enabled: true` (the default) a source releases its acknowledgement --\na Kafka offset commit, a gRPC or HTTP response -- only once every piece of\nwork built from the record has been delivered, dead-lettered with the DLQ's\nconfirmation, or dropped by policy. A failed delivery withholds it, so the\nrecord is delivered again: duplicates are possible, loss is not.\n\nWith `enabled: false` the source acknowledges at receipt, before the record\nis processed: a crash or a failed delivery loses what was acknowledged.\n\n```yaml\nkafka:\n  acknowledgements:\n    enabled: true\n```",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Hold the source acknowledgement until every piece is delivered.",
+          "type": "boolean",
+          "default": true
         }
       }
     },

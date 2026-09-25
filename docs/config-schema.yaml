@@ -65,6 +65,8 @@ properties:
       commit_interval_ms: 5000
       statistics_interval_ms: 5000
       librdkafka_options: {}
+      acknowledgements:
+        enabled: true
   sink:
     $ref: '#/$defs/SinkConfig'
     default:
@@ -201,6 +203,15 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+      acknowledgements:
+        description: |-
+          On (the default), the source is acknowledged -- a Kafka offset commit, a
+          Push answered OK -- only once the transformed records are delivered to
+          the sink, so a crash or a failed send re-delivers rather than loses them.
+          Off, it is acknowledged at receipt.
+        $ref: '#/$defs/AcknowledgementsConfig'
+        default:
+          enabled: true
   Transport:
     description: |-
       Which transport a stage uses.
@@ -264,6 +275,30 @@ $defs:
       skip_verify:
         type: boolean
         default: false
+  AcknowledgementsConfig:
+    description: |-
+      The `acknowledgements` section of an ack-capable transport.
+
+      With `enabled: true` (the default) a source releases its acknowledgement --
+      a Kafka offset commit, a gRPC or HTTP response -- only once every piece of
+      work built from the record has been delivered, dead-lettered with the DLQ's
+      confirmation, or dropped by policy. A failed delivery withholds it, so the
+      record is delivered again: duplicates are possible, loss is not.
+
+      With `enabled: false` the source acknowledges at receipt, before the record
+      is processed: a crash or a failed delivery loses what was acknowledged.
+
+      ```yaml
+      kafka:
+        acknowledgements:
+          enabled: true
+      ```
+    type: object
+    properties:
+      enabled:
+        description: Hold the source acknowledgement until every piece is delivered.
+        type: boolean
+        default: true
   SinkConfig:
     description: |-
       Sink configuration: the bus topic to produce to, or the Push listener to

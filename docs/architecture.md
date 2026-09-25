@@ -34,15 +34,15 @@ readers.
 ## Who owns the loop
 
 The binary is a thin VRL-specific layer over scalo's data-plane runtime. scalo's
-`BatchEngine::run_governed` drives `recv -> process -> send -> commit`, including
-the at-least-once ack barrier and self-regulation. This crate supplies only the
+`BatchEngine::pipeline` drives `recv -> process -> send -> release`, including
+the held source acknowledgement and self-regulation. This crate supplies only the
 `process` closure and the produce sink, plus the config, the VRL compiler and the
 enrichment registry.
 
 ```mermaid
 flowchart TB
     subgraph SCALO["scalo runtime -- owns the loop"]
-        DRV["BatchEngine::run_governed<br/>recv -> process -> send -> commit"]
+        DRV["BatchEngine::pipeline<br/>recv -> process -> send -> release"]
         POOL["AdaptiveWorkerPool"]
         GOV["SelfRegulationGovernor<br/>inbound pause-partitions gate"]
     end
@@ -61,25 +61,36 @@ flowchart TB
 
 Per block of records:
 
-1. The driver receives a `WorkBatch` from the governed Kafka consumer. The
-   inbound brake is attached, so intake pauses under memory pressure by pausing
-   partitions -- the member stays in the consumer group and no rebalance fires.
+1. The loop receives a `WorkBatch` from the source. On the bus transport that
+   is the governed Kafka consumer: the inbound brake is attached, so intake
+   pauses under memory pressure by pausing partitions -- the member stays in
+   the consumer group and no rebalance fires. On the direct transport it is the
+   Push listener, which refuses pushes `UNAVAILABLE` under the same pressure.
 2. `process` deserialises each record into a VRL `Value` (format auto-sensed),
    runs the compiled program on the worker pool in parallel, and reserialises
    survivors back to the format they arrived in.
-3. The driver sends the whole out-batch through `TransportSender::send_batch`.
-4. The driver commits the block's source offsets, but only after the send
-   returns `Ok`.
+3. The loop sends the whole out-batch through `TransportSender::send_batch`.
+4. The loop releases the block's source only after the send returns `Ok`:
+   Kafka commits the offsets, the Push listener answers its sender OK.
 
 ## Invariants: the delivery contract
 
 These are the rules a reader cannot recover by skimming the code, and each one
 is why some part of the code looks the way it does.
 
-**At-least-once is batch-level, not per record.** The commit happens after the
-batch send succeeds. A crash between send and commit re-delivers the whole
+**At-least-once is batch-level, not per record.** The source is released after
+the batch send succeeds. A crash between send and release re-delivers the whole
 block, so **VRL programs must be idempotent**. There is no exactly-once path and
 no per-record commit to fall back on.
+
+**A Push is answered only once its records are delivered.** The Push listener is
+built armed, so from its first request a sender waits until the transformed
+records are confirmed downstream -- a Kafka delivery report, or the next hop's
+own answer. A failed or refused send is retried until the hold runs out (18 s at
+most, less when the sender's deadline is shorter), and the sender is then
+answered `UNAVAILABLE` and retries. The send deadline to the next hop is 15 s,
+inside that hold. `source.acknowledgements.enabled: false` answers at receipt
+instead, and a crash or failed send then loses what was answered.
 
 **Dropped records still ack.** When a VRL `abort` or a transform error removes a
 record from a block, the block's `commit_tokens` -- the source offsets -- flow

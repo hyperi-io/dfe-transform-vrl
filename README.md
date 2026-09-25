@@ -242,8 +242,8 @@ A single Rust binary that runs VRL transforms over records in the DFE data path
 transport. Two boundaries get assumed wrongly. First, it is VRL only: a pipeline
 needing `lua`, `aggregate`, `dedupe`, `throttle` or `sample` belongs in
 dfe-transform-vector, which keeps the Vector subprocess and pays for it. Second,
-this crate does not own its own event loop. scalo's `BatchEngine::run_governed`
-drives `recv -> process -> send -> commit`; this crate supplies the `process`
+this crate does not own its own event loop. scalo's `BatchEngine::pipeline`
+drives `recv -> process -> send -> release`; this crate supplies the `process`
 closure, the produce sink, the config, the VRL compiler and the enrichment
 registry. Reading `src/pipeline.rs` expecting to find the loop is the usual wrong
 turn.
