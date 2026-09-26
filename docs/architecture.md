@@ -172,7 +172,7 @@ next regeneration, so a fix belongs in `contract()`.
 
 `test_committed_chart_matches_the_generator` holds `chart/` to the generator byte for byte through scalo's `assert_no_chart_drift`. A hand fix the generator cannot yet make goes in as a pinned `ChartPatch`, never as an exempt file.
 
-The Push port (6000) is gated on `config.source.transport` being `direct`, the only transport that binds the listener, so the bus default publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
+The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
 
 ### How many instances run
 

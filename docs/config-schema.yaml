@@ -211,18 +211,18 @@ $defs:
     description: |-
       Which transport a stage uses.
 
-      One deployment runs one of them: `bus` is a broker between the stages,
-      `direct` is gRPC between them and needs no broker at all. The record and
-      the transform are identical either way -- only who hands the record over
-      changes. `kafka` and `grpc` are read as the same two, the names dfe-engine
-      renders, and a config always writes `bus` and `direct` back.
+      One deployment runs one of them: `bus` is a broker between the stages, `direct` is gRPC between them and needs no broker at all. The record and the transform are identical either way -- only who hands the record over changes. `kafka` and `grpc` are read as the same two, the names dfe-engine renders, and a config always writes `bus` and `direct` back.
     oneOf:
     - description: Kafka topics.
       type: string
-      const: bus
+      enum:
+      - bus
+      - kafka
     - description: A scalo Push listener (source) or client (sink).
       type: string
-      const: direct
+      enum:
+      - direct
+      - grpc
   SaslConfig:
     description: |-
       SASL authentication for Kafka.

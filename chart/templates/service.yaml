@@ -11,7 +11,7 @@ spec:
       targetPort: metrics
       protocol: TCP
       name: metrics
-    {{- if eq (toString ((.Values.config).source).transport) "direct" }}
+    {{- if has (toString ((.Values.config).source).transport) (list "direct" "grpc") }}
     - port: 6000
       targetPort: 6000
       protocol: TCP

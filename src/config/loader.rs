@@ -251,9 +251,7 @@ impl Default for PipelineConfig {
 /// the transform are identical either way -- only who hands the record over
 /// changes. `kafka` and `grpc` are read as the same two, the names dfe-engine
 /// renders, and a config always writes `bus` and `direct` back.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
     /// Kafka topics.
@@ -263,6 +261,32 @@ pub enum Transport {
     /// A scalo Push listener (source) or client (sink).
     #[serde(alias = "grpc")]
     Direct,
+}
+
+// Written by hand because the derive lists only the canonical names, and a
+// validator must take the `grpc` and `kafka` an engine render carries.
+impl schemars::JsonSchema for Transport {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Transport".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages, `direct` is gRPC between them and needs no broker at all. The record and the transform are identical either way -- only who hands the record over changes. `kafka` and `grpc` are read as the same two, the names dfe-engine renders, and a config always writes `bus` and `direct` back.",
+            "oneOf": [
+                {
+                    "description": "Kafka topics.",
+                    "type": "string",
+                    "enum": ["bus", "kafka"]
+                },
+                {
+                    "description": "A scalo Push listener (source) or client (sink).",
+                    "type": "string",
+                    "enum": ["direct", "grpc"]
+                }
+            ]
+        })
+    }
 }
 
 impl Transport {
@@ -1331,6 +1355,27 @@ source:
             "direct"
         );
         assert_eq!(serde_json::to_value(bus.source.transport).unwrap(), "bus");
+    }
+
+    /// A validator reading the emitted schema must take every transport name
+    /// the config file reads, each for the transport the file reads it as.
+    #[test]
+    fn the_emitted_schema_lists_every_transport_name_the_file_reads() {
+        let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+        let branches = schema["$defs"]["Transport"]["oneOf"].as_array().unwrap();
+        let mut listed = Vec::new();
+        for branch in branches {
+            let names = branch["enum"].as_array().unwrap();
+            let canonical: Transport = serde_json::from_value(names[0].clone()).unwrap();
+            assert_eq!(serde_json::to_value(canonical).unwrap(), names[0]);
+            for name in names {
+                let read: Transport = serde_json::from_value(name.clone()).unwrap();
+                assert_eq!(read, canonical, "{name} reads as another transport");
+                listed.push(name.as_str().unwrap().to_string());
+            }
+        }
+        listed.sort();
+        assert_eq!(listed, ["bus", "direct", "grpc", "kafka"]);
     }
 
     /// The engine serves this schema to the console, where a marked field
