@@ -218,7 +218,7 @@
       }
     },
     "Transport": {
-      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and\nthe transform are identical either way -- only who hands the record over\nchanges.",
+      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and\nthe transform are identical either way -- only who hands the record over\nchanges. `kafka` and `grpc` are read as the same two, the names dfe-engine\nrenders, and a config always writes `bus` and `direct` back.",
       "oneOf": [
         {
           "description": "Kafka topics.",

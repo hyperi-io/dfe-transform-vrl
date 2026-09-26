@@ -249,7 +249,8 @@ impl Default for PipelineConfig {
 /// One deployment runs one of them: `bus` is a broker between the stages,
 /// `direct` is gRPC between them and needs no broker at all. The record and
 /// the transform are identical either way -- only who hands the record over
-/// changes.
+/// changes. `kafka` and `grpc` are read as the same two, the names dfe-engine
+/// renders, and a config always writes `bus` and `direct` back.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -257,8 +258,10 @@ impl Default for PipelineConfig {
 pub enum Transport {
     /// Kafka topics.
     #[default]
+    #[serde(alias = "kafka")]
     Bus,
     /// A scalo Push listener (source) or client (sink).
+    #[serde(alias = "grpc")]
     Direct,
 }
 
@@ -1282,6 +1285,52 @@ source:
         let config = Config::load(Some(path.to_str().unwrap())).unwrap();
 
         assert_eq!(config.source.sasl.password.expose(), "from-the-file");
+    }
+
+    /// dfe-engine renders a stage's transport by its mechanism, so a config
+    /// file naming `grpc` or `kafka` must load through `--config` as the stage
+    /// it names, not stop the process.
+    #[test]
+    fn a_config_file_may_name_the_transport_grpc_or_kafka() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transport.yaml");
+        let load = |yaml: &str| {
+            std::fs::write(&path, yaml).unwrap();
+            // Only the file may set the transport here.
+            temp_env::with_vars(
+                [
+                    ("DFE_TRANSFORM_SOURCE_TRANSPORT", None::<&str>),
+                    ("DFE_TRANSFORM_SINK_TRANSPORT", None),
+                    ("DFE_TRANSFORM_SOURCE__TRANSPORT", None),
+                    ("DFE_TRANSFORM_SINK__TRANSPORT", None),
+                ],
+                || Config::load(Some(path.to_str().unwrap())),
+            )
+        };
+
+        let direct = load(
+            "source:\n  transport: grpc\n  listen: 0.0.0.0:6000\nsink:\n  transport: grpc\n  endpoint: http://dfe-loader:6000\n",
+        )
+        .unwrap();
+        assert_eq!(direct.source.transport, Transport::Direct);
+        assert_eq!(direct.sink.transport, Transport::Direct);
+
+        let bus = load(
+            "source:\n  transport: kafka\n  topics: [raw]\nsink:\n  transport: kafka\n  topic: enriched\n",
+        )
+        .unwrap();
+        assert_eq!(bus.source.transport, Transport::Bus);
+        assert_eq!(bus.sink.transport, Transport::Bus);
+
+        // The file still refuses a name it does not know.
+        assert!(load("source:\n  transport: tcp\n").is_err());
+
+        // Written back, a transport always takes its own name.
+        assert_eq!(
+            serde_json::to_value(direct.source.transport).unwrap(),
+            "direct"
+        );
+        assert_eq!(serde_json::to_value(bus.source.transport).unwrap(), "bus");
     }
 
     /// The engine serves this schema to the console, where a marked field
