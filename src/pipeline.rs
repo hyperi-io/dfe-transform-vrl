@@ -759,7 +759,9 @@ fn transform_records(
 
 /// Parse a JSON payload into a VRL Value.
 ///
-/// Uses `sonic_rs` (SIMD-accelerated, 2-4x faster than `serde_json`).
+/// Uses `sonic_rs` (SIMD-accelerated, 2-4x faster than `serde_json`). Its serde
+/// path refuses nesting past 254 levels, which a 2 MiB release worker stack
+/// holds, so this needs no depth pre-check.
 fn deserialize_event(payload: &[u8]) -> crate::Result<Value> {
     sonic_rs::from_slice(payload)
         .map_err(|e| crate::Error::Serialisation(format!("payload is not JSON: {e}")))
@@ -1416,5 +1418,113 @@ mod tests {
         });
 
         assert_sink_metered_as(&capture, "memory");
+    }
+
+    // ---- nesting depth ----
+
+    /// The stack a Tokio worker or worker-pool thread gets by default.
+    const WORKER_STACK: usize = 2 * 1024 * 1024;
+
+    /// A stack that holds the 254 levels the parse accepts, whose frames
+    /// overflow 2 MiB near 128 levels in a debug build.
+    const BOUND_STACK: usize = if cfg!(debug_assertions) {
+        32 * 1024 * 1024
+    } else {
+        WORKER_STACK
+    };
+
+    /// Run `test` on a thread with `stack` bytes of stack, and fail unless it returns.
+    fn on_stack(stack: usize, test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(test)
+            .expect("spawn the transform thread")
+            .join()
+            .expect("the transform thread must return");
+    }
+
+    fn nested_array(depth: usize) -> Vec<u8> {
+        format!("{}1{}", "[".repeat(depth), "]".repeat(depth)).into_bytes()
+    }
+
+    fn nested_object(depth: usize) -> Vec<u8> {
+        format!("{}1{}", "{\"a\":".repeat(depth), "}".repeat(depth)).into_bytes()
+    }
+
+    /// sonic-rs's serde path refuses nesting past 254 levels with an error, so
+    /// a record nested far deeper is refused as not JSON, never recursed into.
+    #[test]
+    fn a_deeply_nested_payload_is_refused_as_not_json() {
+        on_stack(BOUND_STACK, || {
+            for depth in [20_000, 100_000] {
+                for payload in [nested_array(depth), nested_object(depth)] {
+                    let refused = deserialize_event(&payload)
+                        .expect_err("a record nested this deep must be refused");
+                    let message = refused.to_string();
+                    assert!(
+                        message.contains("payload is not JSON") && message.contains("nesting"),
+                        "depth {depth}: {message}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn the_parse_takes_254_levels_and_refuses_255() {
+        on_stack(BOUND_STACK, || {
+            for nested in [nested_array, nested_object] {
+                assert!(deserialize_event(&nested(254)).is_ok());
+                assert!(deserialize_event(&nested(255)).is_err());
+            }
+        });
+    }
+
+    /// A deep record is counted on the deserialise error and removed, and the
+    /// rest of its block is transformed.
+    #[test]
+    fn a_deeply_nested_record_is_dropped_and_the_rest_transformed() {
+        on_stack(BOUND_STACK, || {
+            let capture = Capture::default();
+            let program = crate::engine::compiler::compile_vrl(".ok = true", None)
+                .expect("VRL compile")
+                .program;
+            let sink_topic: Arc<str> = Arc::from("out");
+            let mut records = json_records(2);
+            for payload in [nested_object(20_000), nested_array(100_000)] {
+                records.insert(
+                    1,
+                    Record {
+                        payload: Bytes::from(payload),
+                        key: None,
+                        headers: Vec::new(),
+                        metadata: RecordMeta {
+                            timestamp_ms: None,
+                            format: PayloadFormat::Json,
+                        },
+                    },
+                );
+            }
+
+            let out = metrics::with_local_recorder(&capture, || {
+                transform_records(
+                    records,
+                    &program,
+                    &sink_topic,
+                    &TransformMetrics::default(),
+                    None,
+                )
+            });
+
+            let ids: Vec<Value> = out
+                .iter()
+                .map(|r| deserialize_event(&r.payload).unwrap().as_object().unwrap()["id"].clone())
+                .collect();
+            assert_eq!(ids, vec![Value::from(0), Value::from(1)]);
+            assert_eq!(
+                capture.counter("records_error_total", &[("stage", "deserialise")]),
+                Some(2)
+            );
+        });
     }
 }
