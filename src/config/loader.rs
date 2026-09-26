@@ -964,8 +964,8 @@ sink:
     fn a_source_from_an_older_render_still_loads() {
         // An engine render from before JSON-only still carries source.format.
         let yaml = "source:\n  format: auto\n  group_id: cg\n";
-        let config: Config =
-            serde_yaml_ng::from_str(yaml).expect("the removed key is ignored, not refused");
+        let config: Config = serde_yaml_ng::from_str(yaml)
+            .unwrap_or_else(|e| panic!("the removed key is ignored, not refused: {e}"));
         assert_eq!(config.source.group_id, "cg");
     }
 
