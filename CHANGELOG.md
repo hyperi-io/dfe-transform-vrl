@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.28](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.27...v1.1.28) (2026-09-27)
+
+### Bug Fixes
+
+* clear the CI warnings vrl owns ([#82](https://github.com/hyperi-io/dfe-transform-vrl/issues/82)) ([8cf4648](https://github.com/hyperi-io/dfe-transform-vrl/commit/8cf46481aa5f799a678913233f918a18e0e3ae08))
+* hold source acks until records are delivered ([#85](https://github.com/hyperi-io/dfe-transform-vrl/issues/85)) ([d06a70c](https://github.com/hyperi-io/dfe-transform-vrl/commit/d06a70c08dc94a91d48fed53b7156a388d6cb806))
+* meter the sink by the transport it uses, count each record once ([#83](https://github.com/hyperi-io/dfe-transform-vrl/issues/83)) ([035a640](https://github.com/hyperi-io/dfe-transform-vrl/commit/035a640d7ceb7b9bb602011956185f38950b0265))
+* **metrics:** count each record error once ([#84](https://github.com/hyperi-io/dfe-transform-vrl/issues/84)) ([e18bdae](https://github.com/hyperi-io/dfe-transform-vrl/commit/e18bdae6e46b077703c3286817a44fb6f83ada75))
+
 ## [1.1.27](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.26...v1.1.27) (2026-09-24)
 
 ### Bug Fixes
