@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.29](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.28...v1.1.29) (2026-09-27)
+
+### Bug Fixes
+
+* drop the JFrog registry from the cargo config ([#87](https://github.com/hyperi-io/dfe-transform-vrl/issues/87)) ([f4f5266](https://github.com/hyperi-io/dfe-transform-vrl/commit/f4f5266438f1aac386b120a14de7c7fe37701156))
+* rebuild on scalo 2.13.1 ([4c9547a](https://github.com/hyperi-io/dfe-transform-vrl/commit/4c9547a4f604395c3f49708526f3f1dc142ad2c2))
+* stop naming our dev cluster in test docs ([#88](https://github.com/hyperi-io/dfe-transform-vrl/issues/88)) ([92c5b89](https://github.com/hyperi-io/dfe-transform-vrl/commit/92c5b899bd7252202312b256ebe81b09c2dd6d1b))
+
 ## [1.1.28](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.27...v1.1.28) (2026-09-27)
 
 ### Bug Fixes
