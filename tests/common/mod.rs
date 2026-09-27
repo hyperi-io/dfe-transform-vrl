@@ -9,7 +9,7 @@
 //! Shared test helpers for integration and e2e tests.
 //!
 //! Supports two test backends via `TEST_MODE` in `.env`:
-//! - `remote` (default) — devex cluster endpoints from env vars
+//! - `remote` (default) — remote cluster endpoints from env vars
 //! - `docker` — dfe-docker infra profile on localhost (no auth, no TLS)
 
 use std::env;
