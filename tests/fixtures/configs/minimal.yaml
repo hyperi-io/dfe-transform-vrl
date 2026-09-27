@@ -9,7 +9,6 @@ source:
   topics:
     - test-input
   group_id: test-group
-  format: auto
 
 sink:
   brokers:

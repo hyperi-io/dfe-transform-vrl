@@ -2,18 +2,13 @@
 
 ## The problem this shape solves
 
-Reshaping events with Vector costs two things DFE cannot afford at volume.
+Reshaping events with Vector costs memory DFE cannot afford at volume.
 
 Vector has no configurable memory cap. Its internal buffers grow with
 throughput, so a Kubernetes memory limit has to be sized for the worst case
 Vector might ever reach rather than the work actually queued.
 
-Vector also has no MessagePack codec, and msgpack is the platform's primary wire
-format. Running a msgpack stream through Vector means
-`msgpack -> JSON -> VRL -> JSON -> msgpack`, which spends the CPU and the
-allocations that choosing msgpack was meant to save.
-
-Both costs buy access to Vector's non-VRL transforms, which most pipelines never
+That cost buys access to Vector's non-VRL transforms, which most pipelines never
 use. So the shape is: keep VRL, drop Vector. Compile the VRL crate into the
 binary, and let the wrapper own the buffers and the wire format.
 
@@ -34,15 +29,15 @@ readers.
 ## Who owns the loop
 
 The binary is a thin VRL-specific layer over scalo's data-plane runtime. scalo's
-`BatchEngine::run_governed` drives `recv -> process -> send -> commit`, including
-the at-least-once ack barrier and self-regulation. This crate supplies only the
+`BatchEngine::pipeline` drives `recv -> process -> send -> release`, including
+the held source acknowledgement and self-regulation. This crate supplies only the
 `process` closure and the produce sink, plus the config, the VRL compiler and the
 enrichment registry.
 
 ```mermaid
 flowchart TB
     subgraph SCALO["scalo runtime -- owns the loop"]
-        DRV["BatchEngine::run_governed<br/>recv -> process -> send -> commit"]
+        DRV["BatchEngine::pipeline<br/>recv -> process -> send -> release"]
         POOL["AdaptiveWorkerPool"]
         GOV["SelfRegulationGovernor<br/>inbound pause-partitions gate"]
     end
@@ -61,31 +56,31 @@ flowchart TB
 
 Per block of records:
 
-1. The driver receives a `WorkBatch` from the governed Kafka consumer. The
-   inbound brake is attached, so intake pauses under memory pressure by pausing
-   partitions -- the member stays in the consumer group and no rebalance fires.
+1. The loop receives a `WorkBatch` from the source. On the bus transport that
+   is the governed Kafka consumer: the inbound brake is attached, so intake
+   pauses under memory pressure by pausing partitions -- the member stays in
+   the consumer group and no rebalance fires. On the direct transport it is the
+   Push listener, which refuses pushes `UNAVAILABLE` under the same pressure.
 2. `process` deserialises each record into a VRL `Value` (format auto-sensed),
    runs the compiled program on the worker pool in parallel, and reserialises
    survivors back to the format they arrived in.
-3. The driver sends the whole out-batch through `TransportSender::send_batch`.
-4. The driver commits the block's source offsets, but only after the send
-   returns `Ok`.
+3. The loop sends the whole out-batch through `TransportSender::send_batch`.
+4. The loop releases the block's source only after the send returns `Ok`:
+   Kafka commits the offsets, the Push listener answers its sender OK.
 
 ## Invariants: the delivery contract
 
 These are the rules a reader cannot recover by skimming the code, and each one
 is why some part of the code looks the way it does.
 
-**At-least-once is batch-level, not per record.** The commit happens after the
-batch send succeeds. A crash between send and commit re-delivers the whole
+**At-least-once is batch-level, not per record.** The source is released after
+the batch send succeeds. A crash between send and release re-delivers the whole
 block, so **VRL programs must be idempotent**. There is no exactly-once path and
 no per-record commit to fall back on.
 
-**Dropped records still ack.** When a VRL `abort` or a transform error removes a
-record from a block, the block's `commit_tokens` -- the source offsets -- flow
-through untouched. A transform that filters most of its input therefore never
-under-acks its source, and a pipeline cannot wedge because a batch emitted fewer
-records than it consumed.
+**A Push is answered only once its records are delivered.** The listener is built armed, so a sender waits for a Kafka delivery report or the next hop's own answer. A failed or refused send is retried until the hold runs out (at most 18 s, less under a shorter sender deadline), then answered `UNAVAILABLE`. The next hop gets 15 s inside that hold: the gRPC sink's deadline, or Kafka's `message.timeout.ms` unless `librdkafka_options` sets it. `source.acknowledgements.enabled: false` answers at receipt, and a crash or failed send then loses what was answered.
+
+**Dropped records still ack.** When a VRL `abort` or a transform error removes a record from a block, the block's `commit_tokens` -- the source offsets -- flow through untouched, and the block releases as dropped, not delivered. A block the sink filters out rather than sends releases the same way. A transform that filters most of its input therefore never under-acks its source, and a pipeline cannot wedge because a batch emitted fewer records than it consumed.
 
 **The outbound drain is never gated.** Self-regulation brakes intake only.
 Applying the same backpressure to the producer would deadlock the pipeline: the
@@ -177,7 +172,7 @@ next regeneration, so a fix belongs in `contract()`.
 
 `test_committed_chart_matches_the_generator` holds `chart/` to the generator byte for byte through scalo's `assert_no_chart_drift`. A hand fix the generator cannot yet make goes in as a pinned `ChartPatch`, never as an exempt file.
 
-The Push port (6000) is gated on `config.source.transport` being `direct`, the only transport that binds the listener, so the bus default publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
+The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
 
 ### How many instances run
 

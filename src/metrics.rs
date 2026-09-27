@@ -99,10 +99,7 @@ impl TransformMetrics {
                 "batch_duration_seconds",
                 "End-to-end batch latency (consume to commit)",
             ),
-            records_format: manager.counter(
-                "records_format_total",
-                "Records received by detected format",
-            ),
+            records_format: manager.counter("records_format_total", "Records received by format"),
             programs_loaded: manager.gauge("programs_loaded", "Active VRL program count"),
             abort_total: manager.counter("abort_total", "Events dropped by VRL abort"),
             batch_size: manager.histogram("batch_size", "Events per transform batch"),
@@ -162,7 +159,7 @@ impl TransformMetrics {
         .increment(1);
     }
 
-    /// Record the detected format for a batch of records.
+    /// Record the format of a batch of parsed records.
     #[inline]
     pub fn record_format(&self, format: &str, count: u64) {
         metrics::counter!(
@@ -544,7 +541,6 @@ mod tests {
     fn record_format_does_not_panic() {
         let m = TransformMetrics::default();
         m.record_format("json", 10);
-        m.record_format("msgpack", 5);
     }
 
     #[test]
@@ -650,11 +646,9 @@ mod tests {
     }
 
     #[test]
-    fn record_format_covers_all_formats() {
+    fn record_format_counts_json() {
         let manager = MetricsManager::new("test_formats");
         let m = TransformMetrics::new(&manager, "0.1.0", "cccc");
         m.record_format("json", 100);
-        m.record_format("msgpack", 50);
-        m.record_format("auto", 0);
     }
 }

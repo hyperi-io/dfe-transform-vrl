@@ -8,39 +8,47 @@
 
 //! Event processing pipeline.
 //!
-//! The mid-tier transform stage (Kafka consume -> VRL transform -> Kafka
-//! produce -> commit) is driven by scalo's unified `WorkBatch` engine
-//! ([`BatchEngine::run_governed`]). The driver owns the
-//! `recv -> process -> send -> commit` loop with full self-regulation
-//! (inbound pause-partitions gate + AIMD byte-budget streaming + at-least-once
-//! ack barrier). This crate supplies only the VRL-specific `process` closure
-//! and the produce `sink`.
+//! The mid-tier transform stage (consume -> VRL transform -> produce ->
+//! release) is driven by scalo's `WorkBatch` pipeline loop
+//! ([`BatchEngine::pipeline`]). The loop owns `recv -> process -> send ->
+//! release` with full self-regulation (inbound gate + AIMD byte-budget
+//! streaming), and holds each block's source acknowledgement until the sink
+//! has delivered it. This crate supplies only the VRL-specific `process`
+//! closure and the produce `sink`.
 //!
 //! Data flow per block:
-//! 1. The driver receives a [`WorkBatch`] of [`Record`]s from the governed
-//!    Kafka consumer (inbound brake attached; intake pauses under memory
-//!    pressure -- the member stays in the group, no rebalance).
-//! 2. `process` deserialises each record to a VRL `Value` (auto-sensing format),
-//!    runs the compiled VRL program in parallel on the worker pool, and
-//!    re-serialises the surviving events back to their original wire format.
-//!    Records dropped by a VRL `abort` or a transform error are removed from
-//!    the block; the block's `commit_tokens` (the source offsets) flow through
-//!    untouched, so a fan-in NEVER under-acks the source.
-//! 3. The driver sends the whole out-batch via the producer's
+//! 1. The loop receives a [`WorkBatch`] of [`Record`]s from the source: the
+//!    governed Kafka consumer on the bus transport (intake pauses under memory
+//!    pressure -- the member stays in the group, no rebalance), or the Push
+//!    listener on the direct transport (pushes are refused `UNAVAILABLE` under
+//!    pressure).
+//! 2. `process` parses each record's JSON into a VRL `Value`, runs the
+//!    compiled VRL program in parallel on the worker pool, and serialises the
+//!    surviving events back to JSON. Records that are not JSON, or that a VRL
+//!    `abort` or a transform error drops, are removed from the block, which
+//!    then releases `Dropped`; the block's `commit_tokens`
+//!    (the source acks) flow through untouched, so a fan-in NEVER under-acks
+//!    the source.
+//! 3. The loop sends the whole out-batch via the sender's
 //!    [`TransportSender::send_batch`].
-//! 4. The driver commits the block's source offsets ([`CommitMode::Auto`])
-//!    AFTER the send returns `Ok` -- batch-level at-least-once, not per record.
+//! 4. Only once the send returns `Ok` does the loop release the block's
+//!    source: Kafka commits the offsets, the Push listener answers its sender
+//!    OK. A failed send leaves it unreleased -- Kafka re-reads the block after
+//!    a restart, and a Push sender is answered `UNAVAILABLE` and retries.
+//!    Batch-level at-least-once, not per record. With
+//!    `source.acknowledgements.enabled: false` the source is released at
+//!    receipt instead.
 //!
 //! Self-regulation is default-ON (opt out via `self_regulation.enabled =
 //! false`). The byte-budget lever is wired into the engine by the
-//! `ServiceRuntime`; the inbound pause-partitions gate is attached to the Kafka
-//! consumer here via [`SelfRegulationGovernor::attach_kafka_gate`]. The OUTBOUND
-//! producer drain is NEVER gated -- gating the sink would deadlock the pipeline
-//! (see `docs/BACKPRESSURE.md`).
+//! `ServiceRuntime`; the inbound gate is attached here, to the Kafka consumer
+//! via [`SelfRegulationGovernor::attach_kafka_gate`] and to the Push listener
+//! through its builder. The OUTBOUND producer drain is NEVER gated -- gating
+//! the sink would deadlock the pipeline (scalo `docs/backpressure.md`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use scalo::SelfRegulationGovernor;
@@ -49,13 +57,14 @@ use scalo::logger::{log_sampled, security};
 use scalo::memory::MemoryGuard;
 use scalo::scaling::ScalingPressure;
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
-use scalo::transport::kafka::{KafkaTransport, total_consumer_lag};
+use scalo::transport::kafka::{KafkaConfig, KafkaTransport, total_consumer_lag};
 use scalo::transport::{
-    AnySender, PayloadFormat, Record, RecordMeta, SendResult, TransportSender, WorkBatch,
+    AnySender, DeliveryStatus, PayloadFormat, PieceFinalizer, Record, RecordMeta, SendResult,
+    TransportSender, WorkBatch,
 };
 use scalo::worker::AdaptiveWorkerPool;
 use scalo::worker::BatchEngine;
-use scalo::worker::engine::{CommitMode, EngineError};
+use scalo::worker::engine::{BlockPieces, EngineError};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -67,21 +76,30 @@ use tracing::{debug, info, trace, warn};
 /// the loader's 5s flush-tick push cadence.
 const SCALING_SIGNAL_INTERVAL_SECS: u64 = 5;
 
+/// Longest a Push is held for delivery: inside the stage in front's 20 s send
+/// deadline, so it is answered before that sender gives up.
+pub const PUSH_MAX_HOLD: Duration = Duration::from_secs(18);
+
+/// Send deadline to the next hop -- a Push listener, or a Kafka delivery
+/// report while a Push is held: inside this stage's own [`PUSH_MAX_HOLD`], so
+/// a slow hop is retried before the hold runs out.
+pub const NEXT_HOP_SEND_TIMEOUT_MS: u64 = 15_000;
+
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
 static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
+static FILTERED_BLOCKS: AtomicU64 = AtomicU64::new(0);
 use vrl::compiler::Program;
 use vrl::value::Value;
 
-/// Per-record deserialise outcome: `(value, format, index)` on success, or
-/// `(index, format, error)` on failure (the index/format keep the failed
-/// record traceable for metrics).
-type DeserResult = Result<(Value, PayloadFormat, usize), (usize, PayloadFormat, String)>;
+/// Per-record deserialise outcome: `(value, index)` on success, or
+/// `(index, error)` on failure.
+type DeserResult = Result<(Value, usize), (usize, String)>;
 
-/// Per-record VRL outcome: `(value, format, index)` on success, or
-/// `(index, error)` on failure (abort vs runtime error discriminated by the
-/// [`crate::Error`] variant).
-type VrlResult = Result<(Value, PayloadFormat, usize), (usize, crate::Error)>;
+/// Per-record VRL outcome: `(value, index)` on success, or `(index, error)` on
+/// failure (abort vs runtime error discriminated by the [`crate::Error`]
+/// variant).
+type VrlResult = Result<(Value, usize), (usize, crate::Error)>;
 
 use crate::config::Config;
 use crate::config::hot::HotConfig;
@@ -89,11 +107,12 @@ use crate::engine::runner::run_vrl;
 use crate::kafka;
 use crate::metrics::TransformMetrics;
 
-/// Run the transform pipeline with Kafka transports (production entry point).
+/// Run the transform pipeline (production entry point).
 ///
-/// Builds the governed Kafka consumer (inbound pause-partitions gate attached
-/// when self-regulation is on) and the plain Kafka producer, then hands the
-/// `recv -> process -> send -> commit` loop to [`BatchEngine::run_governed`].
+/// Builds the source -- the governed Kafka consumer (inbound pause-partitions
+/// gate attached when self-regulation is on) or the armed Push listener -- and
+/// the sink, then hands the `recv -> process -> send -> release` loop to
+/// [`BatchEngine::pipeline`].
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: &Config,
@@ -108,15 +127,12 @@ pub async fn run(
     scaling: Option<Arc<ScalingPressure>>,
     memory_guard: Arc<MemoryGuard>,
 ) -> crate::Result<()> {
-    let payload_format = kafka::parse_format(&config.source.format);
-
     info!(
         pipeline = %config.pipeline.name,
         source_transport = ?config.source.transport,
         source_topics = ?config.source.topics,
         sink_transport = ?config.sink.transport,
         sink_topic = %config.sink.topic,
-        format = %config.source.format,
         self_regulation = governor.is_some(),
         "initialising pipeline"
     );
@@ -128,9 +144,7 @@ pub async fn run(
     // The direct transport has no consumer group and no lag, so the Kafka gate
     // and the lag ticker belong to the bus form alone.
     if config.source.transport.is_direct() {
-        let listener = GrpcTransport::new(&GrpcConfig::server(&config.source.listen))
-            .await
-            .map_err(|e| crate::Error::Kafka(format!("failed to start Push listener: {e}")))?;
+        let listener = start_push_listener(config, governor.as_ref(), &memory_guard).await?;
         info!(listen = %config.source.listen, "Push listener started");
         return run_governed_pipeline(
             &engine,
@@ -138,7 +152,6 @@ pub async fn run(
             &producer,
             program,
             hot_config,
-            payload_format,
             &transform_metrics,
             ready_flag,
             shutdown,
@@ -157,7 +170,8 @@ pub async fn run(
     // consumer is used (byte-identical to the pre-governor data path).
     let consumer = KafkaTransport::new(&consumer_config)
         .await
-        .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?;
+        .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?
+        .with_acknowledgements(config.source.acknowledgements);
     let consumer = match governor.as_ref() {
         Some(gov) => gov.attach_kafka_gate(consumer),
         None => consumer,
@@ -226,7 +240,6 @@ pub async fn run(
         &producer,
         program,
         hot_config,
-        payload_format,
         &transform_metrics,
         ready_flag,
         shutdown,
@@ -243,13 +256,49 @@ pub async fn run(
     result
 }
 
+/// Start the direct transport's Push listener, armed from its first request.
+///
+/// Armed, a Push is answered only once its records are released, so no push
+/// is acknowledged before the pipeline loop is running to deliver it. While
+/// the governor's pressure holds the listener refuses pushes `UNAVAILABLE`,
+/// and the responses it holds are leased on the memory guard.
+///
+/// # Errors
+///
+/// The listen address is invalid or cannot be bound.
+pub async fn start_push_listener(
+    config: &Config,
+    governor: Option<&SelfRegulationGovernor>,
+    memory_guard: &Arc<MemoryGuard>,
+) -> crate::Result<GrpcTransport> {
+    let grpc = GrpcConfig::server(&config.source.listen);
+    let builder = GrpcTransport::builder(&grpc)
+        .acknowledgements(config.source.acknowledgements)
+        .armed(true)
+        .max_hold(PUSH_MAX_HOLD)
+        .memory_guard(Arc::clone(memory_guard));
+    let builder = match governor {
+        Some(governor) => builder.pressure(governor.pressure()),
+        None => builder,
+    };
+    builder
+        .start()
+        .await
+        .map_err(|e| crate::Error::Kafka(format!("failed to start Push listener: {e}")))
+}
+
 /// Build the sink for this deployment's transport.
 ///
 /// `AnySender` keeps the driver one code path across both, and delegates
 /// `send_batch` to the backend's native batch RPC.
-async fn build_sender(config: &Config) -> crate::Result<AnySender> {
+///
+/// # Errors
+///
+/// The sink transport cannot be created from `config.sink`.
+pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
     if config.sink.transport.is_direct() {
-        let grpc = GrpcConfig::client(&config.sink.endpoint);
+        let mut grpc = GrpcConfig::client(&config.sink.endpoint);
+        grpc.send_timeout_ms = NEXT_HOP_SEND_TIMEOUT_MS;
         let transport = GrpcTransport::new(&grpc)
             .await
             .map_err(|e| crate::Error::Kafka(format!("failed to create gRPC sink: {e}")))?;
@@ -257,19 +306,43 @@ async fn build_sender(config: &Config) -> crate::Result<AnySender> {
         return Ok(AnySender::Grpc(transport));
     }
 
-    let producer_config = kafka::build_producer_config(&config.sink, &config.pipeline.name);
-    let transport = KafkaTransport::new(&producer_config)
+    let transport = KafkaTransport::new(&producer_config(config))
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))?;
     Ok(AnySender::Kafka(transport))
 }
 
-/// Drive the mid-tier transform via [`BatchEngine::run_governed`].
+/// The bus sink's producer config.
 ///
-/// `receiver` is the (optionally gated) Kafka consumer; `sender` is the Kafka
-/// producer. The VRL transform is the `process` closure and the produce is the
-/// `sink` closure. The driver owns batching, streaming sub-blocks under
-/// pressure, and the at-least-once commit barrier.
+/// While a direct source holds its acknowledgements, a delivery report that
+/// comes after the hold is spent is a duplicate in waiting: the sender was
+/// already told to retry. So `message.timeout.ms` is capped at
+/// [`NEXT_HOP_SEND_TIMEOUT_MS`], unless `sink.librdkafka_options` sets it.
+fn producer_config(config: &Config) -> KafkaConfig {
+    let mut producer = kafka::build_producer_config(&config.sink, &config.pipeline.name);
+    let holds = config.source.transport.is_direct() && config.source.acknowledgements.enabled;
+    if holds
+        && !config
+            .sink
+            .librdkafka_options
+            .contains_key("message.timeout.ms")
+    {
+        let capped = u64::from(config.sink.message_timeout_ms).min(NEXT_HOP_SEND_TIMEOUT_MS);
+        producer
+            .librdkafka_overrides
+            .insert("message.timeout.ms".to_string(), capped.to_string());
+    }
+    producer
+}
+
+/// Drive the mid-tier transform through [`BatchEngine::pipeline`].
+///
+/// `receiver` is the source (the optionally gated Kafka consumer, or the Push
+/// listener); `sender` is the sink. The VRL transform is the `process` closure
+/// and the produce is the `sink` closure. The loop owns batching, streaming
+/// sub-blocks under pressure, and holding each block's source acknowledgement
+/// until the sink has delivered it. Records `sender` would dead-letter rather
+/// than send are taken out of the block before the sink is called.
 ///
 /// Exposed `pub` so the e2e integration tests can drive a real Kafka round-trip
 /// with pre-built transports + a stand-alone engine, without going through the
@@ -281,7 +354,6 @@ pub async fn run_governed_pipeline<R, S>(
     sender: &S,
     program: Arc<Program>,
     hot_config: SharedConfig<HotConfig>,
-    payload_format: PayloadFormat,
     transform_metrics: &Arc<TransformMetrics>,
     ready_flag: Arc<AtomicBool>,
     shutdown: CancellationToken,
@@ -302,9 +374,10 @@ where
     // ---- process: bytes -> VRL Value -> bytes, in parallel on the pool -------
     //
     // Runs the compiled VRL program across the block. Records dropped by a VRL
-    // `abort` or a transform/(de)serialise error are removed from the block; the
-    // commit_tokens flow through untouched via `map_records`, so a fan-in never
-    // under-acks the source offsets (at-least-once on the surviving set).
+    // `abort` or a transform/(de)serialise error are removed from the block and
+    // counted in a marker record the sink takes back out; the commit_tokens flow
+    // through untouched via `map_records`, so a fan-in never under-acks the
+    // source offsets (at-least-once on the surviving set).
     // `hot_config` is retained for its other live fields (validated + reloaded)
     // even though the partition-key path is dormant until scalo #37 lands.
     let _ = &hot_config;
@@ -315,10 +388,9 @@ where
         let sink_topic = Arc::<str>::from(sink_topic.as_str());
         move |batch: WorkBatch<R::Token>| -> Result<WorkBatch<R::Token>, EngineError> {
             Ok(batch.map_records(|records| {
-                transform_records(
+                transform_block(
                     records,
                     &program,
-                    payload_format,
                     &sink_topic,
                     &transform_metrics,
                     worker_pool.as_ref(),
@@ -330,101 +402,57 @@ where
     // ---- sink: send the whole out-batch via the producer ---------------------
     //
     // `send_batch` routes each record to its `key` (the Kafka destination topic
-    // -- set to the configured sink topic in `transform_records`). A non-Ok
-    // result is a TERMINAL ack-barrier error: the driver skips the commit and the
-    // whole block is re-delivered (at-least-once -- duplicates, never loss).
+    // -- set to the configured sink topic in `transform_records`). The loop
+    // releases the block's source only on `Ok`; see `settle_send` for how every
+    // other result holds it.
     //
     // The sender counts its own `transport_*` series under its own transport
     // label, so the sink records only the metrics no transport emits.
     let sink_backend = sender.name();
     let sink = {
         let transform_metrics = Arc::clone(transform_metrics);
-        let sink_topic = sink_topic.clone();
         let circuit_open = Arc::clone(&circuit_open);
-        move |out: &WorkBatch<R::Token>| {
+        move |out: &WorkBatch<R::Token>, pieces: &BlockPieces<'_>| {
             let transform_metrics = Arc::clone(&transform_metrics);
-            let sink_topic = sink_topic.clone();
             let circuit_open = Arc::clone(&circuit_open);
-            let record_count = out.records.len() as u64;
             // The engine's `Sink` bound returns an OWNED future (it cannot borrow
             // `out`), so clone the records into the async block. This is cheap:
             // `Record` is `Bytes` (refcount bump) + `Arc<str>` key -- N refcount
             // bumps, NOT N payload copies. Zero-copy on the wire is preserved.
-            let records: Vec<Record> = out.records.clone();
+            let (records, dropped) = split_dropped(&out.records);
+            if dropped > 0 {
+                // Records `process` removed: the block releases `Dropped`.
+                pieces.piece().report(DeliveryStatus::Dropped);
+            }
+            // A piece per attempt, so a block the sender filtered out rather
+            // than sent is released `Dropped`, never `Delivered`.
+            let filtered = (!records.is_empty()).then(|| pieces.piece());
             async move {
-                if record_count == 0 {
+                let Some(filtered) = filtered else {
                     return Ok(());
-                }
+                };
                 let start = Instant::now();
                 let result = sender.send_batch(&records).await;
-                let elapsed = start.elapsed().as_secs_f64();
-                match result {
-                    SendResult::Ok => {
-                        // Sink reachable -> clear the outbound circuit latch (the
-                        // scaling ticker reads it for `set_circuit_open`).
-                        circuit_open.store(false, Ordering::Release);
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.records_delivered(record_count);
-                        }
-                        if let Some(ref app) = transform_metrics.app {
-                            app.record_processed(record_count);
-                        }
-                        if let Some(ref sm) = transform_metrics.sink {
-                            sm.record_duration(sink_backend, elapsed);
-                        }
-                        trace!(
-                            records = record_count,
-                            topic = %sink_topic,
-                            "produced batch"
-                        );
-                        Ok(())
-                    }
-                    SendResult::FilteredDlq => {
-                        // The whole block was outbound-filtered to DLQ. Treat as
-                        // delivered for commit purposes (the records left the
-                        // sender via the outbound filter), but surface it.
-                        if let Some(ref dfe) = transform_metrics.dfe {
-                            dfe.records_filtered(record_count);
-                        }
-                        Ok(())
-                    }
-                    SendResult::Backpressured => {
-                        if let Some(ref bp) = transform_metrics.backpressure {
-                            bp.record_event();
-                        }
-                        // Transient: the driver holds this block and re-sinks it
-                        // after a jittered backoff; nothing commits past it.
-                        Err(scalo::TransportError::Backpressure.into())
-                    }
-                    SendResult::Fatal(e) => {
-                        // Sink unreachable -> open the outbound circuit latch so
-                        // the scaling composite gates to 0 (more pods cannot
-                        // relieve a dead broker; the circuit is the gate).
-                        circuit_open.store(true, Ordering::Release);
-                        transform_metrics.record_produce_error();
-                        Err(EngineError::Sink(format!("produce failed: {e}")))
-                    }
-                }
+                settle_send(
+                    result,
+                    records.len() as u64,
+                    start.elapsed().as_secs_f64(),
+                    sink_backend,
+                    &transform_metrics,
+                    &circuit_open,
+                    filtered,
+                )
             }
         }
     };
 
-    // No periodic ticker: the produce is synchronous per block (no buffered
-    // sink to flush on a timer), so there is nothing to fire between blocks.
-    let no_ticker = None::<(
-        std::time::Duration,
-        fn() -> std::future::Ready<Result<(), EngineError>>,
-    )>;
-
+    // No ticker: the produce is synchronous per block (no buffered sink to
+    // flush on a timer), so there is nothing to fire between blocks.
     let run_result = engine
-        .run_governed(
-            receiver,
-            shutdown,
-            process,
-            sink,
-            CommitMode::Auto,
-            no_ticker,
-        )
+        .pipeline(receiver)
+        .shutdown(shutdown)
+        .sender(sender)
+        .run_with_pieces(process, sink)
         .await;
 
     ready_flag.store(false, Ordering::Release);
@@ -439,12 +467,149 @@ where
     run_result.map_err(|e| crate::Error::Kafka(format!("pipeline engine error: {e}")))
 }
 
+/// Meter one sink call and turn its [`SendResult`] into the loop's verdict.
+///
+/// A failure the sender calls recoverable is returned transient, so the loop
+/// holds the block and sends it again after a backoff -- or, for a Push
+/// source, answers `UNAVAILABLE` at the hold deadline so the sender retries.
+/// Only a permanent failure stops the loop.
+///
+/// `filtered` reports `Dropped` when the sender filtered the block out
+/// instead of sending it, which releases the source without calling the
+/// records delivered. Otherwise it reports `Delivered`, the floor of the
+/// merge, and leaves the block's status to the loop's own piece.
+fn settle_send(
+    result: SendResult,
+    record_count: u64,
+    elapsed_secs: f64,
+    sink_backend: &'static str,
+    transform_metrics: &TransformMetrics,
+    circuit_open: &AtomicBool,
+    filtered: PieceFinalizer,
+) -> Result<(), EngineError> {
+    filtered.report(if matches!(result, SendResult::FilteredDlq) {
+        DeliveryStatus::Dropped
+    } else {
+        DeliveryStatus::Delivered
+    });
+    match result {
+        SendResult::Ok => {
+            // Sink reachable -> clear the outbound circuit latch (the scaling
+            // ticker reads it for `set_circuit_open`).
+            circuit_open.store(false, Ordering::Release);
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.records_delivered(record_count);
+            }
+            if let Some(ref app) = transform_metrics.app {
+                app.record_processed(record_count);
+            }
+            if let Some(ref sm) = transform_metrics.sink {
+                sm.record_duration(sink_backend, elapsed_secs);
+            }
+            trace!(records = record_count, "produced batch");
+            Ok(())
+        }
+        SendResult::FilteredDlq => {
+            // Records the screen should have taken out of the block: the same
+            // bytes are refused on every retry, so they are dropped, not sent.
+            if log_sampled(&FILTERED_BLOCKS, 100) {
+                warn!(
+                    records = record_count,
+                    backend = sink_backend,
+                    total = FILTERED_BLOCKS.load(Ordering::Relaxed),
+                    "the sink filtered out a whole block instead of sending it; its \
+                     records are dropped (sampled 1/100)"
+                );
+            }
+            if let Some(ref dfe) = transform_metrics.dfe {
+                dfe.records_filtered(record_count);
+            }
+            Ok(())
+        }
+        SendResult::Backpressured => {
+            if let Some(ref bp) = transform_metrics.backpressure {
+                bp.record_event();
+            }
+            Err(scalo::TransportError::Backpressure.into())
+        }
+        SendResult::Fatal(e) if e.is_recoverable() => {
+            if let Some(ref bp) = transform_metrics.backpressure {
+                bp.record_event();
+            }
+            Err(EngineError::Transport(e))
+        }
+        SendResult::Fatal(e) => {
+            // Sink unreachable -> open the outbound circuit latch so the
+            // scaling composite gates to 0 (more pods cannot relieve a dead
+            // broker; the circuit is the gate).
+            circuit_open.store(true, Ordering::Release);
+            transform_metrics.record_produce_error();
+            Err(EngineError::Sink(format!("produce failed: {e}")))
+        }
+    }
+}
+
+/// Header of the marker record [`transform_block`] appends, carrying how many
+/// records the transform removed from the block.
+const DROPPED_HEADER: &str = "x-dfe-transform-vrl-dropped";
+
+/// [`transform_records`] over one block, with a marker record appended when
+/// the transform removed any.
+///
+/// `process` has no way to report a status of its own, so the count rides in
+/// the block to the sink, which takes the marker out and releases the block
+/// `Dropped`. A block whose every record was removed still reaches the sink
+/// that way.
+fn transform_block(
+    records: Vec<Record>,
+    program: &Program,
+    sink_topic: &Arc<str>,
+    transform_metrics: &TransformMetrics,
+    worker_pool: Option<&Arc<AdaptiveWorkerPool>>,
+) -> Vec<Record> {
+    let received = records.len();
+    let mut out = transform_records(records, program, sink_topic, transform_metrics, worker_pool);
+    let dropped = received.saturating_sub(out.len());
+    if dropped > 0 {
+        out.push(Record {
+            payload: Bytes::new(),
+            key: None,
+            headers: vec![(DROPPED_HEADER.to_string(), dropped.to_string().into_bytes())],
+            metadata: RecordMeta {
+                timestamp_ms: None,
+                format: PayloadFormat::Json,
+            },
+        });
+    }
+    out
+}
+
+/// The records of a block to send, and how many [`transform_block`] removed.
+fn split_dropped(records: &[Record]) -> (Vec<Record>, u64) {
+    let mut dropped = 0_u64;
+    let send = records
+        .iter()
+        .filter(|record| {
+            let Some((_, count)) = record.headers.iter().find(|(k, _)| k == DROPPED_HEADER) else {
+                return true;
+            };
+            dropped += std::str::from_utf8(count)
+                .ok()
+                .and_then(|count| count.parse::<u64>().ok())
+                .unwrap_or(1);
+            false
+        })
+        .cloned()
+        .collect();
+    (send, dropped)
+}
+
 /// Transform a block of [`Record`]s through the VRL program.
 ///
-/// Deserialise -> VRL eval (parallel on the worker pool when available) ->
-/// re-serialise. Returns ONLY the surviving records; records dropped by a VRL
-/// `abort`, a transform error, or a (de)serialise error are removed (and
-/// metered). Each surviving record's `key` is set to the sink topic so the
+/// JSON parse -> VRL eval (parallel on the worker pool when available) ->
+/// JSON serialise. Returns ONLY the surviving records; a record that is not
+/// JSON, or that a VRL `abort`, a transform error or a serialise error drops,
+/// is removed (and metered). Each surviving record's `key` is set to the sink topic so the
 /// Kafka producer routes it correctly (scalo #37: `send`'s key arg IS the
 /// destination topic).
 #[allow(
@@ -455,7 +620,6 @@ where
 fn transform_records(
     records: Vec<Record>,
     program: &Program,
-    payload_format: PayloadFormat,
     sink_topic: &Arc<str>,
     transform_metrics: &TransformMetrics,
     worker_pool: Option<&Arc<AdaptiveWorkerPool>>,
@@ -479,25 +643,18 @@ fn transform_records(
     // Layer 3: app-specific
     transform_metrics.batch_size.record(batch_len as f64);
 
-    // Phase 1: deserialise (CPU-bound parsing) -- parallel via the pool.
+    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool.
     let deser_start = Instant::now();
-    let indexed: Vec<(usize, PayloadFormat, Bytes)> = records
+    let indexed: Vec<(usize, Bytes)> = records
         .iter()
         .enumerate()
-        .map(|(idx, rec)| {
-            let format = if payload_format == PayloadFormat::Auto {
-                rec.metadata.format
-            } else {
-                payload_format
-            };
-            (idx, format, rec.payload.clone())
-        })
+        .map(|(idx, rec)| (idx, rec.payload.clone()))
         .collect();
 
-    let deser = |(idx, format, payload): &(usize, PayloadFormat, Bytes)| -> DeserResult {
-        match deserialize_event(payload, *format) {
-            Ok(v) => Ok((v, *format, *idx)),
-            Err(e) => Err((*idx, *format, e.to_string())),
+    let deser = |(idx, payload): &(usize, Bytes)| -> DeserResult {
+        match deserialize_event(payload) {
+            Ok(v) => Ok((v, *idx)),
+            Err(e) => Err((*idx, e.to_string())),
         }
     };
     let deser_results: Vec<DeserResult> = match worker_pool {
@@ -505,20 +662,11 @@ fn transform_records(
         None => indexed.iter().map(deser).collect(),
     };
 
-    let mut events: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(batch_len);
-    let mut json_count: u64 = 0;
-    let mut msgpack_count: u64 = 0;
+    let mut events: Vec<(Value, usize)> = Vec::with_capacity(batch_len);
     for result in deser_results {
         match result {
-            Ok(item) => {
-                match item.1 {
-                    PayloadFormat::Json => json_count += 1,
-                    PayloadFormat::MsgPack => msgpack_count += 1,
-                    PayloadFormat::Auto => {}
-                }
-                events.push(item);
-            }
-            Err((_idx, _format, e)) => {
+            Ok(item) => events.push(item),
+            Err((_idx, e)) => {
                 if log_sampled(&DESER_ERRORS, 1000) {
                     warn!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
                 }
@@ -530,19 +678,16 @@ fn transform_records(
     transform_metrics
         .deserialise_duration
         .record(deser_start.elapsed().as_secs_f64());
-    if json_count > 0 {
-        transform_metrics.record_format("json", json_count);
-    }
-    if msgpack_count > 0 {
-        transform_metrics.record_format("msgpack", msgpack_count);
+    if !events.is_empty() {
+        transform_metrics.record_format("json", events.len() as u64);
     }
 
     // Phase 2: VRL transform (CPU-bound) -- parallel via the pool.
     let vrl_start = Instant::now();
-    let vrl = |(value, format, idx): &(Value, PayloadFormat, usize)| -> VrlResult {
+    let vrl = |(value, idx): &(Value, usize)| -> VrlResult {
         let mut value = value.clone();
         match run_vrl(program, &mut value) {
-            Ok(_) => Ok((value, *format, *idx)),
+            Ok(_) => Ok((value, *idx)),
             Err(e) => Err((*idx, e)),
         }
     };
@@ -551,7 +696,7 @@ fn transform_records(
         None => events.iter().map(vrl).collect(),
     };
 
-    let mut transformed: Vec<(Value, PayloadFormat, usize)> = Vec::with_capacity(vrl_results.len());
+    let mut transformed: Vec<(Value, usize)> = Vec::with_capacity(vrl_results.len());
     for result in vrl_results {
         match result {
             Ok(item) => transformed.push(item),
@@ -576,16 +721,16 @@ fn transform_records(
         .execute_duration
         .record(vrl_start.elapsed().as_secs_f64());
 
-    // Phase 3: serialise the surviving events back to their wire format and
-    // build the output records. The Kafka producer routes each record to its
+    // Phase 3: serialise the surviving events back to JSON and build the
+    // output records. The Kafka producer routes each record to its
     // `key` (= the sink topic). Partition keying via the routing field is NOT
     // settable through the sender trait (scalo #37: `send`'s key arg IS the
     // destination topic, so there is no slot for a partition key); the routing
     // field stays a config surface only until #37 lands.
     let ser_start = Instant::now();
     let mut out_records: Vec<Record> = Vec::with_capacity(transformed.len());
-    for (value, format, _idx) in &transformed {
-        match serialize_event(value, *format) {
+    for (value, _idx) in &transformed {
+        match serialize_event(value) {
             Ok(serialized) => {
                 out_records.push(Record {
                     payload: Bytes::from(serialized),
@@ -593,7 +738,7 @@ fn transform_records(
                     headers: Vec::new(),
                     metadata: RecordMeta {
                         timestamp_ms: None,
-                        format: *format,
+                        format: PayloadFormat::Json,
                     },
                 });
             }
@@ -612,33 +757,21 @@ fn transform_records(
     out_records
 }
 
-/// Deserialise raw bytes to VRL Value using the detected format.
+/// Parse a JSON payload into a VRL Value.
 ///
-/// Uses `sonic_rs` for JSON (SIMD-accelerated, 2-4x faster than `serde_json`).
-/// Both produce the same `vrl::value::Value` via serde `Deserialize`.
-fn deserialize_event(payload: &[u8], format: PayloadFormat) -> crate::Result<Value> {
-    match format {
-        PayloadFormat::Json => sonic_rs::from_slice(payload)
-            .map_err(|e| crate::Error::Serialisation(format!("JSON deserialise: {e}"))),
-        PayloadFormat::MsgPack => rmp_serde::from_slice(payload)
-            .map_err(|e| crate::Error::Serialisation(format!("msgpack deserialise: {e}"))),
-        PayloadFormat::Auto => {
-            let detected = PayloadFormat::detect(payload);
-            deserialize_event(payload, detected)
-        }
-    }
+/// Uses `sonic_rs` (SIMD-accelerated, 2-4x faster than `serde_json`). Its serde
+/// path refuses nesting past 254 levels, which a 2 MiB release worker stack
+/// holds, so this needs no depth pre-check.
+fn deserialize_event(payload: &[u8]) -> crate::Result<Value> {
+    sonic_rs::from_slice(payload)
+        .map_err(|e| crate::Error::Serialisation(format!("payload is not JSON: {e}")))
 }
 
-/// Serialise VRL Value back to the original format.
+/// Serialise a VRL Value to JSON.
 ///
-/// Uses `sonic_rs` for JSON (SIMD-accelerated, matching the deserialise path).
-fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8>> {
-    match format {
-        PayloadFormat::Json | PayloadFormat::Auto => sonic_rs::to_vec(value)
-            .map_err(|e| crate::Error::Serialisation(format!("JSON serialise: {e}"))),
-        PayloadFormat::MsgPack => rmp_serde::to_vec(value)
-            .map_err(|e| crate::Error::Serialisation(format!("msgpack serialise: {e}"))),
-    }
+/// Uses `sonic_rs` (SIMD-accelerated, matching the parse path).
+fn serialize_event(value: &Value) -> crate::Result<Vec<u8>> {
+    sonic_rs::to_vec(value).map_err(|e| crate::Error::Serialisation(format!("JSON serialise: {e}")))
 }
 
 // NB: the dot-path partition-key extractor (`extract_key`) was removed in the
@@ -646,6 +779,12 @@ fn serialize_event(value: &Value, format: PayloadFormat) -> crate::Result<Vec<u8
 // destination topic (no slot for a partition key via `send`/`send_batch`), so
 // the produce path keys on the sink topic and there is nothing for an extractor
 // to feed. Re-introduce a per-record partition key once #37 lands.
+
+// The integration and e2e tests' port picker, so a listener here also binds below 10240.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+#[path = "../tests/common/ports.rs"]
+mod test_ports;
 
 #[cfg(test)]
 #[allow(
@@ -659,50 +798,29 @@ mod tests {
     #[test]
     fn test_deserialize_json() {
         let json = br#"{"key": "value"}"#;
-        let value = deserialize_event(json, PayloadFormat::Json).unwrap();
+        let value = deserialize_event(json).unwrap();
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get("key"), Some(&Value::from("value")));
     }
 
     #[test]
-    fn test_deserialize_msgpack() {
-        let data = rmp_serde::to_vec(&serde_json::json!({"x": 42})).unwrap();
-        let value = deserialize_event(&data, PayloadFormat::MsgPack).unwrap();
-        let obj = value.as_object().unwrap();
-        assert!(obj.get("x").is_some());
+    fn a_payload_that_is_not_json_is_refused_by_name() {
+        let err = deserialize_event(b"\x00\x00\x02\x00").unwrap_err();
+        assert!(
+            err.to_string().contains("payload is not JSON"),
+            "the refusal must say why, got: {err}"
+        );
     }
 
     #[test]
     fn test_serialize_roundtrip_json() {
         let original = Value::from(serde_json::json!({"a": 1, "b": "hello"}));
-        let bytes = serialize_event(&original, PayloadFormat::Json).unwrap();
-        let recovered = deserialize_event(&bytes, PayloadFormat::Json).unwrap();
+        let bytes = serialize_event(&original).unwrap();
+        let recovered = deserialize_event(&bytes).unwrap();
         assert_eq!(
             original.as_object().unwrap().get("a"),
             recovered.as_object().unwrap().get("a"),
         );
-    }
-
-    #[test]
-    fn test_serialize_roundtrip_msgpack() {
-        let original = Value::from(serde_json::json!({"x": 99}));
-        let bytes = serialize_event(&original, PayloadFormat::MsgPack).unwrap();
-        let recovered = deserialize_event(&bytes, PayloadFormat::MsgPack).unwrap();
-        assert!(recovered.as_object().unwrap().get("x").is_some());
-    }
-
-    #[test]
-    fn test_auto_detect_json() {
-        let json = br#"{"key": "value"}"#;
-        let value = deserialize_event(json, PayloadFormat::Auto).unwrap();
-        assert!(value.as_object().is_some());
-    }
-
-    #[test]
-    fn test_auto_detect_msgpack() {
-        let data = rmp_serde::to_vec(&serde_json::json!({"y": true})).unwrap();
-        let value = deserialize_event(&data, PayloadFormat::Auto).unwrap();
-        assert!(value.as_object().is_some());
     }
 
     /// The `WorkBatch` process path: deserialise -> VRL -> serialise across a
@@ -752,16 +870,8 @@ mod tests {
         let metrics = TransformMetrics::default();
         let sink_topic: Arc<str> = Arc::from("out");
 
-        let out = batch.map_records(|recs| {
-            transform_records(
-                recs,
-                &program,
-                PayloadFormat::Json,
-                &sink_topic,
-                &metrics,
-                None,
-            )
-        });
+        let out = batch
+            .map_records(|recs| transform_records(recs, &program, &sink_topic, &metrics, None));
 
         // 2 survived the abort fan-in...
         assert_eq!(out.records.len(), 2, "two records dropped by abort");
@@ -770,7 +880,7 @@ mod tests {
         // surviving records route to the sink topic.
         for r in &out.records {
             assert_eq!(r.key.as_deref(), Some("out"));
-            let v = deserialize_event(&r.payload, PayloadFormat::Json).unwrap();
+            let v = deserialize_event(&r.payload).unwrap();
             assert_eq!(
                 v.as_object().unwrap().get("processed"),
                 Some(&Value::Boolean(true))
@@ -810,15 +920,169 @@ mod tests {
 
         let metrics = TransformMetrics::default();
         let sink_topic: Arc<str> = Arc::from("out");
-        let out = transform_records(
-            records,
-            &program,
-            PayloadFormat::Json,
-            &sink_topic,
-            &metrics,
-            None,
-        );
+        let out = transform_records(records, &program, &sink_topic, &metrics, None);
         assert_eq!(out.len(), 1, "only the valid record survives");
+    }
+
+    /// scalo's loop retries an `EngineError::Transport` whose error is
+    /// recoverable and stops on anything else, so this is the line between a
+    /// held block and a stopped pipeline.
+    #[test]
+    fn a_recoverable_send_failure_holds_the_block_for_a_retry() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+        let settle = |result| {
+            let (piece, _merged) = one_piece();
+            settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece)
+        };
+
+        for verdict in [
+            settle(SendResult::Backpressured),
+            settle(SendResult::Fatal(scalo::TransportError::Timeout)),
+            settle(SendResult::Fatal(scalo::TransportError::Backpressure)),
+        ] {
+            assert!(
+                matches!(verdict, Err(EngineError::Transport(ref e)) if e.is_recoverable()),
+                "a recoverable failure must come back retryable, got {verdict:?}"
+            );
+        }
+        assert!(
+            !circuit_open.load(Ordering::Acquire),
+            "a failure worth retrying leaves the outbound circuit closed"
+        );
+    }
+
+    #[test]
+    fn a_permanent_send_failure_stops_the_loop_and_opens_the_circuit() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+
+        for permanent in [
+            scalo::TransportError::Send("topic authorisation failed".into()),
+            scalo::TransportError::Closed,
+        ] {
+            let (piece, _merged) = one_piece();
+            let verdict = settle_send(
+                SendResult::Fatal(permanent),
+                3,
+                0.1,
+                "kafka",
+                &metrics,
+                &circuit_open,
+                piece,
+            );
+            assert!(matches!(verdict, Err(EngineError::Sink(_))), "{verdict:?}");
+            assert!(circuit_open.load(Ordering::Acquire));
+        }
+
+        let (piece, _merged) = one_piece();
+        let delivered = settle_send(
+            SendResult::Ok,
+            3,
+            0.1,
+            "kafka",
+            &metrics,
+            &circuit_open,
+            piece,
+        );
+        assert!(delivered.is_ok());
+        assert!(
+            !circuit_open.load(Ordering::Acquire),
+            "a delivered block closes the circuit again"
+        );
+    }
+
+    /// The piece a sink call reports into, sealed as the loop seals it, and
+    /// the status the block is released with.
+    fn one_piece() -> (PieceFinalizer, std::sync::mpsc::Receiver<DeliveryStatus>) {
+        let (released, merged) = std::sync::mpsc::channel();
+        let block = scalo::transport::BatchFinalizer::new(move |status| {
+            let _ = released.send(status);
+        });
+        let piece = block.piece();
+        block.seal();
+        (piece, merged)
+    }
+
+    /// A block the sender filtered out still releases its source, so it is not
+    /// sent again, but as dropped: none of its records was delivered.
+    #[test]
+    fn a_filtered_block_is_released_dropped_not_delivered() {
+        let metrics = TransformMetrics::default();
+        let circuit_open = AtomicBool::new(false);
+        let released = |result| {
+            let (piece, merged) = one_piece();
+            let verdict = settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece);
+            (verdict, merged.try_recv().expect("the piece reported"))
+        };
+
+        let (verdict, status) = released(SendResult::FilteredDlq);
+        assert!(
+            verdict.is_ok(),
+            "a filtered block is not retried: {verdict:?}"
+        );
+        assert_eq!(status, DeliveryStatus::Dropped);
+
+        // Any other result leaves the block's status to the loop's own piece.
+        for result in [
+            SendResult::Ok,
+            SendResult::Backpressured,
+            SendResult::Fatal(scalo::TransportError::Closed),
+        ] {
+            let (_, status) = released(result);
+            assert_eq!(status, DeliveryStatus::Delivered);
+        }
+    }
+
+    /// The `message.timeout.ms` the bus sink's producer is built with.
+    fn delivery_timeout(config: &Config) -> Option<String> {
+        producer_config(config)
+            .librdkafka_overrides
+            .get("message.timeout.ms")
+            .cloned()
+    }
+
+    /// A delivery report after the hold is spent comes back to a sender that
+    /// was already told to retry, so a held Push caps the producer's timeout.
+    #[test]
+    fn a_held_push_caps_the_producer_delivery_timeout_inside_the_hold() {
+        let mut config = Config::default();
+        config.sink.topic = "out".to_string();
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("300000"),
+            "the bus source holds no Push, so the configured timeout stands"
+        );
+
+        config.source.transport = crate::config::Transport::Direct;
+        assert_eq!(delivery_timeout(&config).as_deref(), Some("15000"));
+        assert!(u128::from(NEXT_HOP_SEND_TIMEOUT_MS) < PUSH_MAX_HOLD.as_millis());
+
+        config.sink.message_timeout_ms = 5_000;
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("5000"),
+            "a shorter configured timeout is kept"
+        );
+
+        config.sink.message_timeout_ms = 300_000;
+        config.source.acknowledgements = scalo::transport::AcknowledgementsConfig::new(false);
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("300000"),
+            "a source answered at receipt holds nothing"
+        );
+
+        config.source.acknowledgements = scalo::transport::AcknowledgementsConfig::new(true);
+        config
+            .sink
+            .librdkafka_options
+            .insert("message.timeout.ms".to_string(), "60000".to_string());
+        assert_eq!(
+            delivery_timeout(&config).as_deref(),
+            Some("60000"),
+            "an explicit librdkafka setting is the operator's"
+        );
     }
 
     use std::time::Duration;
@@ -858,14 +1122,7 @@ mod tests {
 
         let out = metrics::with_local_recorder(&capture, || {
             let m = TransformMetrics::new(&manager, "0.1.0", "ffff");
-            transform_records(
-                json_records(3),
-                &program,
-                PayloadFormat::Json,
-                &sink_topic,
-                &m,
-                None,
-            )
+            transform_records(json_records(3), &program, &sink_topic, &m, None)
         });
 
         assert_eq!(out.len(), 3);
@@ -873,6 +1130,161 @@ mod tests {
             capture.counter("records_received_total", &[]),
             Some(3),
             "three records received must count three"
+        );
+    }
+
+    /// JSON records carrying `keep`, for a program that aborts the rest.
+    fn keep_records(keep: &[bool]) -> Vec<Record> {
+        keep.iter()
+            .enumerate()
+            .map(|(i, keep)| Record {
+                payload: Bytes::from(format!(r#"{{"id":{i},"keep":{keep}}}"#)),
+                key: None,
+                headers: Vec::new(),
+                metadata: RecordMeta {
+                    timestamp_ms: None,
+                    format: PayloadFormat::Json,
+                },
+            })
+            .collect()
+    }
+
+    /// A program that aborts every record not marked `keep`.
+    fn abort_unkept() -> Program {
+        crate::engine::compiler::compile_vrl("if .keep != true { abort }", None)
+            .expect("VRL compile")
+            .program
+    }
+
+    /// The marker carries exactly the records the transform removed, and never
+    /// reaches the records the sink sends.
+    #[test]
+    fn a_block_counts_the_records_the_transform_removed() {
+        let program = abort_unkept();
+        let metrics = TransformMetrics::default();
+        let sink_topic: Arc<str> = Arc::from("out");
+        let block = |keep: &[bool]| {
+            let out = transform_block(keep_records(keep), &program, &sink_topic, &metrics, None);
+            (out.len(), split_dropped(&out))
+        };
+
+        let (len, (send, dropped)) = block(&[true, false, true, false]);
+        assert_eq!((len, send.len(), dropped), (3, 2, 2));
+        assert!(
+            send.iter()
+                .all(|r| r.headers.is_empty() && !r.payload.is_empty())
+        );
+
+        let (len, (send, dropped)) = block(&[false, false]);
+        assert_eq!(
+            (len, send.len(), dropped),
+            (1, 0, 2),
+            "an all-dropped block still carries its marker to the sink"
+        );
+
+        let (len, (send, dropped)) = block(&[true, true]);
+        assert_eq!(
+            (len, send.len(), dropped),
+            (2, 2, 0),
+            "nothing removed, no marker"
+        );
+    }
+
+    use super::test_ports as ports;
+
+    /// Records VRL removes release their Push `Dropped`, never `Delivered`,
+    /// whether some of the request survives or none of it does.
+    #[test]
+    fn records_vrl_removes_release_their_push_dropped() {
+        let capture = Capture::default();
+        let sent = metrics::with_local_recorder(&capture, || {
+            this_thread_runtime().block_on(async {
+                let memory_guard =
+                    Arc::new(MemoryGuard::new(scalo::memory::MemoryGuardConfig::default()));
+                let mut bound = None;
+                for _ in 0..20 {
+                    let port = ports::free_port();
+                    let mut config = Config::default();
+                    config.source.transport = crate::config::Transport::Direct;
+                    config.source.listen = format!("127.0.0.1:{port}");
+                    if let Ok(listener) = start_push_listener(&config, None, &memory_guard).await {
+                        bound = Some((port, listener));
+                        break;
+                    }
+                }
+                let (port, listener) = bound.expect("a Push listener on a free port");
+                let pusher =
+                    GrpcTransport::new(&GrpcConfig::client(&format!("http://127.0.0.1:{port}")))
+                        .await
+                        .expect("push client");
+                let sink = MemoryTransport::new(&MemoryConfig {
+                    buffer_size: 16,
+                    recv_timeout_ms: 10,
+                    ..MemoryConfig::default()
+                })
+                .expect("memory sink");
+                let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
+                    min_threads: 1,
+                    max_threads: 1,
+                    ..Default::default()
+                }));
+                let engine = BatchEngine::with_pool(pool, BatchProcessingConfig::default());
+                let shutdown = CancellationToken::new();
+                let transform_metrics = Arc::new(TransformMetrics::default());
+
+                let run = run_governed_pipeline(
+                    &engine,
+                    &listener,
+                    &sink,
+                    Arc::new(abort_unkept()),
+                    SharedConfig::new(HotConfig {
+                        batch_size: 10,
+                        batch_timeout_ms: 50,
+                        key_field: String::new(),
+                    }),
+                    &transform_metrics,
+                    Arc::new(AtomicBool::new(false)),
+                    shutdown.clone(),
+                    None,
+                    "out".to_string(),
+                    Arc::new(AtomicBool::new(false)),
+                );
+                let push = async {
+                    // Each request is answered only once its records are released.
+                    for keep in [&[true, false][..], &[false, false], &[true]] {
+                        let answer = pusher.send_batch(&keep_records(keep)).await;
+                        assert!(matches!(answer, SendResult::Ok), "{keep:?}: {answer:?}");
+                    }
+                    let sent = scalo::transport::TransportReceiver::recv(&sink, 16)
+                        .await
+                        .expect("sink recv")
+                        .records;
+                    shutdown.cancel();
+                    sent
+                };
+                let (result, sent) = tokio::join!(run, push);
+                result.expect("pipeline");
+                sent
+            })
+        });
+
+        let released = |outcome| {
+            capture.counter(
+                "transport_ack_released_total",
+                &[("transport", "grpc"), ("outcome", outcome)],
+            )
+        };
+        assert_eq!(
+            released("dropped"),
+            Some(2),
+            "the two requests VRL cut into"
+        );
+        assert_eq!(released("delivered"), Some(1), "the request VRL kept whole");
+        assert_eq!(sent.len(), 2, "only the kept records are sent");
+        assert!(
+            sent.iter()
+                .all(|r| r.headers.is_empty() && !r.payload.is_empty()),
+            "the marker never reaches the sink's wire"
         );
     }
 
@@ -927,7 +1339,6 @@ mod tests {
             sink,
             program,
             hot_config,
-            PayloadFormat::Auto,
             &metrics,
             Arc::new(AtomicBool::new(false)),
             shutdown.clone(),
@@ -1007,5 +1418,113 @@ mod tests {
         });
 
         assert_sink_metered_as(&capture, "memory");
+    }
+
+    // ---- nesting depth ----
+
+    /// The stack a Tokio worker or worker-pool thread gets by default.
+    const WORKER_STACK: usize = 2 * 1024 * 1024;
+
+    /// A stack that holds the 254 levels the parse accepts, whose frames
+    /// overflow 2 MiB near 128 levels in a debug build.
+    const BOUND_STACK: usize = if cfg!(debug_assertions) {
+        32 * 1024 * 1024
+    } else {
+        WORKER_STACK
+    };
+
+    /// Run `test` on a thread with `stack` bytes of stack, and fail unless it returns.
+    fn on_stack(stack: usize, test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(test)
+            .expect("spawn the transform thread")
+            .join()
+            .expect("the transform thread must return");
+    }
+
+    fn nested_array(depth: usize) -> Vec<u8> {
+        format!("{}1{}", "[".repeat(depth), "]".repeat(depth)).into_bytes()
+    }
+
+    fn nested_object(depth: usize) -> Vec<u8> {
+        format!("{}1{}", "{\"a\":".repeat(depth), "}".repeat(depth)).into_bytes()
+    }
+
+    /// sonic-rs's serde path refuses nesting past 254 levels with an error, so
+    /// a record nested far deeper is refused as not JSON, never recursed into.
+    #[test]
+    fn a_deeply_nested_payload_is_refused_as_not_json() {
+        on_stack(BOUND_STACK, || {
+            for depth in [20_000, 100_000] {
+                for payload in [nested_array(depth), nested_object(depth)] {
+                    let refused = deserialize_event(&payload)
+                        .expect_err("a record nested this deep must be refused");
+                    let message = refused.to_string();
+                    assert!(
+                        message.contains("payload is not JSON") && message.contains("nesting"),
+                        "depth {depth}: {message}"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn the_parse_takes_254_levels_and_refuses_255() {
+        on_stack(BOUND_STACK, || {
+            for nested in [nested_array, nested_object] {
+                assert!(deserialize_event(&nested(254)).is_ok());
+                assert!(deserialize_event(&nested(255)).is_err());
+            }
+        });
+    }
+
+    /// A deep record is counted on the deserialise error and removed, and the
+    /// rest of its block is transformed.
+    #[test]
+    fn a_deeply_nested_record_is_dropped_and_the_rest_transformed() {
+        on_stack(BOUND_STACK, || {
+            let capture = Capture::default();
+            let program = crate::engine::compiler::compile_vrl(".ok = true", None)
+                .expect("VRL compile")
+                .program;
+            let sink_topic: Arc<str> = Arc::from("out");
+            let mut records = json_records(2);
+            for payload in [nested_object(20_000), nested_array(100_000)] {
+                records.insert(
+                    1,
+                    Record {
+                        payload: Bytes::from(payload),
+                        key: None,
+                        headers: Vec::new(),
+                        metadata: RecordMeta {
+                            timestamp_ms: None,
+                            format: PayloadFormat::Json,
+                        },
+                    },
+                );
+            }
+
+            let out = metrics::with_local_recorder(&capture, || {
+                transform_records(
+                    records,
+                    &program,
+                    &sink_topic,
+                    &TransformMetrics::default(),
+                    None,
+                )
+            });
+
+            let ids: Vec<Value> = out
+                .iter()
+                .map(|r| deserialize_event(&r.payload).unwrap().as_object().unwrap()["id"].clone())
+                .collect();
+            assert_eq!(ids, vec![Value::from(0), Value::from(1)]);
+            assert_eq!(
+                capture.counter("records_error_total", &[("stage", "deserialise")]),
+                Some(2)
+            );
+        });
     }
 }

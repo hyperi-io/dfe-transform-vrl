@@ -30,9 +30,7 @@ use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline::run_governed_pipeline;
 use scalo::config::shared::SharedConfig;
-use scalo::transport::{
-    MemoryConfig, MemoryTransport, PayloadFormat, TransportReceiver, TransportSender,
-};
+use scalo::transport::{MemoryConfig, MemoryTransport, TransportReceiver, TransportSender};
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
@@ -149,7 +147,6 @@ async fn test_pipeline_passes_json_through_identity_vrl() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -203,7 +200,6 @@ async fn test_pipeline_transforms_events_with_vrl_mutation() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -254,7 +250,6 @@ async fn test_pipeline_vrl_abort_drops_message() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -308,7 +303,6 @@ async fn test_pipeline_skips_malformed_json_but_continues() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Json,
             &metrics,
             ready,
             shutdown,
@@ -360,7 +354,6 @@ async fn test_pipeline_vrl_runtime_error_skips_event() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -425,7 +418,6 @@ async fn test_pipeline_large_batch_of_mixed_events() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -451,69 +443,26 @@ async fn test_pipeline_large_batch_of_mixed_events() {
     );
 }
 
-#[tokio::test]
-async fn test_pipeline_msgpack_roundtrip() {
-    let h = Harness::new(5, 50, ".id");
-    // Encode events as msgpack
-    for i in 0..3 {
-        let val = serde_json::json!({
-            "id": format!("m{i}"),
-            "n": i,
-        });
-        let bytes = rmp_serde::to_vec(&val).unwrap();
-        h.source.send("", Bytes::from(bytes)).await;
-    }
-
-    let prog = compile_program(".tag = \"tagged\"");
-
-    let source = Arc::clone(&h.source);
-    let sink = Arc::clone(&h.sink);
-    let hot = h.hot_config.clone();
-    let shutdown = h.shutdown.clone();
-    let eng = engine();
-    let pipeline = tokio::spawn(async move {
-        let metrics = Arc::new(TransformMetrics::default());
-        let ready = Arc::new(AtomicBool::new(false));
-        run_governed_pipeline(
-            &eng,
-            &*source,
-            &*sink,
-            prog,
-            hot,
-            PayloadFormat::MsgPack,
-            &metrics,
-            ready,
-            shutdown,
-            None,
-            "out".to_string(),
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-    });
-
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let out = h.drain_sink(10).await;
-    h.shutdown();
-    pipeline.await.unwrap().unwrap();
-
-    assert_eq!(out.len(), 3, "all msgpack events should roundtrip");
-    // Each output should be msgpack-decodable and contain tag="tagged"
-    for payload in out {
-        let val: serde_json::Value = rmp_serde::from_slice(&payload).unwrap();
-        assert_eq!(val["tag"], "tagged");
-    }
-}
+/// `{"id": "mp-1"}` as a MessagePack map: fixmap(1), fixstr(2) "id",
+/// fixstr(4) "mp-1".
+const MESSAGEPACK_RECORD: &[u8] = b"\x81\xa2id\xa4mp-1";
 
 #[tokio::test]
-async fn test_pipeline_auto_detect_mixed_format_batch() {
+async fn test_pipeline_refuses_a_messagepack_record() {
     let h = Harness::new(10, 50, ".id");
-    // Mix of JSON and msgpack — auto-detect
-    h.send_json(r#"{"id": "json-1", "src": "json"}"#).await;
-    let mp = rmp_serde::to_vec(&serde_json::json!({"id": "mp-1", "src": "msgpack"})).unwrap();
-    h.source.send("", Bytes::from(mp)).await;
-    h.send_json(r#"{"id": "json-2", "src": "json"}"#).await;
+    h.send_json(r#"{"id": "json-1"}"#).await;
+    let sent = h
+        .source
+        .send("", Bytes::from_static(MESSAGEPACK_RECORD))
+        .await;
+    assert!(matches!(sent, scalo::transport::SendResult::Ok), "{sent:?}");
+    h.send_json(r#"{"id": "json-2"}"#).await;
 
-    let prog = compile_program(".");
+    let prog = compile_program(r#".tag = "tagged""#);
+
+    // A real recorder, so the refusal's count can be read back.
+    let manager = scalo::metrics::MetricsManager::new("test_refuses_messagepack");
+    let transform_metrics = Arc::new(TransformMetrics::new(&manager, "0.1.0", "testcommit"));
 
     let source = Arc::clone(&h.source);
     let sink = Arc::clone(&h.sink);
@@ -521,7 +470,6 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
     let shutdown = h.shutdown.clone();
     let eng = engine();
     let pipeline = tokio::spawn(async move {
-        let metrics = Arc::new(TransformMetrics::default());
         let ready = Arc::new(AtomicBool::new(false));
         run_governed_pipeline(
             &eng,
@@ -529,8 +477,7 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
-            &metrics,
+            &transform_metrics,
             ready,
             shutdown,
             None,
@@ -543,9 +490,41 @@ async fn test_pipeline_auto_detect_mixed_format_batch() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let out = h.drain_sink(10).await;
     h.shutdown();
-    pipeline.await.unwrap().unwrap();
+    pipeline
+        .await
+        .unwrap()
+        .expect("a refused record must not stop the pipeline");
 
-    assert_eq!(out.len(), 3);
+    // Refused, never passed on: only the two JSON records reach the sink.
+    assert_eq!(out.len(), 2, "the MessagePack record was passed on");
+    for payload in &out {
+        let val: serde_json::Value =
+            serde_json::from_slice(payload).expect("the sink carries JSON only");
+        assert_eq!(val["tag"], "tagged");
+        assert_ne!(val["id"], "mp-1");
+    }
+
+    // Counted as a deserialise error, and not counted as a received JSON record.
+    let rendered = manager.render();
+    let series = |name: &str, label: &str| {
+        rendered
+            .lines()
+            .find(|line| line.contains(name) && line.contains(label))
+            .unwrap_or_else(|| panic!("no {name} {label} series in:\n{rendered}"))
+            .rsplit(' ')
+            .next()
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        series("records_error_total", r#"stage="deserialise""#).as_deref(),
+        Some("1"),
+        "the refusal is counted once"
+    );
+    assert_eq!(
+        series("records_format_total", r#"format="json""#).as_deref(),
+        Some("2"),
+        "only the JSON records count as parsed"
+    );
 }
 
 #[tokio::test]
@@ -567,7 +546,6 @@ async fn test_pipeline_shutdown_stops_loop_promptly() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -618,7 +596,6 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -677,7 +654,6 @@ async fn test_pipeline_routes_to_sink_topic() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -732,7 +708,6 @@ async fn test_pipeline_empty_source_idles_quietly() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -785,7 +760,6 @@ async fn test_pipeline_stress_1000_events() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -864,7 +838,6 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown,
@@ -935,7 +908,6 @@ async fn test_pipeline_burst_drains_with_concurrent_reader() {
             &*sink_pipeline,
             prog,
             hot_config,
-            PayloadFormat::Auto,
             &metrics,
             ready,
             shutdown_pipeline,
@@ -998,7 +970,6 @@ async fn test_pipeline_with_real_metrics_recorder() {
             &*sink,
             prog,
             hot,
-            PayloadFormat::Auto,
             &transform_metrics,
             ready,
             shutdown,

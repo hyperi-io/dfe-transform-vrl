@@ -48,7 +48,7 @@ spec:
             - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-            {{- if eq (toString ((.Values.config).source).transport) "direct" }}
+            {{- if has (toString ((.Values.config).source).transport) (list "direct" "grpc") }}
             - name: push
               containerPort: 6000
               protocol: TCP

@@ -17,8 +17,9 @@ use scalo::deployment::{
     base_image_from_cascade,
 };
 
-/// The `source.transport` value, as `Transport` serialises it, that binds the Push listener.
-const TRANSPORT_DIRECT: &str = "direct";
+/// The `source.transport` values that bind the Push listener: the name
+/// `Transport::Direct` serialises to, and the alias dfe-engine renders.
+const PUSH_TRANSPORTS: [&str; 2] = ["direct", "grpc"];
 
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
@@ -44,7 +45,7 @@ pub fn contract() -> DeploymentContract {
         // The Push listener binds only on the direct transport, and the probes use the metrics port.
         extra_ports: vec![
             PortContract::tcp("push", 6000)
-                .when_equals("config.source.transport", TRANSPORT_DIRECT)
+                .when_one_of("config.source.transport", PUSH_TRANSPORTS)
                 .bound_from("source.listen"),
         ],
         unbound_listen_paths: vec![],
@@ -81,9 +82,9 @@ pub fn contract() -> DeploymentContract {
                 "brokers": ["kafka:9092"],
                 "topics": ["raw_events"],
                 "group_id": "dfe-transform-vrl-default",
-                "format": "auto",
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
-                "tls": { "enabled": false }
+                "tls": { "enabled": false },
+                "acknowledgements": { "enabled": true }
             },
             "sink": {
                 "transport": "bus",
@@ -238,20 +239,24 @@ mod tests {
     }
 
     /// The gate compares the chart's string of `source.transport`, so it has to
-    /// hold for the spelling `Transport::Direct` serialises to and for no other.
+    /// hold for every name the config reads as `Transport::Direct` and for no
+    /// other.
     #[test]
     fn test_push_port_listens_only_on_the_direct_transport() {
         let c = contract();
         let gate = c.extra_ports[0].when.as_ref().expect("push port is gated");
-        let on = |transport: crate::config::Transport| {
+        let on = |name: &str| {
             let mut config = c.default_config.clone().expect("default_config present");
-            config["source"]["transport"] =
-                serde_json::to_value(transport).expect("Transport serialises");
+            config["source"]["transport"] = serde_json::Value::from(name);
             gate.holds_in(&config)
         };
 
-        assert_eq!(on(crate::config::Transport::Direct), Some(true));
-        assert_eq!(on(crate::config::Transport::Bus), Some(false));
+        for name in ["direct", "grpc", "bus", "kafka"] {
+            let transport: crate::config::Transport =
+                serde_json::from_value(serde_json::Value::from(name)).expect("a transport name");
+            assert_eq!(on(name), Some(transport.is_direct()), "transport {name}");
+        }
+        assert_eq!(on("tcp"), Some(false));
         assert_eq!(
             gate.holds_in(c.default_config.as_ref().expect("default_config present")),
             Some(false),
@@ -496,7 +501,8 @@ mod tests {
     }
 
     /// The Service and Deployment publish the Push port only where the app
-    /// binds it, which is the direct transport.
+    /// binds it, which is the direct transport under either of its names --
+    /// dfe-engine renders `grpc`.
     #[test]
     fn test_push_port_renders_only_on_the_direct_transport() {
         let Some(helm_bin) = helm_or_skip() else {
@@ -510,11 +516,21 @@ mod tests {
             "the bus transport binds no Push listener, so no port 6000 may render:\n{bus}"
         );
 
-        let direct = render_chart(helm_bin, &["config.source.transport=direct"])
+        for name in ["direct", "grpc"] {
+            let set = format!("config.source.transport={name}");
+            let direct = render_chart(helm_bin, &[&set])
+                .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
+            assert!(
+                direct.contains("containerPort: 6000") && direct.contains("port: 6000"),
+                "transport {name} binds the Push listener, so port 6000 must render:\n{direct}"
+            );
+        }
+
+        let kafka = render_chart(helm_bin, &["config.source.transport=kafka"])
             .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
         assert!(
-            direct.contains("containerPort: 6000") && direct.contains("port: 6000"),
-            "the direct transport binds the Push listener, so port 6000 must render:\n{direct}"
+            !kafka.contains("containerPort: 6000") && !kafka.contains("port: 6000"),
+            "transport kafka is the bus, so no port 6000 may render:\n{kafka}"
         );
     }
 
