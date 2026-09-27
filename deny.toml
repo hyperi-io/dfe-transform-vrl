@@ -59,8 +59,6 @@ unknown-git = "deny"
 allow-registry = [
     "https://github.com/rust-lang/crates.io-index",
 ]
-# Temporary: scalo's held-ack branch until 2.13.0 publishes; goes with the
-# [patch.crates-io] entry in Cargo.toml.
-allow-git = ["https://github.com/hyperi-io/scalo-rs"]
+allow-git = []
 
 [sources.allow-org]

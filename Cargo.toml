@@ -64,10 +64,7 @@ bytes = ">=1.7, <2"
 # owns the inbound pause-partitions brake + AIMD byte budget over the shared
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
-#
-# The floor admits 2.12.0 only while [patch.crates-io] below points at the scalo
-# branch, whose manifest carries 2.12.0; it rises to 2.13.0 when the patch goes.
-scalo = { version = ">=2.12.0, <3", features = [
+scalo = { version = ">=2.13.0, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -176,7 +173,7 @@ testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = ">=2.12.0, <3", features = ["transport-memory"] }
+scalo = { version = ">=2.13.0, <3", features = ["transport-memory"] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
@@ -224,9 +221,3 @@ opt-level = 3
 inherits = "release"
 debug = true
 strip = false
-
-# Temporary: the held-ack pipeline entry is on this scalo branch until 2.13.0
-# publishes. Remove this block and the deny.toml allow-git entry together.
-[patch.crates-io]
-scalo = { git = "https://github.com/hyperi-io/scalo-rs", branch = "fix/at-least-once" }
-
