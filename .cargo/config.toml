@@ -1,6 +1,6 @@
 # Project:   dfe-transform-vrl
 # File:      .cargo/config.toml
-# Purpose:   Cargo build configuration (SIMD flags, cross-compile, registry)
+# Purpose:   Cargo build configuration (SIMD flags, cross-compile, network)
 # Language:  TOML
 #
 # License:   BUSL-1.1
@@ -18,20 +18,6 @@ rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=mold"]
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
 rustflags = ["-C", "target-cpu=generic"]
-
-# For local development, use native CPU features
-[build]
-rustflags = ["-C", "target-cpu=native"]
-
-# Limit parallel jobs to reduce CPU/memory usage
-
-# =============================================================================
-# HyperI Private Cargo Registry (Artifactory)
-# =============================================================================
-
-[registries.hyperi]
-index = "sparse+https://hypersec.jfrog.io/artifactory/api/cargo/hyperi-cargo-virtual/index/"
-credential-provider = "cargo:token"
 
 # =============================================================================
 # Network resilience for crate downloads
