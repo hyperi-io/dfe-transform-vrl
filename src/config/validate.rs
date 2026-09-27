@@ -57,7 +57,6 @@ impl Config {
                 ));
             }
         }
-        validate_format(&self.source.format)?;
         validate_sasl("source.sasl", &self.source.sasl)?;
 
         // Sink
@@ -112,17 +111,6 @@ impl Config {
             "no VRL program in the transforms this config names",
         )
     }
-}
-
-fn validate_format(format: &str) -> Result<()> {
-    let valid = ["auto", "json", "msgpack"];
-    if !valid.contains(&format) {
-        return Err(crate::Error::Validation(format!(
-            "source.format must be one of: {}",
-            valid.join(", ")
-        )));
-    }
-    Ok(())
 }
 
 fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
@@ -233,22 +221,6 @@ mod tests {
         config.transforms.dir = None;
         config.transforms.files = None;
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_invalid_format() {
-        let mut config = minimal_config();
-        config.source.format = "xml".to_string();
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_valid_formats() {
-        for format in &["auto", "json", "msgpack"] {
-            let mut config = minimal_config();
-            config.source.format = format.to_string();
-            assert!(config.validate().is_ok(), "format {format} should be valid");
-        }
     }
 
     #[test]

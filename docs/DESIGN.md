@@ -16,21 +16,14 @@ based on throughput. In K8s autoscaling, pod memory limits must be set to the
 maximum Vector might ever use, resulting in 2-4x memory waste compared to DFE
 services that control their own buffers.
 
-### Wire Format
-
-The DFE platform uses MessagePack as its primary wire format (with JSON
-fallback and auto-sensing). Vector has no msgpack codec support. Using Vector
-for msgpack pipelines requires format conversion (msgpack→JSON→VRL→JSON→msgpack),
-negating the CPU and memory benefits of msgpack.
-
 ## Architecture
 
 ```mermaid
 flowchart TB
     subgraph DP["Data path"]
         direction LR
-        KS["Kafka source (scalo)<br/>msgpack or JSON"] -->|consume| VRL["VRL engine<br/>Value in/out"]
-        VRL --> KP["Kafka sink (scalo)<br/>msgpack or JSON"]
+        KS["Kafka source (scalo)<br/>JSON"] -->|consume| VRL["VRL engine<br/>Value in/out"]
+        VRL --> KP["Kafka sink (scalo)<br/>JSON"]
         KP -.->|offset commit after delivery, at-least-once| KS
     end
     subgraph OPS["Operational endpoints (same process)"]
@@ -46,14 +39,12 @@ flowchart TB
 ```
 Kafka partition message (raw bytes)
   │
-  ├─ FormatDetector: auto-sense msgpack vs JSON (first message locks format)
-  │
-  ├─ Deserialise: rmp_serde::from_slice::<Value>() or serde_json::from_slice::<Value>()
+  ├─ Parse: sonic_rs::from_slice::<Value>() -- a record that is not JSON is dropped
   │
   ├─ Run VRL program(s) on Value
   │   └─ VRL operates directly on Value — no format conversion
   │
-  ├─ Serialise: rmp_serde::to_vec(&value) or serde_json::to_vec(&value)
+  ├─ Serialise: sonic_rs::to_vec(&value)
   │
   └─ KafkaTransport::send() (scalo) → delivery future
 ```
@@ -71,14 +62,14 @@ Consumer offsets are committed only after producer delivery confirmation:
 If the process crashes before commit, messages are re-consumed and re-processed
 (at-least-once, not exactly-once). VRL transforms should be idempotent.
 
-### Format Detection
+### Payload Format
 
-Uses `scalo::transport::FormatDetector`:
+JSON is the only payload format. MessagePack, supported in DFE/XDR 2.0 and 2.1, is deprecated in DFE 2.2 and no longer accepted: the JSON path (SIMD parsing with sonic-rs, zstd on the wire) is fast enough that MessagePack gave no CPU saving.
 
-- Auto-sense mode (default): first message on a partition locks the format
-- Force mode: explicit msgpack or JSON only
-- Mismatch threshold: after 10 consecutive mismatches, format auto-resets
-- Per-partition detection: different partitions may use different formats
+A record that does not parse as JSON is removed from its block, counted in
+`records_error_total{stage="deserialise"}`, and logged (sampled) with the parse
+error. The block's source is then released `Dropped`, so the record is not
+redelivered.
 
 ## VRL Integration
 
@@ -106,8 +97,8 @@ let mut target = TargetValueRef {
 runtime.resolve(&mut target, &program)?;
 ```
 
-VRL's `Value` type is serde-compatible, meaning `rmp_serde` can deserialise
-msgpack bytes directly into it. No intermediate JSON representation needed.
+VRL's `Value` type is serde-compatible, so `sonic_rs` parses JSON bytes
+directly into it.
 
 ### Transform File Format
 
@@ -171,7 +162,6 @@ source:
   brokers: ["kafka:9092"]
   topics: ["raw_events"]
   group_id: "dfe-transform-vrl-my-pipeline"
-  format: "auto"                    # auto, json, msgpack
   max_buffer_bytes: 67108864        # 64 MiB consumer buffer
 
 transforms:
@@ -196,7 +186,6 @@ they are set through the env layer (`METRICS_ADDR`, `LOG_LEVEL`,
 | Transform engine | VRL crate (in-process) | Vector subprocess |
 | Kafka source/sink | rdkafka (wrapper-controlled) | Vector-managed |
 | Memory control | Full (bounded buffers) | None (Vector unbounded) |
-| msgpack support | Native (zero conversion) | JSON pipe (2x conversion) |
 | Supported transforms | VRL only | All Vector transforms |
 | Container image size | ~20 MiB (Rust binary) | ~170 MiB (Rust + Vector) |
 | Process model | Single process | Wrapper + subprocess |
@@ -205,7 +194,7 @@ they are set through the env layer (`METRICS_ADDR`, `LOG_LEVEL`,
 
 ### When to Use Which
 
-- **dfe-transform-vrl**: VRL-only transforms (the common case), msgpack pipelines,
+- **dfe-transform-vrl**: VRL-only transforms (the common case),
   memory-constrained pods, high-density deployments
 - **dfe-transform-vector**: Pipelines needing Vector-native transforms (`lua`,
   `aggregate`, `dedupe`, `throttle`, `sample`), or complex multi-source/sink routing

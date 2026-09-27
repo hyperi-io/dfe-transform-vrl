@@ -15,8 +15,8 @@
 //!   `cargo nextest run -- --ignored`
 //!   `TEST_MODE=docker cargo nextest run -- --ignored`
 //!
-//! `filebeat_kafka` is not among them: it starts and drops its own broker
-//! container, so it runs by default like any other test.
+//! `filebeat_kafka` and `held_acks` are not among them: each starts and drops
+//! its own broker container, so they run by default like any other test.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -28,6 +28,10 @@ mod filebeat_corpus;
 #[allow(clippy::expect_used, clippy::panic)]
 #[path = "e2e/filebeat_kafka.rs"]
 mod filebeat_kafka;
+
+#[allow(clippy::expect_used, clippy::panic)]
+#[path = "e2e/held_acks.rs"]
+mod held_acks;
 
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
 #[path = "e2e/kafka.rs"]

@@ -8,16 +8,16 @@
 
 //! Kafka end-to-end tests using real Kafka (docker-local or remote).
 //!
-//! Drives the WorkBatch governed engine driver
-//! ([`pipeline::run_governed_pipeline`]) with a stand-alone [`BatchEngine`]
-//! (no byte budget wired -> `run_governed` delegates to the whole-batch
-//! `run_workbatch` loop) and a [`CancellationToken`] for shutdown.
+//! Drives the pipeline loop ([`pipeline::run_governed_pipeline`]) with a
+//! stand-alone [`BatchEngine`] (no byte budget wired, so each block is sent
+//! whole) and a [`CancellationToken`] for shutdown. The source's offsets are
+//! committed only once the sink has delivered the block.
 //!
 //! Run explicitly: `TEST_MODE=docker cargo nextest run -- --ignored`
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dfe_transform_vrl::config::hot::HotConfig;
@@ -25,13 +25,17 @@ use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::metrics::TransformMetrics;
 use dfe_transform_vrl::pipeline;
 use scalo::config::shared::SharedConfig;
-use scalo::transport::kafka::{KafkaConfig, KafkaProfile, KafkaTransport};
-use scalo::transport::{PayloadFormat, TransportBase, TransportReceiver, TransportSender};
+use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile, KafkaTransport};
+use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 use scalo::worker::engine::BatchProcessingConfig;
 use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio_util::sync::CancellationToken;
 
 use super::common::{self, KafkaTestConfig, ensure_kafka_or_skip};
+
+/// How long a round trip gets to put every expected record on the sink topic,
+/// consumer group join included.
+const ROUND_TRIP_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn consumer_kafka_config(kf: &KafkaTestConfig, topics: &[String], group_id: &str) -> KafkaConfig {
     let mut config = KafkaConfig {
@@ -77,9 +81,8 @@ fn default_hot_config() -> SharedConfig<HotConfig> {
     })
 }
 
-/// A stand-alone batch engine with no byte budget wired -- `run_governed`
-/// delegates to the whole-batch `run_workbatch` loop (byte-identical to the
-/// pre-governor data path), which is what these broker round-trips exercise.
+/// A stand-alone batch engine with no byte budget wired, so the pipeline loop
+/// sends each block whole.
 ///
 /// Pool built with an EXPLICIT 1-thread config (valid on any core count); the
 /// `BatchEngine::new` default derives bounds from `available_parallelism` and
@@ -96,6 +99,118 @@ fn default_engine() -> Arc<BatchEngine> {
     ))
 }
 
+/// Read `topic` from the start until `want` records have arrived or `timeout`
+/// passes.
+async fn read_topic(
+    kf: &KafkaTestConfig,
+    topic: &str,
+    want: usize,
+    timeout: Duration,
+) -> Vec<Bytes> {
+    let verify_config =
+        consumer_kafka_config(kf, &[topic.to_string()], &common::test_topic("verify-cg"));
+    let verifier = KafkaTransport::new(&verify_config).await.unwrap();
+    let mut payloads = Vec::new();
+    let deadline = Instant::now() + timeout;
+    while payloads.len() < want && Instant::now() < deadline {
+        if let Ok(Ok(batch)) =
+            tokio::time::timeout(Duration::from_secs(5), verifier.recv(want)).await
+        {
+            payloads.extend(batch.records.into_iter().map(|r| r.payload));
+        }
+    }
+    let _ = verifier.close().await;
+    payloads
+}
+
+/// Seed `inputs` onto a fresh source topic, run the pipeline over it with the
+/// VRL program `vrl`, and return what reached the sink topic once `want`
+/// records have, or [`ROUND_TRIP_TIMEOUT`] passes.
+async fn round_trip(
+    kf: &KafkaTestConfig,
+    name: &str,
+    inputs: Vec<Vec<u8>>,
+    vrl: &str,
+    want: usize,
+) -> Vec<Bytes> {
+    let source_topic = common::test_topic(&format!("{name}-src"));
+    let sink_topic = common::test_topic(&format!("{name}-sink"));
+    let group = common::test_topic(&format!("{name}-cg"));
+
+    // Both topics exist before anything reads them: a consumer subscribed to a
+    // missing topic fails its first poll.
+    KafkaAdmin::new(&consumer_kafka_config(
+        kf,
+        &[source_topic.clone()],
+        &format!("{name}-admin"),
+    ))
+    .unwrap()
+    .create_topics(&[(&source_topic, 1, 1), (&sink_topic, 1, 1)])
+    .await
+    .unwrap();
+
+    let seed_producer = KafkaTransport::new(&producer_kafka_config(kf, &source_topic))
+        .await
+        .unwrap();
+    for payload in inputs {
+        // `send`'s first argument is the destination topic, not a key.
+        let seeded = seed_producer
+            .send(&source_topic, Bytes::from(payload))
+            .await;
+        assert!(seeded.is_ok(), "seeding {source_topic} failed: {seeded:?}");
+    }
+    let _ = seed_producer.close().await;
+
+    let consumer = KafkaTransport::new(&consumer_kafka_config(kf, &[source_topic], &group))
+        .await
+        .unwrap();
+    let producer = KafkaTransport::new(&producer_kafka_config(kf, &sink_topic))
+        .await
+        .unwrap();
+    let program = Arc::new(compile_vrl(vrl, None).unwrap().program);
+    let ready = Arc::new(AtomicBool::new(false));
+    let shutdown = CancellationToken::new();
+
+    let handle = tokio::spawn({
+        let ready = Arc::clone(&ready);
+        let shutdown = shutdown.clone();
+        let sink_topic = sink_topic.clone();
+        async move {
+            pipeline::run_governed_pipeline(
+                &default_engine(),
+                &consumer,
+                &producer,
+                program,
+                default_hot_config(),
+                &Arc::new(TransformMetrics::default()),
+                ready,
+                shutdown,
+                None,
+                sink_topic,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+        }
+    });
+
+    let received = read_topic(kf, &sink_topic, want, ROUND_TRIP_TIMEOUT).await;
+
+    assert!(
+        ready.load(Ordering::Acquire),
+        "the pipeline must still be running and ready"
+    );
+    shutdown.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(10), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        result.is_ok(),
+        "pipeline should shut down cleanly: {result:?}"
+    );
+    received
+}
+
 #[tokio::test]
 #[ignore = "requires live Kafka broker or testcontainers. \
     Run explicitly with `cargo nextest run -- --ignored`. \
@@ -103,202 +218,32 @@ fn default_engine() -> Arc<BatchEngine> {
 async fn test_produce_consume_json_transform() {
     let env = ensure_kafka_or_skip!("produce-consume-json-transform");
     let kf = env.config();
-    let source_topic = common::test_topic("json-src");
-    let sink_topic = common::test_topic("json-sink");
-    let group = common::test_topic("json-cg");
 
-    let seed_config = producer_kafka_config(&kf, &source_topic);
-    let seed_producer = KafkaTransport::new(&seed_config).await.unwrap();
+    let inputs = (0..5)
+        .map(|i| {
+            serde_json::to_vec(&serde_json::json!({
+                "seq": i,
+                "message": format!("event-{i}"),
+                "level": "info"
+            }))
+            .unwrap()
+        })
+        .collect();
+    let received = round_trip(
+        kf,
+        "json",
+        inputs,
+        ".transformed = true\n.level = upcase!(.level)",
+        5,
+    )
+    .await;
 
-    for i in 0..5 {
-        let payload = serde_json::to_vec(&serde_json::json!({
-            "seq": i,
-            "message": format!("event-{i}"),
-            "level": "info"
-        }))
-        .unwrap();
-        seed_producer
-            .send(&format!("key-{i}"), Bytes::from(payload))
-            .await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let _ = seed_producer.close().await;
-
-    let consumer_config = consumer_kafka_config(&kf, &[source_topic.clone()], &group);
-    let consumer = KafkaTransport::new(&consumer_config).await.unwrap();
-
-    let producer_config = producer_kafka_config(&kf, &sink_topic);
-    let producer = KafkaTransport::new(&producer_config).await.unwrap();
-
-    let program = Arc::new(
-        compile_vrl(
-            r#".transformed = true
-.level = upcase!(.level)"#,
-            None,
-        )
-        .unwrap()
-        .program,
-    );
-
-    let hot = default_hot_config();
-    let metrics = Arc::new(TransformMetrics::default());
-    let ready_flag = Arc::new(AtomicBool::new(false));
-    let engine = default_engine();
-    let shutdown = CancellationToken::new();
-
-    let handle = tokio::spawn({
-        let program = Arc::clone(&program);
-        let hot = hot.clone();
-        let ready = Arc::clone(&ready_flag);
-        let metrics = Arc::clone(&metrics);
-        let engine = Arc::clone(&engine);
-        let shutdown = shutdown.clone();
-        let sink_topic = sink_topic.clone();
-        async move {
-            pipeline::run_governed_pipeline(
-                &engine,
-                &consumer,
-                &producer,
-                program,
-                hot,
-                PayloadFormat::Json,
-                &metrics,
-                ready,
-                shutdown,
-                None,
-                sink_topic,
-                Arc::new(AtomicBool::new(false)),
-            )
-            .await
-        }
-    });
-
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        ready_flag.load(Ordering::Relaxed),
-        "pipeline should be ready"
-    );
-
-    shutdown.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(10), handle)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(result.is_ok(), "pipeline should shut down cleanly");
-
-    let verify_config =
-        consumer_kafka_config(&kf, &[sink_topic.clone()], &common::test_topic("verify-cg"));
-    let verifier = KafkaTransport::new(&verify_config).await.unwrap();
-
-    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(
-        !batch.is_empty(),
-        "should have received transformed events in sink topic"
-    );
-
-    for record in &batch.records {
-        let value: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
+    assert_eq!(received.len(), 5, "every seeded event reaches the sink");
+    for payload in &received {
+        let value: serde_json::Value = serde_json::from_slice(payload).unwrap();
         assert_eq!(value["transformed"], true);
         assert_eq!(value["level"], "INFO");
     }
-
-    let _ = verifier.close().await;
-}
-
-#[tokio::test]
-#[ignore = "requires live Kafka broker or testcontainers. \
-    Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
-async fn test_produce_consume_msgpack_transform() {
-    let env = ensure_kafka_or_skip!("produce-consume-msgpack-transform");
-    let kf = env.config();
-    let source_topic = common::test_topic("mp-src");
-    let sink_topic = common::test_topic("mp-sink");
-    let group = common::test_topic("mp-cg");
-
-    let seed_config = producer_kafka_config(&kf, &source_topic);
-    let seed_producer = KafkaTransport::new(&seed_config).await.unwrap();
-
-    for i in 0..3 {
-        let payload = rmp_serde::to_vec(&serde_json::json!({
-            "seq": i,
-            "data": "msgpack-test"
-        }))
-        .unwrap();
-        seed_producer
-            .send(&format!("key-{i}"), Bytes::from(payload))
-            .await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let _ = seed_producer.close().await;
-
-    let consumer_config = consumer_kafka_config(&kf, &[source_topic.clone()], &group);
-    let consumer = KafkaTransport::new(&consumer_config).await.unwrap();
-
-    let producer_config = producer_kafka_config(&kf, &sink_topic);
-    let producer = KafkaTransport::new(&producer_config).await.unwrap();
-
-    let program = Arc::new(compile_vrl(r#".format = "msgpack""#, None).unwrap().program);
-
-    let hot = default_hot_config();
-    let metrics = Arc::new(TransformMetrics::default());
-    let ready_flag = Arc::new(AtomicBool::new(false));
-    let engine = default_engine();
-    let shutdown = CancellationToken::new();
-
-    let handle = tokio::spawn({
-        let program = Arc::clone(&program);
-        let hot = hot.clone();
-        let ready = Arc::clone(&ready_flag);
-        let metrics = Arc::clone(&metrics);
-        let engine = Arc::clone(&engine);
-        let shutdown = shutdown.clone();
-        let sink_topic = sink_topic.clone();
-        async move {
-            pipeline::run_governed_pipeline(
-                &engine,
-                &consumer,
-                &producer,
-                program,
-                hot,
-                PayloadFormat::Auto,
-                &metrics,
-                ready,
-                shutdown,
-                None,
-                sink_topic,
-                Arc::new(AtomicBool::new(false)),
-            )
-            .await
-        }
-    });
-
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    shutdown.cancel();
-    let result = tokio::time::timeout(Duration::from_secs(10), handle)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(result.is_ok());
-
-    let verify_config = consumer_kafka_config(
-        &kf,
-        &[sink_topic.clone()],
-        &common::test_topic("mp-verify-cg"),
-    );
-    let verifier = KafkaTransport::new(&verify_config).await.unwrap();
-
-    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert!(!batch.is_empty(), "should have transformed msgpack events");
-    let _ = verifier.close().await;
 }
 
 #[tokio::test]
@@ -308,100 +253,28 @@ async fn test_produce_consume_msgpack_transform() {
 async fn test_vrl_abort_drops_events() {
     let env = ensure_kafka_or_skip!("vrl-abort-drops-events");
     let kf = env.config();
-    let source_topic = common::test_topic("abort-src");
-    let sink_topic = common::test_topic("abort-sink");
-    let group = common::test_topic("abort-cg");
 
-    let seed_config = producer_kafka_config(&kf, &source_topic);
-    let seed_producer = KafkaTransport::new(&seed_config).await.unwrap();
-
-    for i in 0..4 {
-        let payload = serde_json::to_vec(&serde_json::json!({
-            "seq": i,
-            "keep": i % 2 == 0
-        }))
-        .unwrap();
-        seed_producer
-            .send(&format!("key-{i}"), Bytes::from(payload))
-            .await;
-    }
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let _ = seed_producer.close().await;
-
-    let consumer_config = consumer_kafka_config(&kf, &[source_topic.clone()], &group);
-    let consumer = KafkaTransport::new(&consumer_config).await.unwrap();
-
-    let producer_config = producer_kafka_config(&kf, &sink_topic);
-    let producer = KafkaTransport::new(&producer_config).await.unwrap();
-
+    let inputs = (0..4)
+        .map(|i| {
+            serde_json::to_vec(&serde_json::json!({
+                "seq": i,
+                "keep": i % 2 == 0
+            }))
+            .unwrap()
+        })
+        .collect();
     // `!.keep` does not compile: a path resolves to `any`, and VRL refuses to
     // negate a non-boolean. Comparing against `true` carries the same intent
     // (drop anything not explicitly kept) for any incoming type.
-    let program = Arc::new(
-        compile_vrl(r#"if .keep != true { abort }"#, None)
-            .unwrap()
-            .program,
-    );
-
-    let hot = default_hot_config();
-    let metrics = Arc::new(TransformMetrics::default());
-    let ready_flag = Arc::new(AtomicBool::new(false));
-    let engine = default_engine();
-    let shutdown = CancellationToken::new();
-
-    let handle = tokio::spawn({
-        let program = Arc::clone(&program);
-        let hot = hot.clone();
-        let ready = Arc::clone(&ready_flag);
-        let metrics = Arc::clone(&metrics);
-        let engine = Arc::clone(&engine);
-        let shutdown = shutdown.clone();
-        let sink_topic = sink_topic.clone();
-        async move {
-            pipeline::run_governed_pipeline(
-                &engine,
-                &consumer,
-                &producer,
-                program,
-                hot,
-                PayloadFormat::Json,
-                &metrics,
-                ready,
-                shutdown,
-                None,
-                sink_topic,
-                Arc::new(AtomicBool::new(false)),
-            )
-            .await
-        }
-    });
-
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    shutdown.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(10), handle).await;
-
-    let verify_config = consumer_kafka_config(
-        &kf,
-        &[sink_topic.clone()],
-        &common::test_topic("abort-verify-cg"),
-    );
-    let verifier = KafkaTransport::new(&verify_config).await.unwrap();
-
-    let batch = tokio::time::timeout(Duration::from_secs(5), verifier.recv(10))
-        .await
-        .unwrap()
-        .unwrap();
+    let received = round_trip(kf, "abort", inputs, "if .keep != true { abort }", 2).await;
 
     assert_eq!(
-        batch.records.len(),
+        received.len(),
         2,
         "only keep=true events should pass through"
     );
-
-    for record in &batch.records {
-        let value: serde_json::Value = serde_json::from_slice(&record.payload).unwrap();
+    for payload in &received {
+        let value: serde_json::Value = serde_json::from_slice(payload).unwrap();
         assert_eq!(value["keep"], true);
     }
-
-    let _ = verifier.close().await;
 }

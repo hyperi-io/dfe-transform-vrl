@@ -82,6 +82,11 @@ mod pipeline_memory;
 #[path = "integration/vrl_deep.rs"]
 mod vrl_deep;
 
+// Host ports below 10240 for the listeners the direct-transport tests start.
+#[allow(clippy::expect_used)]
+#[path = "common/ports.rs"]
+mod ports;
+
 // The direct transport: a Push listener in, a gRPC sink out, no broker.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "integration/direct_transport.rs"]

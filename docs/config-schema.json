@@ -24,7 +24,6 @@
           "events"
         ],
         "group_id": "dfe-transform-vrl",
-        "format": "auto",
         "max_buffer_bytes": 67108864,
         "sasl": {
           "enabled": false,
@@ -42,7 +41,10 @@
         "session_timeout_ms": 30000,
         "commit_interval_ms": 5000,
         "statistics_interval_ms": 5000,
-        "librdkafka_options": {}
+        "librdkafka_options": {},
+        "acknowledgements": {
+          "enabled": true
+        }
       }
     },
     "sink": {
@@ -150,11 +152,6 @@
           "type": "string",
           "default": "dfe-transform-vrl"
         },
-        "format": {
-          "description": "Payload format: auto, json, msgpack.",
-          "type": "string",
-          "default": "auto"
-        },
         "max_buffer_bytes": {
           "description": "Maximum consumer buffer size in bytes.",
           "type": "integer",
@@ -210,21 +207,34 @@
             "type": "string"
           },
           "default": {}
+        },
+        "acknowledgements": {
+          "description": "On (the default), the source is acknowledged -- a Kafka offset commit, a\nPush answered OK -- only once the transformed records are delivered to\nthe sink, so a crash or a failed send re-delivers rather than loses them.\nOff, it is acknowledged at receipt.",
+          "$ref": "#/$defs/AcknowledgementsConfig",
+          "default": {
+            "enabled": true
+          }
         }
       }
     },
     "Transport": {
-      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages,\n`direct` is gRPC between them and needs no broker at all. The record and\nthe transform are identical either way -- only who hands the record over\nchanges.",
+      "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages, `direct` is gRPC between them and needs no broker at all. The record and the transform are identical either way -- only who hands the record over changes. `kafka` and `grpc` are read as the same two, the names dfe-engine renders, and a config always writes `bus` and `direct` back.",
       "oneOf": [
         {
           "description": "Kafka topics.",
           "type": "string",
-          "const": "bus"
+          "enum": [
+            "bus",
+            "kafka"
+          ]
         },
         {
           "description": "A scalo Push listener (source) or client (sink).",
           "type": "string",
-          "const": "direct"
+          "enum": [
+            "direct",
+            "grpc"
+          ]
         }
       ]
     },
@@ -284,6 +294,17 @@
         "skip_verify": {
           "type": "boolean",
           "default": false
+        }
+      }
+    },
+    "AcknowledgementsConfig": {
+      "description": "The `acknowledgements` section of an ack-capable transport.\n\nWith `enabled: true` (the default) a source releases its acknowledgement --\na Kafka offset commit, a gRPC or HTTP response -- only once every piece of\nwork built from the record has been delivered, dead-lettered with the DLQ's\nconfirmation, or dropped by policy. A failed delivery withholds it, so the\nrecord is delivered again: duplicates are possible, loss is not.\n\nWith `enabled: false` the source acknowledges at receipt, before the record\nis processed: a crash or a failed delivery loses what was acknowledged.\n\n```yaml\nkafka:\n  acknowledgements:\n    enabled: true\n```",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Hold the source acknowledgement until every piece is delivered.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -350,7 +371,7 @@
           }
         },
         "message_timeout_ms": {
-          "description": "Producer delivery timeout (ms).",
+          "description": "Producer delivery timeout (ms). Capped at 15 s while a direct source\nholds its acknowledgements, so a report arrives inside the hold;\n`librdkafka_options.message.timeout.ms` overrides the cap.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,

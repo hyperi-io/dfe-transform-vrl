@@ -23,7 +23,6 @@ logging, metrics, Kafka transport, health probes, scaling).
 |--------|-------------------|---------------------|
 | Transform engine | VRL crate (in-process) | Vector subprocess |
 | Memory control | Bounded buffers | Vector unbounded |
-| msgpack support | Native (zero conversion) | JSON pipe (2x conversion) |
 | Supported transforms | VRL only | All Vector transforms |
 | Container image | ~20 MiB | ~170 MiB |
 
@@ -112,7 +111,6 @@ anything not here is not read:
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
 | `DFE_TRANSFORM_SOURCE_GROUP_ID` | `source.group_id` |
-| `DFE_TRANSFORM_SOURCE_FORMAT` | `source.format` |
 | `DFE_TRANSFORM_SOURCE_SASL_USERNAME` | `source.sasl.username` |
 | `DFE_TRANSFORM_SOURCE_SASL_PASSWORD` | `source.sasl.password` |
 | `DFE_TRANSFORM_SINK_BROKERS` | `sink.brokers` |
@@ -187,13 +185,17 @@ Prometheus metrics endpoint.
 
 ```mermaid
 flowchart LR
-    SRC["Kafka source<br/>rdkafka consumer"] -->|"msgpack or JSON"| VRL["VRL engine<br/>in-process, Value in/out"]
-    VRL -->|"msgpack or JSON"| SINK["Kafka sink<br/>rdkafka producer"]
+    SRC["Kafka source<br/>rdkafka consumer"] -->|"JSON"| VRL["VRL engine<br/>in-process, Value in/out"]
+    VRL -->|"JSON"| SINK["Kafka sink<br/>rdkafka producer"]
     SINK -. "delivery confirmed -> commit source offset (at-least-once)" .-> SRC
 ```
 
 The wrapper owns both Kafka connections. Consumer offsets are committed only
 after producer delivery confirmation (at-least-once guarantee).
+
+JSON is the only payload format. MessagePack, supported in DFE/XDR 2.0 and 2.1, is deprecated in DFE 2.2 and no longer accepted: the JSON path (SIMD parsing with sonic-rs, zstd on the wire) is fast enough that MessagePack gave no CPU saving.
+
+A record that is not JSON is dropped, counted in `records_error_total{stage="deserialise"}`, and its source is released `Dropped` so it is not redelivered.
 
 ## Development
 
@@ -221,7 +223,7 @@ The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger
 ## Documentation
 
 - [docs/architecture.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/architecture.md) - What the service is, why it is shaped that way, and the invariants
-- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/DESIGN.md) - Deeper design detail: format detection, memory budget, reload matrix
+- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/DESIGN.md) - Deeper design detail: memory budget, reload matrix
 - [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/config.example.yaml) - Configuration reference
 
 ## License
@@ -242,8 +244,8 @@ A single Rust binary that runs VRL transforms over records in the DFE data path
 transport. Two boundaries get assumed wrongly. First, it is VRL only: a pipeline
 needing `lua`, `aggregate`, `dedupe`, `throttle` or `sample` belongs in
 dfe-transform-vector, which keeps the Vector subprocess and pays for it. Second,
-this crate does not own its own event loop. scalo's `BatchEngine::run_governed`
-drives `recv -> process -> send -> commit`; this crate supplies the `process`
+this crate does not own its own event loop. scalo's `BatchEngine::pipeline`
+drives `recv -> process -> send -> release`; this crate supplies the `process`
 closure, the produce sink, the config, the VRL compiler and the enrichment
 registry. Reading `src/pipeline.rs` expecting to find the loop is the usual wrong
 turn.

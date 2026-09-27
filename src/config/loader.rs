@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use scalo::SensitiveString;
+use scalo::transport::AcknowledgementsConfig;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -248,17 +249,44 @@ impl Default for PipelineConfig {
 /// One deployment runs one of them: `bus` is a broker between the stages,
 /// `direct` is gRPC between them and needs no broker at all. The record and
 /// the transform are identical either way -- only who hands the record over
-/// changes.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
+/// changes. `kafka` and `grpc` are read as the same two, the names dfe-engine
+/// renders, and a config always writes `bus` and `direct` back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
     /// Kafka topics.
     #[default]
+    #[serde(alias = "kafka")]
     Bus,
     /// A scalo Push listener (source) or client (sink).
+    #[serde(alias = "grpc")]
     Direct,
+}
+
+// Written by hand because the derive lists only the canonical names, and a
+// validator must take the `grpc` and `kafka` an engine render carries.
+impl schemars::JsonSchema for Transport {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Transport".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Which transport a stage uses.\n\nOne deployment runs one of them: `bus` is a broker between the stages, `direct` is gRPC between them and needs no broker at all. The record and the transform are identical either way -- only who hands the record over changes. `kafka` and `grpc` are read as the same two, the names dfe-engine renders, and a config always writes `bus` and `direct` back.",
+            "oneOf": [
+                {
+                    "description": "Kafka topics.",
+                    "type": "string",
+                    "enum": ["bus", "kafka"]
+                },
+                {
+                    "description": "A scalo Push listener (source) or client (sink).",
+                    "type": "string",
+                    "enum": ["direct", "grpc"]
+                }
+            ]
+        })
+    }
 }
 
 impl Transport {
@@ -281,8 +309,6 @@ pub struct SourceConfig {
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
-    /// Payload format: auto, json, msgpack.
-    pub format: String,
     /// Maximum consumer buffer size in bytes.
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
@@ -297,6 +323,11 @@ pub struct SourceConfig {
     pub statistics_interval_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,
+    /// On (the default), the source is acknowledged -- a Kafka offset commit, a
+    /// Push answered OK -- only once the transformed records are delivered to
+    /// the sink, so a crash or a failed send re-delivers rather than loses them.
+    /// Off, it is acknowledged at receipt.
+    pub acknowledgements: AcknowledgementsConfig,
 }
 
 impl Default for SourceConfig {
@@ -307,7 +338,6 @@ impl Default for SourceConfig {
             brokers: vec!["localhost:9092".to_string()],
             topics: vec!["events".to_string()],
             group_id: "dfe-transform-vrl".to_string(),
-            format: "auto".to_string(),
             max_buffer_bytes: 67_108_864, // 64 MiB
             sasl: SaslConfig::default(),
             tls: TlsConfig::default(),
@@ -316,6 +346,7 @@ impl Default for SourceConfig {
             commit_interval_ms: 5_000,
             statistics_interval_ms: 5_000,
             librdkafka_options: BTreeMap::new(),
+            acknowledgements: AcknowledgementsConfig::default(),
         }
     }
 }
@@ -339,7 +370,9 @@ pub struct SinkConfig {
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
     pub tls: TlsConfig,
-    /// Producer delivery timeout (ms).
+    /// Producer delivery timeout (ms). Capped at 15 s while a direct source
+    /// holds its acknowledgements, so a report arrives inside the hold;
+    /// `librdkafka_options.message.timeout.ms` overrides the cap.
     pub message_timeout_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,
@@ -535,9 +568,6 @@ impl ApplyFlatEnv for Config {
         }
         if let Some(v) = flat_env_string(prefix, "SOURCE_GROUP_ID") {
             self.source.group_id = v;
-        }
-        if let Some(v) = flat_env_string(prefix, "SOURCE_FORMAT") {
-            self.source.format = v;
         }
         if let Some(v) = flat_env_string(prefix, "SOURCE_SASL_USERNAME") {
             self.source.sasl.username = v;
@@ -801,10 +831,24 @@ mod tests {
         assert_eq!(config.pipeline.name, "default");
         assert_eq!(config.pipeline.batch_size, 1000);
         assert_eq!(config.pipeline.batch_timeout_ms, 100);
-        assert_eq!(config.source.format, "auto");
         assert_eq!(config.sink.compression, "zstd");
         assert_eq!(config.source.transport, Transport::Bus);
         assert_eq!(config.sink.transport, Transport::Bus);
+    }
+
+    #[test]
+    fn source_acknowledgements_are_on_unless_the_file_turns_them_off() {
+        assert!(Config::default().source.acknowledgements.enabled);
+
+        let untouched: Config = serde_yaml_ng::from_str("source:\n  topics: [events]\n").unwrap();
+        assert!(
+            untouched.source.acknowledgements.enabled,
+            "a source section without the key keeps the default"
+        );
+
+        let off: Config =
+            serde_yaml_ng::from_str("source:\n  acknowledgements:\n    enabled: false\n").unwrap();
+        assert!(!off.source.acknowledgements.enabled);
     }
 
     #[test]
@@ -913,7 +957,16 @@ sink:
         let deserialized: Config = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(config.pipeline.name, deserialized.pipeline.name);
         assert_eq!(config.pipeline.batch_size, deserialized.pipeline.batch_size);
-        assert_eq!(config.source.format, deserialized.source.format);
+        assert_eq!(config.source.group_id, deserialized.source.group_id);
+    }
+
+    #[test]
+    fn a_source_from_an_older_render_still_loads() {
+        // An engine render from before JSON-only still carries source.format.
+        let yaml = "source:\n  format: auto\n  group_id: cg\n";
+        let config: Config = serde_yaml_ng::from_str(yaml)
+            .unwrap_or_else(|e| panic!("the removed key is ignored, not refused: {e}"));
+        assert_eq!(config.source.group_id, "cg");
     }
 
     #[test]
@@ -1097,7 +1150,6 @@ enrichment_tables:
             ("DFE_TRANSFORM_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
             ("DFE_TRANSFORM_SOURCE_TOPICS", Some("t1,t2")),
             ("DFE_TRANSFORM_SOURCE_GROUP_ID", Some("cg")),
-            ("DFE_TRANSFORM_SOURCE_FORMAT", Some("json")),
             ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
             ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
             ("DFE_TRANSFORM_SINK_BROKERS", Some("b3:9092")),
@@ -1119,7 +1171,6 @@ enrichment_tables:
         assert_eq!(config.source.brokers, vec!["b1:9092", "b2:9092"]);
         assert_eq!(config.source.topics, vec!["t1", "t2"]);
         assert_eq!(config.source.group_id, "cg");
-        assert_eq!(config.source.format, "json");
         assert_eq!(config.source.sasl.username, "src-user");
         assert_eq!(config.source.sasl.password.expose(), "src-pass");
         assert_eq!(config.sink.brokers, vec!["b3:9092"]);
@@ -1258,6 +1309,73 @@ source:
         let config = Config::load(Some(path.to_str().unwrap())).unwrap();
 
         assert_eq!(config.source.sasl.password.expose(), "from-the-file");
+    }
+
+    /// dfe-engine renders a stage's transport by its mechanism, so a config
+    /// file naming `grpc` or `kafka` must load through `--config` as the stage
+    /// it names, not stop the process.
+    #[test]
+    fn a_config_file_may_name_the_transport_grpc_or_kafka() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transport.yaml");
+        let load = |yaml: &str| {
+            std::fs::write(&path, yaml).unwrap();
+            // Only the file may set the transport here.
+            temp_env::with_vars(
+                [
+                    ("DFE_TRANSFORM_SOURCE_TRANSPORT", None::<&str>),
+                    ("DFE_TRANSFORM_SINK_TRANSPORT", None),
+                    ("DFE_TRANSFORM_SOURCE__TRANSPORT", None),
+                    ("DFE_TRANSFORM_SINK__TRANSPORT", None),
+                ],
+                || Config::load(Some(path.to_str().unwrap())),
+            )
+        };
+
+        let direct = load(
+            "source:\n  transport: grpc\n  listen: 0.0.0.0:6000\nsink:\n  transport: grpc\n  endpoint: http://dfe-loader:6000\n",
+        )
+        .unwrap();
+        assert_eq!(direct.source.transport, Transport::Direct);
+        assert_eq!(direct.sink.transport, Transport::Direct);
+
+        let bus = load(
+            "source:\n  transport: kafka\n  topics: [raw]\nsink:\n  transport: kafka\n  topic: enriched\n",
+        )
+        .unwrap();
+        assert_eq!(bus.source.transport, Transport::Bus);
+        assert_eq!(bus.sink.transport, Transport::Bus);
+
+        // The file still refuses a name it does not know.
+        assert!(load("source:\n  transport: tcp\n").is_err());
+
+        // Written back, a transport always takes its own name.
+        assert_eq!(
+            serde_json::to_value(direct.source.transport).unwrap(),
+            "direct"
+        );
+        assert_eq!(serde_json::to_value(bus.source.transport).unwrap(), "bus");
+    }
+
+    /// A validator reading the emitted schema must take every transport name
+    /// the config file reads, each for the transport the file reads it as.
+    #[test]
+    fn the_emitted_schema_lists_every_transport_name_the_file_reads() {
+        let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+        let branches = schema["$defs"]["Transport"]["oneOf"].as_array().unwrap();
+        let mut listed = Vec::new();
+        for branch in branches {
+            let names = branch["enum"].as_array().unwrap();
+            let canonical: Transport = serde_json::from_value(names[0].clone()).unwrap();
+            assert_eq!(serde_json::to_value(canonical).unwrap(), names[0]);
+            for name in names {
+                let read: Transport = serde_json::from_value(name.clone()).unwrap();
+                assert_eq!(read, canonical, "{name} reads as another transport");
+                listed.push(name.as_str().unwrap().to_string());
+            }
+        }
+        listed.sort();
+        assert_eq!(listed, ["bus", "direct", "grpc", "kafka"]);
     }
 
     /// The engine serves this schema to the console, where a marked field

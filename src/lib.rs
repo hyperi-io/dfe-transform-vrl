@@ -8,8 +8,8 @@
 
 //! dfe-transform-vrl: Embedded VRL transform engine for Kafka-to-Kafka pipelines.
 //!
-//! Wrapper-controlled Kafka source/sink with in-process VRL transforms,
-//! native msgpack support, and bounded memory.
+//! Wrapper-controlled Kafka source/sink with in-process VRL transforms over
+//! JSON records, and bounded memory.
 //!
 //! Lints (`forbid(unsafe_code)`, `warn(clippy::pedantic)`, `warn(missing_docs)`,
 //! `warn(rustdoc::*)`, `deny(clippy::unwrap_used/expect_used/panic/dbg_macro)`)

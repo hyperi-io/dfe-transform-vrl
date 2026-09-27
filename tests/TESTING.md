@@ -57,6 +57,10 @@ Require a running Kafka broker. Marked with `#[ignore]` — run explicitly:
 cargo nextest run --all-features --run-ignored
 ```
 
+`filebeat_kafka` and `held_acks` are not ignored: each starts and drops a broker
+container of its own, so they run wherever Docker is available. `held_acks`
+freezes its broker with `docker pause`, which is why it never uses a live one.
+
 ## Test Infrastructure
 
 ### `tests/common/mod.rs`
@@ -68,6 +72,8 @@ Shared helpers used by integration and e2e tests:
 - `test_topic("suffix")` — generates unique topic names with timestamp
 - `skip_if_no_kafka!()` — skips test if Kafka is unreachable
 - `ensure_docker_infra()` — starts dfe-docker containers if needed
+- `KafkaTestEnv::hermetic_on_low_port()` -- a broker container the test owns, published below port 10240. `pause()` and `unpause()` freeze and resume it
+- `ports::free_port()` -- a host port below 10240 for a test listener, outside the range the OS hands out ephemeral ports from
 
 ### `.env` and `.env.example`
 

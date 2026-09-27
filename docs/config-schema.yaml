@@ -48,7 +48,6 @@ properties:
       topics:
       - events
       group_id: dfe-transform-vrl
-      format: auto
       max_buffer_bytes: 67108864
       sasl:
         enabled: false
@@ -65,6 +64,8 @@ properties:
       commit_interval_ms: 5000
       statistics_interval_ms: 5000
       librdkafka_options: {}
+      acknowledgements:
+        enabled: true
   sink:
     $ref: '#/$defs/SinkConfig'
     default:
@@ -148,10 +149,6 @@ $defs:
       group_id:
         type: string
         default: dfe-transform-vrl
-      format:
-        description: 'Payload format: auto, json, msgpack.'
-        type: string
-        default: auto
       max_buffer_bytes:
         description: Maximum consumer buffer size in bytes.
         type: integer
@@ -201,21 +198,31 @@ $defs:
         additionalProperties:
           type: string
         default: {}
+      acknowledgements:
+        description: |-
+          On (the default), the source is acknowledged -- a Kafka offset commit, a
+          Push answered OK -- only once the transformed records are delivered to
+          the sink, so a crash or a failed send re-delivers rather than loses them.
+          Off, it is acknowledged at receipt.
+        $ref: '#/$defs/AcknowledgementsConfig'
+        default:
+          enabled: true
   Transport:
     description: |-
       Which transport a stage uses.
 
-      One deployment runs one of them: `bus` is a broker between the stages,
-      `direct` is gRPC between them and needs no broker at all. The record and
-      the transform are identical either way -- only who hands the record over
-      changes.
+      One deployment runs one of them: `bus` is a broker between the stages, `direct` is gRPC between them and needs no broker at all. The record and the transform are identical either way -- only who hands the record over changes. `kafka` and `grpc` are read as the same two, the names dfe-engine renders, and a config always writes `bus` and `direct` back.
     oneOf:
     - description: Kafka topics.
       type: string
-      const: bus
+      enum:
+      - bus
+      - kafka
     - description: A scalo Push listener (source) or client (sink).
       type: string
-      const: direct
+      enum:
+      - direct
+      - grpc
   SaslConfig:
     description: |-
       SASL authentication for Kafka.
@@ -264,6 +271,30 @@ $defs:
       skip_verify:
         type: boolean
         default: false
+  AcknowledgementsConfig:
+    description: |-
+      The `acknowledgements` section of an ack-capable transport.
+
+      With `enabled: true` (the default) a source releases its acknowledgement --
+      a Kafka offset commit, a gRPC or HTTP response -- only once every piece of
+      work built from the record has been delivered, dead-lettered with the DLQ's
+      confirmation, or dropped by policy. A failed delivery withholds it, so the
+      record is delivered again: duplicates are possible, loss is not.
+
+      With `enabled: false` the source acknowledges at receipt, before the record
+      is processed: a crash or a failed delivery loses what was acknowledged.
+
+      ```yaml
+      kafka:
+        acknowledgements:
+          enabled: true
+      ```
+    type: object
+    properties:
+      enabled:
+        description: Hold the source acknowledgement until every piece is delivered.
+        type: boolean
+        default: true
   SinkConfig:
     description: |-
       Sink configuration: the bus topic to produce to, or the Push listener to
@@ -316,7 +347,10 @@ $defs:
           key_file: null
           skip_verify: false
       message_timeout_ms:
-        description: Producer delivery timeout (ms).
+        description: |-
+          Producer delivery timeout (ms). Capped at 15 s while a direct source
+          holds its acknowledgements, so a report arrives inside the hold;
+          `librdkafka_options.message.timeout.ms` overrides the cap.
         type: integer
         format: uint32
         minimum: 0

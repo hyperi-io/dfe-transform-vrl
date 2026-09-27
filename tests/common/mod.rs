@@ -14,6 +14,8 @@
 
 use std::env;
 
+pub mod ports;
+
 /// Test backend mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestMode {
@@ -374,7 +376,7 @@ impl KafkaTestEnv {
 
         // No live broker — try to spawn a testcontainers Kafka.
         eprintln!("No live Kafka reachable — attempting to spawn testcontainers Kafka...");
-        match Self::spawn_container(test).await {
+        match Self::spawn_container(test, None).await {
             Ok(env) => {
                 eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
                 Some(env)
@@ -394,7 +396,7 @@ impl KafkaTestEnv {
     /// somebody else's data. Returns `None` when no container can be
     /// started, so callers can skip.
     pub async fn hermetic(test: &str) -> Option<Self> {
-        match Self::spawn_container(test).await {
+        match Self::spawn_container(test, None).await {
             Ok(env) => {
                 eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
                 Some(env)
@@ -406,7 +408,48 @@ impl KafkaTestEnv {
         }
     }
 
-    async fn spawn_container(test: &str) -> Result<Self, String> {
+    /// As [`hermetic`](Self::hermetic), with the broker published on a host
+    /// port below 10240 from [`ports::free_port`].
+    ///
+    /// Retries on a fresh port when another process binds the one picked
+    /// before Docker does.
+    pub async fn hermetic_on_low_port(test: &str) -> Option<Self> {
+        let mut last = String::new();
+        for _ in 0..5 {
+            match Self::spawn_container(test, Some(ports::free_port())).await {
+                Ok(env) => {
+                    eprintln!("Spawned testcontainers Kafka at {}", env.config.brokers);
+                    return Some(env);
+                }
+                Err(e) => last = e,
+            }
+        }
+        eprintln!("Could not spawn testcontainers Kafka: {last}");
+        None
+    }
+
+    /// Freeze the broker container this env started. Its clients keep their
+    /// connections and get no answers, as with a stalled broker.
+    pub async fn pause(&self) -> Result<(), String> {
+        self.container
+            .as_ref()
+            .ok_or("this env points at a live broker, which a test must not pause")?
+            .pause()
+            .await
+            .map_err(|e| format!("pause the broker: {e}"))
+    }
+
+    /// Resume the broker container [`pause`](Self::pause) froze.
+    pub async fn unpause(&self) -> Result<(), String> {
+        self.container
+            .as_ref()
+            .ok_or("this env points at a live broker, which a test must not pause")?
+            .unpause()
+            .await
+            .map_err(|e| format!("unpause the broker: {e}"))
+    }
+
+    async fn spawn_container(test: &str, host_port: Option<u16>) -> Result<Self, String> {
         use testcontainers::ImageExt;
         use testcontainers::runners::AsyncRunner;
         use testcontainers_modules::kafka::apache::{KAFKA_PORT, Kafka};
@@ -420,10 +463,15 @@ impl KafkaTestEnv {
 
         let name = container_name(Some(test), "kafka");
         reap_stale(&name);
-        let container = Kafka::default()
+        let request = Kafka::default()
             .with_tag(KAFKA_TAG)
             .with_container_name(&name)
-            .with_labels(test_labels("kafka"))
+            .with_labels(test_labels("kafka"));
+        let request = match host_port {
+            Some(port) => request.with_mapped_port(port, KAFKA_PORT),
+            None => request,
+        };
+        let container = request
             .start()
             .await
             .map_err(|e| format!("start Kafka container: {e}"))?;

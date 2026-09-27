@@ -37,7 +37,6 @@ pipeline:
 #   topics:
 #     - "raw_events_land"
 #   group_id: "dfe-transform-vrl-my-pipeline"
-#   format: "auto"                     # auto, json, msgpack
 #   max_buffer_bytes: 67108864         # 64 MiB consumer buffer
 #   auto_offset_reset: "latest"        # latest, earliest
 #   session_timeout_ms: 30000
@@ -64,6 +63,11 @@ pipeline:
 #   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
+#   # On: the offsets are committed, or the Push answered OK, only once the
+#   # transformed records are delivered to the sink. Off: at receipt, and a
+#   # crash or a failed send loses what was acknowledged.
+#   acknowledgements:
+#     enabled: true
 
 # -----------------------------------------------------------------------------
 # Sink: the bus (a Kafka topic) or direct (the next stage's Push listener)
@@ -79,7 +83,10 @@ pipeline:
 #   key_field: ".org_id"
 #   compression: "zstd"                # none, gzip, lz4, snappy, zstd
 #   max_buffer_bytes: 67108864         # 64 MiB producer buffer
-#   message_timeout_ms: 300000         # producer delivery timeout
+#   # Producer delivery timeout. Capped at 15000 while a direct source holds
+#   # its acknowledgements, so the report lands inside the 18 s hold; set
+#   # librdkafka_options message.timeout.ms to override the cap.
+#   message_timeout_ms: 300000
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"
