@@ -6,7 +6,7 @@ Tests support two backends, controlled by `TEST_MODE` in `.env`:
 
 ### Remote (default)
 
-Uses the devex cluster endpoints from `.env`. Tests skip if endpoints are unreachable.
+Uses the remote cluster endpoints from `.env`. Tests skip if endpoints are unreachable.
 
 ```bash
 TEST_MODE=remote cargo nextest run --all-features
@@ -18,7 +18,7 @@ Uses `dfe-docker` infra profile (Kafka on localhost, no auth, no TLS).
 
 ```bash
 # Start infrastructure (once, stays running)
-cd /projects/dfe-docker
+cd ../dfe-docker
 docker compose --profile infra up -d
 
 # Run tests
