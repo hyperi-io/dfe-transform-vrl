@@ -53,7 +53,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use scalo::SelfRegulationGovernor;
 use scalo::config::shared::SharedConfig;
-use scalo::logger::{log_sampled, security};
+use scalo::logger::log_sampled;
 use scalo::memory::MemoryGuard;
 use scalo::scaling::ScalingPressure;
 use scalo::transport::grpc::{GrpcConfig, GrpcTransport};
@@ -88,6 +88,7 @@ pub const NEXT_HOP_SEND_TIMEOUT_MS: u64 = 15_000;
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
 static VRL_ERRORS: AtomicU64 = AtomicU64::new(0);
+static SER_ERRORS: AtomicU64 = AtomicU64::new(0);
 static FILTERED_BLOCKS: AtomicU64 = AtomicU64::new(0);
 use vrl::compiler::Program;
 use vrl::value::Value;
@@ -662,15 +663,15 @@ fn transform_records(
         None => indexed.iter().map(deser).collect(),
     };
 
+    // The error text can quote the record, so it is logged at debug only.
     let mut events: Vec<(Value, usize)> = Vec::with_capacity(batch_len);
     for result in deser_results {
         match result {
             Ok(item) => events.push(item),
             Err((_idx, e)) => {
                 if log_sampled(&DESER_ERRORS, 1000) {
-                    warn!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
+                    debug!(error = %e, total = DESER_ERRORS.load(Ordering::Relaxed), "deserialise failure (sampled 1/1000)");
                 }
-                security::input_validation_failure("deserialise", &e, None);
                 transform_metrics.record_deser_error();
             }
         }
@@ -709,10 +710,9 @@ fn transform_records(
             }
             Err((idx, e)) => {
                 if log_sampled(&VRL_ERRORS, 1000) {
-                    warn!(error = %e, total = VRL_ERRORS.load(Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
+                    debug!(error = %e, total = VRL_ERRORS.load(Ordering::Relaxed), "VRL transform error (sampled 1/1000)");
                 }
                 trace!(stage = "vrl_transform", error = %e, index = idx, "message error routing");
-                security::input_validation_failure("vrl_transform", &e.to_string(), None);
                 transform_metrics.record_transform_error();
             }
         }
@@ -743,10 +743,10 @@ fn transform_records(
                 });
             }
             Err(e) => {
-                if log_sampled(&VRL_ERRORS, 1000) {
-                    warn!(error = %e, "serialise failure (sampled 1/1000)");
+                if log_sampled(&SER_ERRORS, 1000) {
+                    warn!(error = %e, total = SER_ERRORS.load(Ordering::Relaxed), "serialise failure (sampled 1/1000)");
                 }
-                transform_metrics.record_produce_error();
+                transform_metrics.record_serialise_error();
             }
         }
     }
@@ -1418,6 +1418,108 @@ mod tests {
         });
 
         assert_sink_metered_as(&capture, "memory");
+    }
+
+    // ---- rejected input and the security log ----
+
+    /// Every event on the `security` target, rendered as `field=value` pairs.
+    #[derive(Clone, Default)]
+    struct SecurityLines(Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl SecurityLines {
+        fn lines(&self) -> Vec<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    /// Appends each field of an event to a line.
+    struct Render<'a>(&'a mut String);
+
+    impl tracing::field::Visit for Render<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, "{}={value:?} ", field.name());
+        }
+    }
+
+    impl tracing::Subscriber for SecurityLines {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target() == "security" {
+                let mut line = String::new();
+                event.record(&mut Render(&mut line));
+                self.0.lock().unwrap().push(line);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A flood of rejected records writes one security line per reason, with
+    /// nothing from the records in it, while `records_error_total` counts every
+    /// one of them.
+    #[test]
+    fn rejected_records_log_once_per_reason_and_count_every_one() {
+        const REJECTED: usize = 200;
+        const QUOTED: &str = "quoted-from-the-record";
+
+        let program = crate::engine::compiler::compile_vrl(".n = to_int!(.s)", None)
+            .expect("VRL compile")
+            .program;
+        let record = |payload: String| Record {
+            payload: Bytes::from(payload),
+            key: None,
+            headers: Vec::new(),
+            metadata: RecordMeta {
+                timestamp_ms: None,
+                format: PayloadFormat::Json,
+            },
+        };
+        let mut records = Vec::with_capacity(2 * REJECTED);
+        for i in 0..REJECTED {
+            // Not JSON, then JSON the program fails on.
+            records.push(record(format!("{QUOTED}-{i}")));
+            records.push(record(format!(r#"{{"s":"{QUOTED}-{i}"}}"#)));
+        }
+
+        let capture = Capture::default();
+        let security = SecurityLines::default();
+        let transform_metrics = TransformMetrics::default();
+        let sink_topic: Arc<str> = Arc::from("out");
+        let out = tracing::subscriber::with_default(security.clone(), || {
+            metrics::with_local_recorder(&capture, || {
+                transform_records(records, &program, &sink_topic, &transform_metrics, None)
+            })
+        });
+
+        assert!(out.is_empty(), "every record was rejected");
+        let lines = security.lines();
+        assert_eq!(lines.len(), 2, "one security line per reason: {lines:#?}");
+        assert!(
+            lines.iter().all(|line| !line.contains(QUOTED)),
+            "a security line quoted a record: {lines:#?}"
+        );
+        for (stage, reason) in [
+            ("deserialise", "payload_not_json"),
+            ("transform", "vrl_runtime_error"),
+        ] {
+            assert_eq!(
+                capture.counter("records_error_total", &[("stage", stage)]),
+                Some(REJECTED as u64),
+                "records_error_total{{stage={stage}}} must count every rejection"
+            );
+            assert!(
+                lines.iter().any(|line| line.contains(reason)),
+                "no security line names {reason}: {lines:#?}"
+            );
+        }
     }
 
     // ---- nesting depth ----

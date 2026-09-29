@@ -316,8 +316,10 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
     let _ = child.wait();
 }
 
+/// The committed Dockerfile is `emit-dockerfile` output, byte for byte, so a
+/// contract change that was never regenerated cannot ship a stale image.
 #[test]
-fn emit_dockerfile_outputs_from() {
+fn checked_in_dockerfile_matches_emit_dockerfile() {
     let output = Command::new(binary_path())
         .arg("emit-dockerfile")
         .output()
@@ -329,10 +331,13 @@ fn emit_dockerfile_outputs_from() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("FROM"),
-        "Dockerfile should contain FROM directive"
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Dockerfile");
+    let on_disk = std::fs::read_to_string(&path).expect("read the committed Dockerfile");
+    let emitted = String::from_utf8(output.stdout).expect("emit-dockerfile prints UTF-8");
+    assert_eq!(
+        on_disk, emitted,
+        "the committed Dockerfile does not match emit-dockerfile -- regenerate with: \
+         `dfe-transform-vrl emit-dockerfile > Dockerfile`"
     );
 }
 

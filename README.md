@@ -268,7 +268,7 @@ turn.
 
 ```bash
 make check                                        # hyperi-ci check -- quality + test, the pre-push gate
-cargo nextest run --features enrichment-mmdb      # what CI actually runs
+cargo nextest run --features enrichment-mmdb,enrichment-sqlite  # what CI actually runs
 cargo nextest run --all-features --run-ignored    # adds the broker-dependent e2e tests
 cargo run -- config-check --config config.yaml    # validate a config without starting
 cargo run --bin dfe-transform-vrl -- emit-chart chart    # regenerate the chart
@@ -276,11 +276,7 @@ cargo run --bin dfe-transform-vrl -- emit-chart chart    # regenerate the chart
 
 Green lies here in three ways, and all three are on by default.
 
-`default = []` in `Cargo.toml`, so a bare `cargo nextest run` does not compile the
-MMDB enrichment tests in at all. `.hyperi-ci.yaml` adds `enrichment-mmdb` to both
-the test and the build feature sets -- the build too, because the Dockerfile only
-copies the binary, so a default build ships a container that rejects
-`type: mmdb` tables at startup.
+`default = []` in `Cargo.toml`, so a bare `cargo nextest run` does not compile the MMDB or SQLite enrichment tests in at all. `.hyperi-ci.yaml` adds `enrichment-mmdb` and `enrichment-sqlite` to both the test and the build feature sets -- the build too, because the Dockerfile only copies the binary, so a default build ships a container that rejects `type: mmdb` and `type: sqlite` tables at startup.
 
 Kafka-dependent tests call `skip_if_no_kafka!()` and skip cleanly when no broker
 is reachable. They report as not-failed, which is not the same as proven.
@@ -302,11 +298,11 @@ checked.
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
 | Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in the config file | Set it through the env layer, on a **double** underscore | scalo's cascade finds files by fixed base name and can never be pointed at `config.yaml`, so the section parses and reaches nothing. Full list above under Configuration |
 | Trust `pipeline.batch_size`, `pipeline.batch_timeout_ms`, `sink.key_field` or `source.commit_interval_ms` | Size a chunk with `batch_processing.max_chunk_size` | `config::INERT_SETTINGS` -- accepted, validated, reaching nothing. Table above under Configuration |
-| Call a bare `cargo nextest run` green | Pass `--features enrichment-mmdb` | `default = []`, so the MMDB tests are not compiled in and the run is green without having tested them |
+| Call a bare `cargo nextest run` green | Pass `--features enrichment-mmdb,enrichment-sqlite` | `default = []`, so the MMDB and SQLite tests are not compiled in and the run is green without having tested them |
 | Set `sasl.enabled` with an empty username or password | Supply both, or neither | librdkafka's SCRAM check is a NULL check that an empty string passes, so that pod authenticated against nothing and still reported Ready. Refused at startup now |
 | Add a serialise path that redacts by field name | Keep the password a `scalo::SensitiveString` | Redaction is by type on every path -- `Debug`, the `/config` dump, the emitted schema. The figment round-trip has to be wrapped in `expose_during` or a file-sourced password reaches the broker as the literal `***REDACTED***` |
 | Size the container from steady state when the program is large | Leave headroom for the compile | Compilation scales with the VRL, and the bundled filebeat program is OOM-killed under a 32 MiB limit. Below the floor the kernel kills the process mid-compile, seen as an exit-137 restart loop with nothing in the log. `engine::budget` refuses first and names all three numbers |
-| Change `publish-target` to `internal` in the CI workflow | Leave it `both` | `internal` resolves to the spike channel, which is Tier 1 only -- a silent demotion that drops PGO and BOLT from the release build. dfe-loader v1.17.4 shipped that way before flipping back |
+| Pick the optimisation tier with `publish-target` | Use `build.skip_optimize` in `.hyperi-ci.yaml`, or the `skip-optimize` dispatch input for one run | hyperi-ci ignores `publish-target`. A build that ships gets PGO and BOLT from `scripts/pgo-workload.sh` unless optimisation is skipped, and a stable release that skips it is refused unless the dispatch passes `release-unoptimized: true` |
 
 ### Where this sits
 
