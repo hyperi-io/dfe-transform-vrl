@@ -458,15 +458,21 @@ impl KafkaTestEnv {
         // into a dependency's source is invisible to dependency review:
         // Renovate reads Cargo.toml, correctly reports the crate current, and
         // never sees the image.
-        // renovate: datasource=docker depName=apache/kafka-native
+        // JVM image: `apache/kafka-native` before 4.4.0 segfaults in `getpwuid` on ~2% of starts.
+        // renovate: datasource=docker depName=apache/kafka
         const KAFKA_TAG: &str = "4.3.1";
+
+        // A JVM broker takes 5-12 s to become ready, more on a busy runner, so 60 s is too tight.
+        const KAFKA_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
         let name = container_name(Some(test), "kafka");
         reap_stale(&name);
         let request = Kafka::default()
+            .with_jvm_image()
             .with_tag(KAFKA_TAG)
             .with_container_name(&name)
-            .with_labels(test_labels("kafka"));
+            .with_labels(test_labels("kafka"))
+            .with_startup_timeout(KAFKA_STARTUP_TIMEOUT);
         let request = match host_port {
             Some(port) => request.with_mapped_port(port, KAFKA_PORT),
             None => request,
