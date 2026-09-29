@@ -32,7 +32,8 @@ coverage-html/
 coverage.lcov
 tarpaulin-report.json
 cobertura.xml
-.cargo/
+# The contents, not the directory: git cannot re-include a file under an excluded directory.
+.cargo/*
 !.cargo/config.toml
 
 # Project temp directory

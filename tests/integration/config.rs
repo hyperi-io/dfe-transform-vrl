@@ -90,3 +90,49 @@ fn test_env_override_pipeline_name() {
     let config = Config::load(Some(&fixture_path("minimal.yaml"))).unwrap();
     assert_eq!(config.pipeline.name, "test-pipeline");
 }
+
+/// Every memory-guard variable `.env.example` documents is one the runtime
+/// reads, under the prefix the runtime reads it with.
+#[test]
+fn env_example_memory_guard_vars_reach_the_guard() {
+    use clap::Parser;
+    use scalo::cli::ServiceApp;
+    use scalo::memory::MemoryGuardConfig;
+
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let example = std::fs::read_to_string(format!("{manifest}/.env.example")).unwrap();
+    let documented: Vec<String> = example
+        .lines()
+        .filter_map(|line| line.trim_start_matches('#').trim().split_once('='))
+        .map(|(name, _)| name.to_string())
+        .filter(|name| name.contains("_MEMORY_"))
+        .collect();
+    assert_eq!(
+        documented.len(),
+        3,
+        "the example documents the three memory-guard settings: {documented:?}"
+    );
+
+    // The ServiceRuntime builds its guard with `MemoryGuardConfig::from_env(env_prefix)`.
+    let prefix = dfe_transform_vrl::cli::App::parse_from(["dfe-transform-vrl"])
+        .env_prefix()
+        .to_string();
+
+    for name in documented {
+        let (sentinel, read): (&str, fn(&MemoryGuardConfig) -> String) =
+            match name.rsplit_once("_MEMORY_").map(|(_, setting)| setting) {
+                Some("LIMIT_BYTES") => ("123456789", |c| c.limit_bytes.to_string()),
+                Some("PRESSURE_THRESHOLD") => ("0.5", |c| c.pressure_threshold.to_string()),
+                Some("CGROUP_HEADROOM") => ("0.5", |c| c.cgroup_headroom.to_string()),
+                other => panic!("{name}: the memory guard has no setting {other:?}"),
+            };
+        let config = temp_env::with_var(&name, Some(sentinel), || {
+            MemoryGuardConfig::from_env(&prefix)
+        });
+        assert_eq!(
+            read(&config),
+            sentinel,
+            "{name} is documented in .env.example but the memory guard never reads it"
+        );
+    }
+}

@@ -8,33 +8,46 @@
 
 //! PGO workload driver for `dfe-transform-vrl`.
 //!
-//! Produces realistic Kafka messages so a running, PGO-instrumented
-//! `dfe-transform-vrl` accumulates representative profile data across
-//! its hot path: Kafka consume → format detect → deserialise → VRL
-//! execute → serialise → Kafka produce.
+//! Replays the elastic/integrations filebeat corpus onto the source topic, as
+//! the input events the bundled filebeat pipeline reads, so a PGO-instrumented
+//! `dfe-transform-vrl` profiles the pipeline it ships with: Kafka consume ->
+//! JSON parse -> `parse_groks`, `parse_timestamp` and the timezones lookup ->
+//! JSON serialise -> Kafka produce. It then reads the transform's `/metrics`
+//! and fails unless the records were transformed and delivered.
 //!
-//! Invoked by `scripts/pgo-workload.sh` which owns the Kafka container,
-//! transform fixture, ephemeral wrapper config, and the wrapper process.
+//! Invoked by `scripts/pgo-workload.sh`, which owns the broker container, the
+//! transform process and its config.
 //!
 //! Built only with `--features pgo-driver`. Main wrapper binary unaffected.
 //!
 //! Configuration via environment variables:
-//! - `PGO_DRIVER_DURATION_SECS` (default 300) — total runtime
+//! - `PGO_DRIVER_DURATION_SECS` (default 300) -- how long to produce
 //! - `PGO_DRIVER_BROKERS` (default `127.0.0.1:19092`)
-//! - `PGO_DRIVER_TOPIC` (default `pgo_source`) — source topic the wrapper consumes
-//! - `PGO_DRIVER_RPS` (default 5000) — messages per second
-//! - `PGO_DRIVER_BATCH_LINGER_MS` (default 10) — librdkafka batching
+//! - `PGO_DRIVER_TOPIC` (default `pgo_source`) -- source topic the wrapper consumes
+//! - `PGO_DRIVER_RPS` (default 5000) -- records per second
+//! - `PGO_DRIVER_BATCH_LINGER_MS` (default 10) -- librdkafka batching
+//! - `PGO_DRIVER_METRICS_ADDR` (default `127.0.0.1:9090`) -- the wrapper's metrics listener
+//! - `PGO_DRIVER_SETTLE_SECS` (default 60) -- longest wait for deliveries to stop rising
 //!
 //! Exit codes:
-//! - 0: workload completed for full duration
-//! - 1: fatal setup error (broker unreachable, producer init)
+//! - 0: produced for the full duration, and the wrapper delivered records
+//!   with fewer errors than deliveries
+//! - 1: setup failed, or the wrapper did not transform and deliver the load
 
 #![allow(clippy::expect_used)]
 // workload driver, not library code
 // Throughput-rate maths and array indexing on a monotonically-increasing
 // counter -- precision loss / 32-bit truncation are irrelevant to a load
 // generator and never reached on the 64-bit targets we build.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
+// The same corpus reader and input-event shape the filebeat test suites use.
+#[path = "../../tests/common/filebeat.rs"]
+mod filebeat_corpus;
 
 use std::env;
 use std::sync::Arc;
@@ -43,19 +56,30 @@ use std::time::{Duration, Instant};
 
 use rdkafka::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
-use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval};
+
+use crate::filebeat_corpus as fb;
+
+/// How often the producer tops the sent count up to the configured rate.
+const PRODUCE_TICK: Duration = Duration::from_millis(10);
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     let cfg = Config::from_env();
     println!("pgo-driver starting: {cfg:#?}");
 
+    let events = corpus_events();
+    println!(
+        "pgo-driver: replaying {} filebeat corpus events from {} logs",
+        events.len(),
+        fb::all_logs().len()
+    );
+
     let producer: FutureProducer = match ClientConfig::new()
         .set("bootstrap.servers", &cfg.brokers)
         .set("client.id", "dfe-transform-vrl-pgo-driver")
         .set("linger.ms", cfg.batch_linger_ms.to_string())
-        .set("compression.type", "lz4")
+        .set("compression.type", "zstd")
         .set("acks", "1")
         .set("queue.buffering.max.messages", "1000000")
         .set("queue.buffering.max.kbytes", "262144")
@@ -68,48 +92,12 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let producer = Arc::new(producer);
 
     let stats = Arc::new(Stats::new());
     let deadline = Instant::now() + Duration::from_secs(cfg.duration_secs);
 
-    let mut tasks = JoinSet::new();
-
-    // Three producer tasks split RPS across small/medium/large payloads to
-    // exercise different VRL stdlib paths (parse_json on large, parse_key_value
-    // on small, conditional + string ops across all sizes).
-    let small_rps = cfg.rps * 60 / 100; // 60% small — k=v log lines
-    let medium_rps = cfg.rps * 30 / 100; // 30% medium — JSON envelope + .message k=v
-    let large_rps = cfg.rps - small_rps - medium_rps; // 10% large — nested JSON
-
-    tasks.spawn(produce_loop(
-        producer.clone(),
-        cfg.clone(),
-        stats.clone(),
-        deadline,
-        small_rps,
-        PayloadShape::Small,
-    ));
-    tasks.spawn(produce_loop(
-        producer.clone(),
-        cfg.clone(),
-        stats.clone(),
-        deadline,
-        medium_rps,
-        PayloadShape::Medium,
-    ));
-    tasks.spawn(produce_loop(
-        producer.clone(),
-        cfg.clone(),
-        stats.clone(),
-        deadline,
-        large_rps,
-        PayloadShape::Large,
-    ));
-
-    // Progress reporter
-    let reporter_stats = stats.clone();
-    tasks.spawn(async move {
+    let reporter_stats = Arc::clone(&stats);
+    let reporter = tokio::spawn(async move {
         let mut tick = interval(Duration::from_secs(15));
         tick.tick().await; // skip immediate
         while Instant::now() < deadline {
@@ -118,19 +106,35 @@ async fn main() {
         }
     });
 
-    while let Some(res) = tasks.join_next().await {
-        if let Err(e) = res {
-            eprintln!("pgo-driver task error: {e}");
-        }
-    }
+    produce(&producer, &cfg, &stats, &events, deadline).await;
+    reporter.abort();
 
-    // Flush outstanding records
     if let Err(e) = producer.flush(Duration::from_secs(10)) {
         eprintln!("pgo-driver: flush error: {e}");
     }
-
     stats.report();
-    println!("pgo-driver: complete");
+
+    if stats.sent.load(Ordering::Relaxed) == 0 {
+        eprintln!("pgo-driver: FAIL -- no record was queued to {}", cfg.topic);
+        std::process::exit(1);
+    }
+
+    match settle(&cfg.metrics_addr, Duration::from_secs(cfg.settle_secs)).await {
+        Ok(counts) => match counts.verdict() {
+            Ok(()) => println!("pgo-driver: complete -- {counts}"),
+            Err(reason) => {
+                eprintln!("pgo-driver: FAIL -- {reason} ({counts})");
+                std::process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "pgo-driver: FAIL -- could not read {}/metrics: {e}",
+                cfg.metrics_addr
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 // ===========================================================================
@@ -144,16 +148,20 @@ struct Config {
     topic: String,
     rps: u32,
     batch_linger_ms: u32,
+    metrics_addr: String,
+    settle_secs: u64,
 }
 
 impl Config {
     fn from_env() -> Self {
         Self {
-            duration_secs: env_u64("PGO_DRIVER_DURATION_SECS", 300),
+            duration_secs: env_parsed("PGO_DRIVER_DURATION_SECS", 300),
             brokers: env_str("PGO_DRIVER_BROKERS", "127.0.0.1:19092"),
             topic: env_str("PGO_DRIVER_TOPIC", "pgo_source"),
-            rps: env_u32("PGO_DRIVER_RPS", 5000),
-            batch_linger_ms: env_u32("PGO_DRIVER_BATCH_LINGER_MS", 10),
+            rps: env_parsed("PGO_DRIVER_RPS", 5000),
+            batch_linger_ms: env_parsed("PGO_DRIVER_BATCH_LINGER_MS", 10),
+            metrics_addr: env_str("PGO_DRIVER_METRICS_ADDR", "127.0.0.1:9090"),
+            settle_secs: env_parsed("PGO_DRIVER_SETTLE_SECS", 60),
         }
     }
 }
@@ -161,13 +169,8 @@ impl Config {
 fn env_str(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }
-fn env_u64(key: &str, default: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-fn env_u32(key: &str, default: u32) -> u32 {
+
+fn env_parsed<T: std::str::FromStr>(key: &str, default: T) -> T {
     env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -175,7 +178,25 @@ fn env_u32(key: &str, default: u32) -> u32 {
 }
 
 // ===========================================================================
-// Stats
+// Corpus
+// ===========================================================================
+
+/// Every corpus line as the input event the bundled pipeline reads.
+fn corpus_events() -> Vec<Vec<u8>> {
+    let mut events = Vec::new();
+    for log in fb::all_logs() {
+        let conf = fb::corpus_conf(log);
+        for line in fb::corpus_lines(log) {
+            let event = fb::input_event(&line, conf.as_ref());
+            events.push(serde_json::to_vec(&event).expect("a corpus event serialises"));
+        }
+    }
+    assert!(!events.is_empty(), "the filebeat corpus has no events");
+    events
+}
+
+// ===========================================================================
+// Producer
 // ===========================================================================
 
 struct Stats {
@@ -207,125 +228,179 @@ impl Stats {
     }
 }
 
-// ===========================================================================
-// Producer
-// ===========================================================================
-
-#[derive(Clone, Copy)]
-enum PayloadShape {
-    Small,
-    Medium,
-    Large,
-}
-
-fn rate_limiter(rps: u32) -> tokio::time::Interval {
-    let period = Duration::from_nanos(1_000_000_000 / u64::from(rps.max(1)));
-    let mut iv = interval(period);
-    iv.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    iv
-}
-
-async fn produce_loop(
-    producer: Arc<FutureProducer>,
-    cfg: Config,
-    stats: Arc<Stats>,
+/// Queue corpus events at `cfg.rps` until `deadline`, cycling the corpus.
+async fn produce(
+    producer: &FutureProducer,
+    cfg: &Config,
+    stats: &Arc<Stats>,
+    events: &[Vec<u8>],
     deadline: Instant,
-    rps: u32,
-    shape: PayloadShape,
 ) {
-    if rps == 0 {
-        return;
-    }
-    let mut tick = rate_limiter(rps);
-    let payloads = build_payloads(shape);
-    let mut idx = 0u64;
+    let mut tick = interval(PRODUCE_TICK);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let start = Instant::now();
+    let mut queued = 0_u64;
 
     while Instant::now() < deadline {
         tick.tick().await;
-        let payload = &payloads[(idx as usize) % payloads.len()];
-        idx = idx.wrapping_add(1);
-        let key = format!("k{}", idx % 1024);
-        let record: FutureRecord<'_, str, [u8]> = FutureRecord::to(&cfg.topic)
-            .payload(payload.as_slice())
-            .key(&key);
-        // Fire-and-forget: queue() returns immediately; delivery futures are
-        // not awaited so we keep producing at the configured rate. Errors at
-        // queue time mean the librdkafka queue is saturated.
-        match producer.send_result(record) {
-            Ok(fut) => {
-                stats.sent.fetch_add(1, Ordering::Relaxed);
-                let stats_inner = stats.clone();
-                tokio::spawn(async move {
-                    if let Ok(Err((_e, _msg))) = fut.await {
-                        stats_inner.deliver_errors.fetch_add(1, Ordering::Relaxed);
-                    }
-                });
-            }
-            Err(_) => {
+        let due = (start.elapsed().as_secs_f64() * f64::from(cfg.rps)) as u64;
+        while queued < due {
+            let payload = &events[(queued as usize) % events.len()];
+            let record: FutureRecord<'_, (), [u8]> =
+                FutureRecord::to(&cfg.topic).payload(payload.as_slice());
+            // Fire-and-forget: queueing returns at once, and a full librdkafka
+            // queue leaves the rest of this tick's quota for the next tick.
+            let Ok(delivery) = producer.send_result(record) else {
                 stats.enqueue_errors.fetch_add(1, Ordering::Relaxed);
+                break;
+            };
+            queued += 1;
+            stats.sent.fetch_add(1, Ordering::Relaxed);
+            let stats = Arc::clone(stats);
+            tokio::spawn(async move {
+                if let Ok(Err((_e, _msg))) = delivery.await {
+                    stats.deliver_errors.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        }
+    }
+}
+
+// ===========================================================================
+// Verdict from the wrapper's own metrics
+// ===========================================================================
+
+/// The wrapper's record counters, summed across their label sets.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Counts {
+    received: u64,
+    delivered: u64,
+    filtered: u64,
+    errors: u64,
+}
+
+impl Counts {
+    /// Parse the counters out of a Prometheus text exposition.
+    fn parse(exposition: &str) -> Self {
+        let mut counts = Self::default();
+        for line in exposition.lines().filter(|l| !l.starts_with('#')) {
+            let Some((series, value)) = line.rsplit_once(' ') else {
+                continue;
+            };
+            let name = series.split('{').next().unwrap_or_default();
+            let Ok(value) = value.parse::<f64>() else {
+                continue;
+            };
+            let value = value as u64;
+            match name {
+                "records_received_total" => counts.received += value,
+                "records_delivered_total" => counts.delivered += value,
+                "records_filtered_total" => counts.filtered += value,
+                "records_error_total" => counts.errors += value,
+                _ => {}
             }
         }
+        counts
     }
-}
 
-// ===========================================================================
-// Payload corpora — exercise VRL hot-path stdlib
-// ===========================================================================
-
-fn build_payloads(shape: PayloadShape) -> Vec<Vec<u8>> {
-    match shape {
-        PayloadShape::Small => small_payloads(),
-        PayloadShape::Medium => medium_payloads(),
-        PayloadShape::Large => vec![large_payload()],
-    }
-}
-
-fn small_payloads() -> Vec<Vec<u8>> {
-    // ~150-300 byte JSON events with a `.message` k=v line. The PGO workload
-    // VRL fixture (02_kv_extract.vrl) uses parse_key_value on .message, so
-    // these exercise the parse_key_value + to_int + replace string path.
-    [
-        r#"{"_timestamp":"2026-04-29T12:00:00Z","level":"info","_source":"auth","org_id":"acme","message":"user=alice action=login status=success duration=42ms"}"#,
-        r#"{"_timestamp":"2026-04-29T12:00:01Z","level":"warn","_source":"api","org_id":"bigcorp","message":"user=svc-acct action=token_refresh status=success duration=8ms"}"#,
-        r#"{"_timestamp":"2026-04-29T12:00:02Z","level":"error","_source":"errors","org_id":"contoso","message":"user=bob action=db_query status=timeout duration=30000ms"}"#,
-        r#"{"_timestamp":"2026-04-29T12:00:03Z","level":"debug","_source":"auth","org_id":"acme","message":"user=alice action=mfa_challenge status=verified duration=156ms"}"#,
-        r#"{"_timestamp":"2026-04-29T12:00:04Z","level":"critical","_source":"errors","org_id":"globex","message":"user=admin action=role_grant status=denied duration=12ms"}"#,
-    ]
-    .iter()
-    .map(|s| s.as_bytes().to_vec())
-    .collect()
-}
-
-fn medium_payloads() -> Vec<Vec<u8>> {
-    // ~1-2 KB JSON events with a stringified-JSON `.message` field. The PGO
-    // workload's 03_json_unflatten.vrl will parse_json the .message and merge
-    // its fields. Exercises sonic-rs deserialise + nested object construction.
-    [
-        r#"{"_timestamp":"2026-04-29T12:00:00Z","level":"info","_source":"api","org_id":"acme","message":"{\"timestamp\":\"2026-04-29T12:00:00Z\",\"event\":\"order_placed\",\"order_id\":\"o-7821\",\"items\":[{\"sku\":\"sku-1\",\"qty\":2},{\"sku\":\"sku-9\",\"qty\":1}],\"total_cents\":12750,\"customer\":{\"id\":\"u-7\",\"tier\":\"gold\",\"region\":\"AU\"}}"}"#,
-        r#"{"_timestamp":"2026-04-29T12:00:01Z","level":"warn","_source":"auth","org_id":"bigcorp","message":"{\"timestamp\":\"2026-04-29T12:00:01Z\",\"event\":\"mfa_required\",\"actor\":{\"username\":\"svc-pipeline\",\"entity_type\":\"service_account\"},\"factor\":\"webauthn\",\"verified\":true,\"network\":{\"src_ip\":\"198.51.100.7\",\"asn\":13335,\"country\":\"AU\"}}"}"#,
-    ]
-    .iter()
-    .map(|s| s.as_bytes().to_vec())
-    .collect()
-}
-
-fn large_payload() -> Vec<u8> {
-    // ~8 KB event with array of 50 sub-records to exercise array iteration
-    // through sonic-rs and the buffer accumulator. The wrapper deserialises
-    // this once, the VRL runs, then serialises again — full deser + ser cost.
-    let mut buf = br#"{"_timestamp":"2026-04-29T12:00:00Z","level":"info","_source":"api","org_id":"acme","batch_id":"b-2026-04-29-001","events":["#.to_vec();
-    for i in 0..50 {
-        if i > 0 {
-            buf.push(b',');
+    /// Whether the wrapper did the work the profile is meant to capture.
+    const fn verdict(self) -> Result<(), &'static str> {
+        if self.delivered == 0 {
+            return Err("the transform delivered no records");
         }
-        let rec = format!(
-            r#"{{"id":{i},"type":"http.request","path":"/api/v1/users/{i}","method":"GET","status":200,"duration_ms":{ms},"client_ip":"10.0.{a}.{b}","user_agent":"Mozilla/5.0"}}"#,
-            ms = 5 + (i % 30),
-            a = i % 255,
-            b = (i * 7) % 255,
-        );
-        buf.extend_from_slice(rec.as_bytes());
+        if self.errors >= self.delivered {
+            return Err("transform errors dominate the delivered records");
+        }
+        Ok(())
     }
-    buf.extend_from_slice(b"]}");
-    buf
+}
+
+impl std::fmt::Display for Counts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "received={} delivered={} filtered={} errors={}",
+            self.received, self.delivered, self.filtered, self.errors
+        )
+    }
+}
+
+/// GET `/metrics` from `addr` and return the response body.
+async fn scrape(addr: &str) -> std::io::Result<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let request = async {
+        let mut stream = tokio::net::TcpStream::connect(addr).await?;
+        let head = format!("GET /metrics HTTP/1.0\r\nHost: {addr}\r\n\r\n");
+        stream.write_all(head.as_bytes()).await?;
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await?;
+        let (status, body) = response
+            .split_once("\r\n\r\n")
+            .unwrap_or((response.as_str(), ""));
+        if !status.starts_with("HTTP/1.1 200") && !status.starts_with("HTTP/1.0 200") {
+            let line = status.lines().next().unwrap_or_default();
+            return Err(std::io::Error::other(format!("answered {line}")));
+        }
+        Ok(body.to_string())
+    };
+    tokio::time::timeout(Duration::from_secs(5), request)
+        .await
+        .map_err(|_| std::io::Error::other("timed out"))?
+}
+
+/// Scrape until deliveries stop rising or `limit` passes, and return the last counts.
+async fn settle(addr: &str, limit: Duration) -> std::io::Result<Counts> {
+    let deadline = Instant::now() + limit;
+    let mut last = Counts::parse(&scrape(addr).await?);
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let now = Counts::parse(&scrape(addr).await?);
+        if now.delivered == last.delivered || Instant::now() >= deadline {
+            return Ok(now);
+        }
+        last = now;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPOSITION: &str = "\
+# HELP records_delivered_total Records delivered
+# TYPE records_delivered_total counter
+records_delivered_total 120
+records_received_total 130
+records_filtered_total 4
+records_error_total{stage=\"deserialise\"} 1
+records_error_total{stage=\"transform\"} 5
+transport_sent_total{transport=\"kafka\"} 120
+";
+
+    #[test]
+    fn counts_sum_every_stage_of_the_error_counter() {
+        let counts = Counts::parse(EXPOSITION);
+        assert_eq!(
+            counts,
+            Counts {
+                received: 130,
+                delivered: 120,
+                filtered: 4,
+                errors: 6
+            }
+        );
+        assert_eq!(counts.verdict(), Ok(()));
+    }
+
+    #[test]
+    fn nothing_delivered_or_errors_dominating_fails_the_workload() {
+        assert!(Counts::default().verdict().is_err());
+        let dominated = Counts {
+            delivered: 10,
+            errors: 10,
+            ..Counts::default()
+        };
+        assert!(dominated.verdict().is_err());
+    }
 }

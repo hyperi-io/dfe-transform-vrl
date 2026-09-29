@@ -208,6 +208,47 @@ mod tests {
         assert!(kinds.contains(&"stix") && kinds.contains(&"sqlite"));
     }
 
+    /// Every enrichment source the catalogue offers is compiled into the build
+    /// that ships and the build that is tested, so a table the console offers
+    /// cannot stop the transform at startup.
+    #[test]
+    fn every_catalogued_enrichment_source_is_in_the_shipped_build() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".hyperi-ci.yaml");
+        let ci: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).expect("read .hyperi-ci.yaml"))
+                .expect(".hyperi-ci.yaml parses");
+        let features = |stage: &str| -> Vec<String> {
+            ci[stage]["rust"]["features"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{stage}.rust.features is one comma-separated string"))
+                .split(',')
+                .map(|f| f.trim().to_string())
+                .collect()
+        };
+        let (build, test) = (features("build"), features("test"));
+
+        let enrichment = contract()
+            .capabilities
+            .into_iter()
+            .find(|cap| cap.name == "enrichment")
+            .expect("enrichment capability");
+        for source in &enrichment.children {
+            let feature = match source.name.as_str() {
+                "file" | "stix" => continue,
+                "mmdb" => "enrichment-mmdb",
+                "sqlite" => "enrichment-sqlite",
+                other => panic!("the catalogue offers `{other}`, which maps to no known feature"),
+            };
+            for (stage, set) in [("build", &build), ("test", &test)] {
+                assert!(
+                    set.iter().any(|f| f == feature),
+                    "the catalogue offers `{}` but {stage}.rust.features lacks `{feature}`: {set:?}",
+                    source.name
+                );
+            }
+        }
+    }
+
     /// The committed reflectable artefacts under docs/ must not drift from a
     /// fresh regen. Regenerate with `dfe-transform-vrl config-schema --dir docs`.
     #[test]

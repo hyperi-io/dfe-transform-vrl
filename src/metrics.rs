@@ -9,20 +9,22 @@
 //! Prometheus metrics using the DFE metrics standard.
 //!
 //! Three layers:
-//! - **Layer 1 (`ServiceMetrics`):** Platform-wide `dfe_*` metrics (records, transport, scaling)
+//! - **Layer 1 (`ServiceMetrics`):** Platform-wide metrics (records, transport, scaling)
 //! - **Layer 2 (`metrics::groups`):** Common metric groups (`AppMetrics`, `ConsumerMetrics`, etc.)
 //! - **Layer 3 (app-specific):** metrics unique to this service
 //!
-//! Metric names are emitted BARE -- the `MetricsManager` namespace (the app
-//! name `dfe-transform-vrl` -> `dfe_transform_vrl_`) prepends the prefix ONCE
-//! via the global recorder's prefix layer. App code MUST pass bare segment
-//! names (e.g. `records_error_total`, not `dfe_transform_vrl_records_error_total`)
-//! or the prefix would double up. Per-app differentiation in the platform is by
-//! LABEL (Prometheus job/pod), never the metric name.
+//! Metric names are emitted BARE, and scraped bare: the runtime's
+//! `MetricsManager` namespace is empty unless `metrics.namespace` is set, and
+//! then the global recorder's prefix layer prepends it ONCE. App code MUST
+//! pass bare segment names (e.g. `records_error_total`) or a set namespace
+//! would double up. Per-app differentiation in the platform is by LABEL
+//! (Prometheus job/pod), never the metric name.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
+use scalo::logger::{log_debounced, security};
 use scalo::memory::MemoryGuard;
 use scalo::metrics::groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
@@ -34,19 +36,49 @@ use tokio_util::sync::CancellationToken;
 /// How often the memory gauges are refreshed from the memory guard.
 const MEMORY_GAUGE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Shortest gap between two security-log lines for one rejection reason.
+const REJECTION_LOG_INTERVAL_MS: u64 = 10_000;
+
+/// One reason a record is rejected as input, written to the security log at
+/// most once per [`REJECTION_LOG_INTERVAL_MS`].
+///
+/// The reason is a fixed name rather than the error text, because a parse or
+/// VRL error can quote the record. `records_error_total` carries every rejection.
+struct RejectionLog {
+    action: &'static str,
+    reason: &'static str,
+    last_logged_ms: AtomicU64,
+}
+
+impl RejectionLog {
+    const fn new(action: &'static str, reason: &'static str) -> Self {
+        Self {
+            action,
+            reason,
+            last_logged_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn report(&self) {
+        if log_debounced(&self.last_logged_ms, REJECTION_LOG_INTERVAL_MS) {
+            security::input_validation_failure(self.action, self.reason, None);
+        }
+    }
+}
+
 /// All metrics for the transform pipeline, organised by layer.
 pub struct TransformMetrics {
-    // Layer 1: Platform standard (dfe_*)
+    // Layer 1: Platform standard
     pub dfe: Option<ServiceMetrics>,
 
-    // Layer 2: Common metric groups (dfe_transform_vrl_*)
+    // Layer 2: Common metric groups
     pub app: Option<AppMetrics>,
     pub consumer: Option<ConsumerMetrics>,
     pub sink: Option<SinkMetrics>,
     pub backpressure: Option<BackpressureMetrics>,
     pub enrichment: Option<EnrichmentMetrics>,
 
-    // Layer 3: App-specific (dfe_transform_vrl_*)
+    // Layer 3: App-specific
     pub execute_duration: metrics::Histogram,
     pub deserialise_duration: metrics::Histogram,
     pub serialise_duration: metrics::Histogram,
@@ -60,14 +92,27 @@ pub struct TransformMetrics {
     pub enrichment_reload_total: metrics::Counter,
     pub enrichment_reload_duration: metrics::Histogram,
     pub enrichment_last_reload_timestamp: metrics::Gauge,
+
+    // Security-log gates for records rejected as input.
+    not_json: RejectionLog,
+    vrl_failed: RejectionLog,
+}
+
+/// The security-log gate for a record that is not JSON.
+const fn not_json_log() -> RejectionLog {
+    RejectionLog::new("deserialise", "payload_not_json")
+}
+
+/// The security-log gate for a record the VRL program fails on.
+const fn vrl_failed_log() -> RejectionLog {
+    RejectionLog::new("vrl_transform", "vrl_runtime_error")
 }
 
 impl TransformMetrics {
     /// Create all metrics via the scalo `MetricsManager`.
     ///
-    /// The `MetricsManager` namespace is the app name (`dfe-transform-vrl` ->
-    /// `dfe_transform_vrl_`); the prefix layer prepends it once to every bare
-    /// name registered here.
+    /// Every name registered here is bare; the prefix layer prepends a set
+    /// `metrics.namespace` once, and by default there is none.
     pub fn new(manager: &MetricsManager, version: &str, commit: &str) -> Self {
         let dfe = ServiceMetrics::register(manager);
 
@@ -121,30 +166,44 @@ impl TransformMetrics {
                 "enrichment_table_last_reload_timestamp",
                 "Unix timestamp of last successful enrichment table reload",
             ),
+            not_json: not_json_log(),
+            vrl_failed: vrl_failed_log(),
         }
     }
 
-    /// Record a deserialise error.
+    /// Count a record that is not JSON, and report it to the security log.
     ///
     /// Each error lands in one `stage` series only. An unlabelled increment as
     /// well would be a second series under the same name, and a `sum()` across
     /// labels would count the error twice.
     #[inline]
     pub fn record_deser_error(&self) {
-        // Bare name -- the namespace prefix layer prepends `dfe_transform_vrl_` once.
+        // Bare name -- a set `metrics.namespace` is prepended once by the prefix layer.
         metrics::counter!(
             "records_error_total",
             "stage" => "deserialise"
         )
         .increment(1);
+        self.not_json.report();
     }
 
-    /// Record a VRL transform error.
+    /// Record a VRL transform error, and report it to the security log.
     #[inline]
     pub fn record_transform_error(&self) {
         metrics::counter!(
             "records_error_total",
             "stage" => "transform"
+        )
+        .increment(1);
+        self.vrl_failed.report();
+    }
+
+    /// Record a transformed event that could not be serialised back to JSON.
+    #[inline]
+    pub fn record_serialise_error(&self) {
+        metrics::counter!(
+            "records_error_total",
+            "stage" => "serialise"
         )
         .increment(1);
     }
@@ -242,10 +301,8 @@ pub fn spawn_memory_gauge_task(
 }
 
 impl Default for TransformMetrics {
-    /// Default for tests — no `ServiceMetrics` or groups (no global recorder
-    /// installed). Bare names match the `new()` registration path; the
-    /// namespace prefix layer (absent in tests) is what would prepend
-    /// `dfe_transform_vrl_` in production.
+    /// Default for tests -- no `ServiceMetrics` or groups (no global recorder
+    /// installed). Bare names match the `new()` registration path.
     fn default() -> Self {
         Self {
             dfe: None,
@@ -269,6 +326,8 @@ impl Default for TransformMetrics {
             enrichment_last_reload_timestamp: metrics::gauge!(
                 "enrichment_table_last_reload_timestamp"
             ),
+            not_json: not_json_log(),
+            vrl_failed: vrl_failed_log(),
         }
     }
 }
@@ -620,14 +679,15 @@ mod tests {
             let m = TransformMetrics::new(&manager, "0.1.0", "eeee");
             m.record_deser_error();
             m.record_transform_error();
+            m.record_serialise_error();
             m.record_produce_error();
         });
         assert_eq!(
             capture.counter_total("records_error_total"),
-            3,
-            "three errors read as three across every stage"
+            4,
+            "four errors read as four across every stage"
         );
-        for stage in ["deserialise", "transform", "produce"] {
+        for stage in ["deserialise", "transform", "serialise", "produce"] {
             assert_eq!(
                 capture.counter("records_error_total", &[("stage", stage)]),
                 Some(1),

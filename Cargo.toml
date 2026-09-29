@@ -64,7 +64,7 @@ bytes = ">=1.7, <2"
 # owns the inbound pause-partitions brake + AIMD byte budget over the shared
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
-scalo = { version = ">=2.13.0, <3", features = [
+scalo = { version = ">=2.13.2, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -145,13 +145,17 @@ tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 # Default builds (and `--features jemalloc`) skip this entirely. The main
 # wrapper uses Kafka via scalo transport-kafka, never directly.
 rdkafka = { version = ">=0.39, <0.40", features = ["tokio", "cmake-build"], optional = true }
+# The pgo-driver bin reads the filebeat corpus archive in memory; same ranges as
+# the dev-dependencies so cargo unifies to one of each.
+flate2 = { version = ">=1.1, <2", optional = true }
+tar = { version = ">=0.4.44, <0.5", optional = true }
 
 [features]
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
 # pgo-driver: build the workload-driver bin used by scripts/pgo-workload.sh
 # during PGO instrumentation. NOT enabled in production builds.
-pgo-driver = ["dep:rdkafka"]
+pgo-driver = ["dep:rdkafka", "dep:flate2", "dep:tar"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
 
@@ -173,7 +177,7 @@ testcontainers-modules = { version = ">=0.15, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = ">=2.13.0, <3", features = ["transport-memory"] }
+scalo = { version = ">=2.13.2, <3", features = ["transport-memory"] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
