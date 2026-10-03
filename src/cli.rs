@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(app.env_prefix(), "DFE_TRANSFORM");
         let version = app.version_info();
         assert_eq!(version.name, "dfe-transform-vrl");
-        assert!(!version.version.is_empty());
+        assert_ne!(version.version, "");
     }
 
     #[test]

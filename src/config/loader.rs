@@ -974,7 +974,7 @@ sink:
         let sasl = SaslConfig::default();
         assert!(!sasl.enabled);
         assert_eq!(sasl.mechanism, "scram_sha_512");
-        assert!(sasl.username.is_empty());
+        assert_eq!(sasl.username, "");
         assert!(sasl.password.is_empty());
     }
 
@@ -988,7 +988,7 @@ sink:
     #[test]
     fn enrichment_table_config_empty_by_default() {
         let config = Config::default();
-        assert!(config.enrichment_tables.is_empty());
+        assert_eq!(config.enrichment_tables, [] as [EnrichmentTableConfig; 0]);
     }
 
     #[test]

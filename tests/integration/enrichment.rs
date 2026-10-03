@@ -220,7 +220,7 @@ fn test_find_records_no_matches() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert!(results.is_empty());
+    assert_eq!(results, []);
 }
 
 // =========================================================================
