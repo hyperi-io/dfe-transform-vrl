@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(config.brokers, vec!["broker-1:9092"]);
         assert_eq!(config.topics, vec!["output-topic"]);
         assert_eq!(config.client_id, "dfe-transform-vrl-producer-test-pipeline");
-        assert!(config.group.is_empty());
+        assert_eq!(config.group, "");
     }
 
     #[test]
