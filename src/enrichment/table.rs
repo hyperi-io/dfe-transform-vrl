@@ -891,7 +891,10 @@ mod tests {
     fn find_rows_miss() {
         let row = make_row(&[("country", bytes_value("AU"))]);
         let table = make_hashmap_table("t", vec!["country".to_string()], vec![row]);
-        assert!(find(&table, &eq(&[("country", bytes_value("NZ"))])).is_empty());
+        assert_eq!(
+            find(&table, &eq(&[("country", bytes_value("NZ"))])),
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     #[test]
@@ -900,7 +903,10 @@ mod tests {
         let table = make_hashmap_table("t", vec!["country".to_string()], vec![row]);
         // Reached only when the row omits a column the table declares; the
         // VRL path rejects an undeclared column at compile time instead.
-        assert!(find(&table, &eq(&[("city", bytes_value("Brisbane"))])).is_empty());
+        assert_eq!(
+            find(&table, &eq(&[("city", bytes_value("Brisbane"))])),
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -911,7 +917,10 @@ mod tests {
     fn missing_columns_reports_only_undeclared_fields() {
         let row = make_row(&[("id", bytes_value("1")), ("name", bytes_value("Bob"))]);
         let table = make_hashmap_table("t", vec!["id".to_string()], vec![row]);
-        assert!(table.missing_columns(&["id", "name"]).is_empty());
+        assert_eq!(
+            table.missing_columns(&["id", "name"]),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(table.missing_columns(&["nope"]), vec!["nope".to_string()]);
     }
 
@@ -930,8 +939,11 @@ mod tests {
         // An MMDB table declares no columns, so there is nothing to check
         // against and a condition on any field must be allowed through.
         let table = make_hashmap_table("t", vec!["id".to_string()], vec![]);
-        assert!(table.columns().is_empty());
-        assert!(table.missing_columns(&["anything"]).is_empty());
+        assert_eq!(table.columns(), [] as [vrl::value::KeyString; 0]);
+        assert_eq!(
+            table.missing_columns(&["anything"]),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]
@@ -977,7 +989,10 @@ mod tests {
                 ("city", bytes_value("Melbourne")),
             ]),
         );
-        assert!(rows.is_empty());
+        assert_eq!(
+            rows,
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1037,7 +1052,10 @@ mod tests {
     #[test]
     fn find_rows_empty_table() {
         let table = make_hashmap_table("t", vec!["x".to_string()], vec![]);
-        assert!(find(&table, &eq(&[("x", bytes_value("1"))])).is_empty());
+        assert_eq!(
+            find(&table, &eq(&[("x", bytes_value("1"))])),
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     #[test]
@@ -1061,7 +1079,10 @@ mod tests {
     fn find_rows_is_case_sensitive_by_default() {
         let row = make_row(&[("name", bytes_value("Bob"))]);
         let table = make_hashmap_table("t", vec!["name".to_string()], vec![row]);
-        assert!(find(&table, &eq(&[("name", bytes_value("bob"))])).is_empty());
+        assert_eq!(
+            find(&table, &eq(&[("name", bytes_value("bob"))])),
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     #[test]
@@ -1229,7 +1250,10 @@ mod tests {
                 from: timestamp("1980-01-01T00:00:00Z"),
             }],
         );
-        assert!(found.is_empty());
+        assert_eq!(
+            found,
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1244,7 +1268,10 @@ mod tests {
 
         table.swap_hashmap(RowMap::default()).unwrap();
 
-        assert!(find(&table, &eq(&[("k", bytes_value("old"))])).is_empty());
+        assert_eq!(
+            find(&table, &eq(&[("k", bytes_value("old"))])),
+            [] as [std::collections::BTreeMap<vrl::value::KeyString, vrl::value::Value>; 0]
+        );
         assert_eq!(table.len(), 0);
     }
 
