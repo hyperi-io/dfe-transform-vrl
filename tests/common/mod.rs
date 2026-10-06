@@ -117,10 +117,10 @@ pub fn test_topic(suffix: &str) -> String {
 ///
 /// Looks for dfe-docker at:
 ///   1. `DFE_DOCKER_PATH` env var
-///   2. `../dfe-docker` (sibling directory convention)
-///   3. `/projects/dfe-docker` (absolute path)
+///   2. `../dfe-docker` beside this repo (sibling directory convention)
 ///
-/// Returns `Ok(true)` if containers were started, `Ok(false)` if already running or not docker mode.
+/// Returns `Ok(true)` if containers were started, `Ok(false)` if already running, not docker mode,
+/// or dfe-docker is not checked out (the skip reason goes to stderr).
 #[allow(dead_code)]
 pub fn ensure_docker_infra() -> Result<bool, String> {
     if TestMode::detect() != TestMode::Docker {
@@ -138,20 +138,21 @@ pub fn ensure_docker_infra() -> Result<bool, String> {
     }
 
     let docker_path = env::var("DFE_DOCKER_PATH").unwrap_or_else(|_| {
-        if std::path::Path::new("/projects/dfe-docker/docker-compose.yml").exists() {
-            "/projects/dfe-docker".into()
-        } else {
-            "../dfe-docker".into()
-        }
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../dfe-docker")
+            .to_string_lossy()
+            .into_owned()
     });
 
     if !std::path::Path::new(&docker_path)
         .join("docker-compose.yml")
         .exists()
     {
-        return Err(format!(
-            "dfe-docker not found at {docker_path}. Set DFE_DOCKER_PATH or clone dfe-docker."
-        ));
+        eprintln!(
+            "Skipping: dfe-docker not found at {docker_path}. \
+             Set DFE_DOCKER_PATH or clone dfe-docker beside this repo."
+        );
+        return Ok(false);
     }
 
     let status = std::process::Command::new("docker")

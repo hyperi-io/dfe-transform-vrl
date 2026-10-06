@@ -15,8 +15,7 @@ Usage:
   python3 scripts/filebeat/extract.py
 
 Environment:
-  DFE_VECTOR_TEMPLATES  path to a dfe-vector-templates clone
-                        (default /projects/dfe-vector-templates)
+  DFE_VECTOR_TEMPLATES  path to a dfe-vector-templates clone (required)
   TEMPLATES_REF         git ref to read templates from (default origin/main)
 """
 
@@ -32,7 +31,6 @@ HERE = Path(__file__).parent
 REPO = HERE.parent.parent
 OUT_DIR = REPO / "pipelines" / "filebeat"
 
-TEMPLATES_REPO = Path(os.environ.get("DFE_VECTOR_TEMPLATES", "/projects/dfe-vector-templates"))
 TEMPLATES_REF = os.environ.get("TEMPLATES_REF", "origin/main")
 TEMPLATES_DIR = "src/core_templates"
 
@@ -64,11 +62,20 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
+def templates_repo() -> Path:
+    """The dfe-vector-templates clone named by DFE_VECTOR_TEMPLATES."""
+    value = os.environ.get("DFE_VECTOR_TEMPLATES", "")
+    if not value:
+        fail("DFE_VECTOR_TEMPLATES is not set: point it at a clone of "
+             "dfe-vector-templates")
+    return Path(value)
+
+
 def template_text(name: str) -> str:
     """Read a template from the templates repo without touching its
     working tree (the checkout may be on an unrelated WIP branch)."""
     res = subprocess.run(
-        ["git", "-C", str(TEMPLATES_REPO), "show",
+        ["git", "-C", str(templates_repo()), "show",
          f"{TEMPLATES_REF}:{TEMPLATES_DIR}/{name}"],
         capture_output=True,
         encoding="utf-8",
