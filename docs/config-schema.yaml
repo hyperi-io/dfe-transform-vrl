@@ -229,7 +229,7 @@ $defs:
 
       `password` is a [`SensitiveString`] so every serialise path redacts it by
       type rather than by a reader's field-name heuristic, and the emitted config
-      schema carries `x-dfe-secret` + `writeOnly` on the field by construction.
+      schema carries `x-scalo-secret` + `writeOnly` on the field by construction.
     type: object
     properties:
       enabled:
@@ -244,6 +244,7 @@ $defs:
         default: ''
       password:
         type: string
+        x-scalo-secret: true
         x-dfe-secret: true
         writeOnly: true
   TlsConfig:

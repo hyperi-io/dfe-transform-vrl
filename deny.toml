@@ -16,7 +16,6 @@ targets = [
 
 [advisories]
 unmaintained = "all"
-db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Each entry MUST have a comment with: (1) why the advisory is tolerated,
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.

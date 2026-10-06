@@ -60,9 +60,16 @@ pipeline:
 #     password: ""
 #   tls:
 #     enabled: true
+#     # A private broker CA, as a path in the pod. The chart mounts no file, so
+#     # in Kubernetes put the PEM text in librdkafka_options ssl.ca.pem instead.
+#     # ca_cert_file: "/etc/ssl/certs/kafka-ca.pem"
 #   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"
+#   #   ssl.ca.pem: |
+#   #     -----BEGIN CERTIFICATE-----
+#   #     ...
+#   #     -----END CERTIFICATE-----
 #   # On: the offsets are committed, or the Push answered OK, only once the
 #   # transformed records are delivered to the sink. Off: at receipt, and a
 #   # crash or a failed send loses what was acknowledged.
