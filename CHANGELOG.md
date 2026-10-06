@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.30](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.29...v1.1.30) (2026-10-06)
+
+### Bug Fixes
+
+* clear clippy 1.99 lints ([#94](https://github.com/hyperi-io/dfe-transform-vrl/issues/94)) ([dc92137](https://github.com/hyperi-io/dfe-transform-vrl/commit/dc92137f4644eabf86b1b5813dbafda5721f3262)), closes [#510](https://github.com/hyperi-io/dfe-transform-vrl/issues/510)
+* move to scalo 2.14.1, PGO and BOLT on, GA deps pass ([#95](https://github.com/hyperi-io/dfe-transform-vrl/issues/95)) ([63bf6b2](https://github.com/hyperi-io/dfe-transform-vrl/commit/63bf6b23d56582d7cba0453670320333e997fe51)), closes [hyperi-io/scalo-rs#281](https://github.com/hyperi-io/scalo-rs/issues/281)
+* pgo workload, security log flood, ga items ([#93](https://github.com/hyperi-io/dfe-transform-vrl/issues/93)) ([64bb2b0](https://github.com/hyperi-io/dfe-transform-vrl/commit/64bb2b0e1e84f7e3a5a0f5092fc78cb2ae2699d4))
+* **test:** run the Kafka test broker on the JVM image ([#92](https://github.com/hyperi-io/dfe-transform-vrl/issues/92)) ([87351aa](https://github.com/hyperi-io/dfe-transform-vrl/commit/87351aa53ece9ed52a78b6b1e8ef402a57cbcfa0))
+
 ## [1.1.29](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.28...v1.1.29) (2026-09-27)
 
 ### Bug Fixes
