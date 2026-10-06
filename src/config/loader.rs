@@ -26,7 +26,7 @@ use crate::Result;
 ///
 /// `password` is a [`SensitiveString`] so every serialise path redacts it by
 /// type rather than by a reader's field-name heuristic, and the emitted config
-/// schema carries `x-dfe-secret` + `writeOnly` on the field by construction.
+/// schema carries `x-scalo-secret` + `writeOnly` on the field by construction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SaslConfig {
@@ -1385,7 +1385,7 @@ source:
         let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
         let password = &schema["$defs"]["SaslConfig"]["properties"]["password"];
 
-        assert_eq!(password["x-dfe-secret"], true, "schema was: {schema}");
+        assert_eq!(password["x-scalo-secret"], true, "schema was: {schema}");
         assert_eq!(password["writeOnly"], true);
         assert!(
             password.get("default").is_none(),

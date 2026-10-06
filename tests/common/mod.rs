@@ -461,6 +461,9 @@ impl KafkaTestEnv {
         // JVM image: `apache/kafka-native` before 4.4.0 segfaults in `getpwuid` on ~2% of starts.
         // renovate: datasource=docker depName=apache/kafka
         const KAFKA_TAG: &str = "4.3.1";
+        // Digest of `KAFKA_TAG`, apart from it because the Renovate regex stops at a colon.
+        const KAFKA_DIGEST: &str =
+            "sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837";
 
         // A JVM broker takes 5-12 s to become ready, more on a busy runner, so 60 s is too tight.
         const KAFKA_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
@@ -469,7 +472,7 @@ impl KafkaTestEnv {
         reap_stale(&name);
         let request = Kafka::default()
             .with_jvm_image()
-            .with_tag(KAFKA_TAG)
+            .with_tag(format!("{KAFKA_TAG}@{KAFKA_DIGEST}"))
             .with_container_name(&name)
             .with_labels(test_labels("kafka"))
             .with_startup_timeout(KAFKA_STARTUP_TIMEOUT);
