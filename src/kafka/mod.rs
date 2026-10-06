@@ -107,13 +107,14 @@ pub async fn create_producer(config: &KafkaConfig) -> crate::Result<KafkaTranspo
 /// Derive a `KafkaSource` from the first configured source topic.
 ///
 /// If the topic follows DFE naming convention (`{source}_land`), extracts
-/// the source name. Otherwise returns `None`.
+/// the source name. Otherwise returns `None`. Derived groups carry the `dfe-`
+/// prefix the broker ACL grants and committed offsets are stored under.
 pub fn derive_dfe_source(source: &config::SourceConfig) -> Option<KafkaSource> {
     source
         .topics
         .first()
         .and_then(|topic| KafkaSource::source_from_topic(topic))
-        .map(KafkaSource::new)
+        .map(|n| KafkaSource::new(n).with_group_prefix("dfe-"))
 }
 
 /// Derive a consumer group ID using DFE naming conventions.
@@ -277,6 +278,52 @@ mod tests {
         );
     }
 
+    /// A private broker CA travels as PEM text, so a pod with no certificate
+    /// file mounted still verifies the broker, and production posture accepts it.
+    #[test]
+    fn a_private_ca_reaches_librdkafka_as_pem_without_a_mounted_file() {
+        const PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBprivateca\n-----END CERTIFICATE-----\n";
+        let sasl = SaslConfig {
+            enabled: true,
+            mechanism: "scram_sha_512".into(),
+            username: "u".into(),
+            password: "p".into(),
+        };
+        let tls = TlsConfig {
+            enabled: true,
+            ..TlsConfig::default()
+        };
+
+        let mut source = default_source();
+        source.sasl = sasl.clone();
+        source.tls = tls.clone();
+        source
+            .librdkafka_options
+            .insert("ssl.ca.pem".into(), PEM.into());
+        let consumer = build_consumer_config(&source);
+        assert_eq!(consumer.security_protocol, "sasl_ssl");
+        assert_eq!(consumer.ssl_ca_location, None);
+        assert_eq!(
+            consumer
+                .librdkafka_overrides
+                .get("ssl.ca.pem")
+                .map(String::as_str),
+            Some(PEM)
+        );
+        consumer.validate(true).unwrap();
+
+        let mut sink = default_sink();
+        sink.sasl = sasl;
+        sink.tls = tls;
+        sink.librdkafka_options
+            .insert("ssl.ca.pem".into(), PEM.into());
+        let producer = build_producer_config(&sink, "p");
+        producer.validate(true).unwrap();
+        let client = scalo::transport::kafka::producer_client_config(&producer, &[]);
+        assert_eq!(client.get("ssl.ca.pem"), Some(PEM));
+        assert_eq!(client.get("security.protocol"), Some("sasl_ssl"));
+    }
+
     #[test]
     fn test_build_producer_config_basic() {
         let sink = default_sink();
@@ -355,6 +402,41 @@ mod tests {
             derive_consumer_group(&source, "my-pipeline"),
             "dfe-transform-vrl-my-pipeline"
         );
+    }
+
+    /// Committed offsets and the broker ACL are keyed on these exact names, so
+    /// the source-derived group must stay `dfe-transform-vrl-<pipeline>`.
+    #[test]
+    fn derived_consumer_group_keeps_the_dfe_prefix_the_broker_acl_grants() {
+        let source = SourceConfig {
+            group_id: String::new(),
+            topics: vec!["syslog_land".into()],
+            ..SourceConfig::default()
+        };
+        let derived = derive_dfe_source(&source).unwrap();
+        assert_eq!(derived.group_prefix(), "dfe-");
+        assert_eq!(
+            derived
+                .consumer_group(
+                    "transform-vrl",
+                    ServiceRole::Transform,
+                    Some("my-pipeline"),
+                    None
+                )
+                .unwrap(),
+            "dfe-transform-vrl-my-pipeline"
+        );
+        assert_eq!(
+            derived
+                .consumer_group("transform-vrl", ServiceRole::Transform, None, None)
+                .unwrap(),
+            "dfe-transform-vrl-syslog"
+        );
+        assert_eq!(
+            derive_consumer_group(&source, "my-pipeline"),
+            "dfe-transform-vrl-my-pipeline"
+        );
+        assert_eq!(derive_consumer_group(&source, ""), "dfe-transform-vrl-");
     }
 
     #[test]

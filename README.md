@@ -128,7 +128,28 @@ only the shared pair, so a two-cluster deployment has to add them to the chart.
 
 Either half turns SASL on, an enabled block still missing one once the env
 layer has run refuses to start, and the password is redacted on every output
-path (`x-dfe-secret` + `writeOnly` in the emitted schema).
+path (`x-scalo-secret` + `writeOnly` in the emitted schema).
+
+### Kafka over TLS with a private CA
+
+`tls.ca_cert_file` is a path, and the chart mounts no certificate file. Put the
+CA's PEM text in the rendered config instead:
+
+```yaml
+config:
+  source:
+    tls:
+      enabled: true
+    librdkafka_options:
+      ssl.ca.pem: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+```
+
+The same two keys go under `sink`. A CA is public, so a ConfigMap can hold it.
+Mutual TLS is not supported through the chart, which mounts no client key. KEDA
+scales on CPU and opens no Kafka connection, so it needs no CA.
 
 ### scalo's own settings are not in the config file
 
@@ -329,12 +350,6 @@ Outbound -- what depends on this repo:
   the digest that makes it immutable. A release here means bumping the tag and
   re-resolving the digest there, with `check_versions_drift.py` confirming the
   chart's appVersion and the digest mirror agree.
-
-The released artefact and `main` have diverged. `v1.1.24` (2026-09-16) is the
-latest release, and `origin/main` carries four `fix:` commits past it -- #65,
-#68, #69 and #70, covering the KEDA ScaledObject rendering and trigger auth, the
-metrics manifest and a rustls patch, and the memory gauges. Anything pinning
-`v1.1.24` does not have them.
 
 dfe-transform-splack runs this repo's engine image with a rule-config chart of
 its own. It is out of suite scope and no work here is driven by it.

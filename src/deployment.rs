@@ -126,8 +126,13 @@ pub fn contract() -> DeploymentContract {
             .with_kafka_trigger(KafkaLagTrigger::disabled()),
         ),
         schema_version: 3,
+        // scalo writes no vendor, licence or copyright of its own, so the labels
+        // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
+            vendor: "HYPERI PTY LIMITED".into(),
+            label_namespace: "io.hyperi".into(),
             licenses: "BUSL-1.1".into(),
+            copyright: "(c) 2026 HYPERI PTY LIMITED".into(),
             ..Default::default()
         },
         // Reflectable config (scalo-rs#6): derived JSON Schema of the full
@@ -483,12 +488,15 @@ mod tests {
     /// Render the committed chart under `--set` overrides, returning helm's
     /// stderr when the render is refused.
     fn render_chart(helm_bin: &std::path::Path, overrides: &[&str]) -> Result<String, String> {
+        let args: Vec<&str> = overrides.iter().flat_map(|set| ["--set", set]).collect();
+        helm_template(helm_bin, &args)
+    }
+
+    /// Run `helm template` on the committed chart with `args` appended.
+    fn helm_template(helm_bin: &std::path::Path, args: &[&str]) -> Result<String, String> {
         let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
         let mut helm = std::process::Command::new(helm_bin);
-        helm.arg("template").arg("guard").arg(&chart);
-        for set in overrides {
-            helm.arg("--set").arg(set);
-        }
+        helm.arg("template").arg("guard").arg(&chart).args(args);
         let out = helm.output().expect("helm runs");
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -538,6 +546,77 @@ mod tests {
         assert!(
             rendered.contains("type: cpu") && rendered.contains("value: \"80\""),
             "the CPU trigger must render at the contract's 80% threshold:\n{rendered}"
+        );
+    }
+
+    /// The chart mounts no certificate file, so a private broker CA reaches the
+    /// consumer and producer as PEM text in the rendered config, and the
+    /// CPU-only `ScaledObject` opens no Kafka connection that would need one.
+    #[test]
+    fn test_private_ca_pem_renders_into_the_config_and_keda_needs_none() {
+        use serde::Deserialize as _;
+
+        const PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBprivateca\n-----END CERTIFICATE-----\n";
+        let Some(helm_bin) = helm_or_skip() else {
+            return;
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pem_file = dir.path().join("ca.pem");
+        std::fs::write(&pem_file, PEM).expect("write the CA");
+        let source_ca = format!(
+            "config.source.librdkafka_options.ssl\\.ca\\.pem={}",
+            pem_file.display()
+        );
+        let sink_ca = format!(
+            "config.sink.librdkafka_options.ssl\\.ca\\.pem={}",
+            pem_file.display()
+        );
+        let rendered = helm_template(
+            helm_bin,
+            &[
+                "--set",
+                "config.source.tls.enabled=true",
+                "--set",
+                "config.sink.tls.enabled=true",
+                "--set-file",
+                &source_ca,
+                "--set-file",
+                &sink_ca,
+            ],
+        )
+        .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
+
+        let config_yaml = serde_yaml_ng::Deserializer::from_str(&rendered)
+            .filter_map(|doc| serde_yaml_ng::Value::deserialize(doc).ok())
+            .find(|doc| doc["kind"].as_str() == Some("ConfigMap"))
+            .and_then(|doc| doc["data"]["config.yaml"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| panic!("no ConfigMap carries config.yaml:\n{rendered}"));
+        let config: crate::config::Config =
+            serde_yaml_ng::from_str(&config_yaml).expect("the rendered config parses");
+
+        let consumer = crate::kafka::build_consumer_config(&config.source);
+        assert_eq!(
+            consumer
+                .librdkafka_overrides
+                .get("ssl.ca.pem")
+                .map(String::as_str),
+            Some(PEM),
+            "the CA must reach the consumer byte for byte:\n{config_yaml}"
+        );
+        assert_eq!(consumer.security_protocol, "sasl_ssl");
+        let producer = crate::kafka::build_producer_config(&config.sink, "guard");
+        assert_eq!(
+            producer
+                .librdkafka_overrides
+                .get("ssl.ca.pem")
+                .map(String::as_str),
+            Some(PEM)
+        );
+
+        assert!(
+            !rendered.contains("type: kafka") && !rendered.contains("kind: TriggerAuthentication"),
+            "KEDA must open no Kafka connection, so it carries no CA:\n{rendered}"
         );
     }
 

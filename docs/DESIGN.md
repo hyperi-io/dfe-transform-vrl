@@ -36,7 +36,7 @@ flowchart TB
 
 ### Per-Event Processing
 
-```
+```text
 Kafka partition message (raw bytes)
   │
   ├─ Parse: sonic_rs::from_slice::<Value>() -- a record that is not JSON is dropped

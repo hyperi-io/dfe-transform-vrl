@@ -239,7 +239,7 @@
       ]
     },
     "SaslConfig": {
-      "description": "SASL authentication for Kafka.\n\n`password` is a [`SensitiveString`] so every serialise path redacts it by\ntype rather than by a reader's field-name heuristic, and the emitted config\nschema carries `x-dfe-secret` + `writeOnly` on the field by construction.",
+      "description": "SASL authentication for Kafka.\n\n`password` is a [`SensitiveString`] so every serialise path redacts it by\ntype rather than by a reader's field-name heuristic, and the emitted config\nschema carries `x-scalo-secret` + `writeOnly` on the field by construction.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -257,6 +257,7 @@
         },
         "password": {
           "type": "string",
+          "x-scalo-secret": true,
           "x-dfe-secret": true,
           "writeOnly": true
         }
