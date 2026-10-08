@@ -39,6 +39,9 @@ cobertura.xml
 # Project temp directory
 .tmp/
 
+# written by `dfe-transform-vrl emit-chart chart`; the release assembles the chart from the contract
+/chart/
+
 # Local working files (not committed)
 docs/superpowers/
 .claude/

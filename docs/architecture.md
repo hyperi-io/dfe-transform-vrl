@@ -157,7 +157,7 @@ on reload today.
 | `src/config/` | `Config`, validation, `HotConfig`, the inert and cascade lists |
 | `src/enrichment/` | Table loading (CSV, JSON, YAML, MMDB, STIX, SQLite), refresh, the VRL functions |
 | `src/kafka/mod.rs` | Wraps scalo's `KafkaTransport` and `FormatDetector` |
-| `src/deployment.rs` | `contract()` -- the source the Dockerfile and chart are generated from |
+| `src/deployment.rs` | `contract()` -- the source the Dockerfile and the released chart are generated from |
 | `src/metrics.rs` | Three metric layers, bare names |
 | `pipelines/filebeat/` | Opt-in data bundle, not engine capability |
 
@@ -165,14 +165,11 @@ on reload today.
 
 ### Generated artefacts
 
-The `Dockerfile` and everything under `chart/` are generated from
-`deployment.rs::contract()` by scalo's generators. Both carry a header naming the
-generator and the regeneration command. A hand edit to either is reverted by the
-next regeneration, so a fix belongs in `contract()`.
+The `Dockerfile` is generated from `deployment.rs::contract()` by scalo's generator, and carries a header naming the generator and the regeneration command. A hand edit is reverted by the next regeneration, so a fix belongs in `contract()`.
 
-`test_committed_chart_matches_the_generator` holds `chart/` to the generator byte for byte through scalo's `assert_no_chart_drift`. A hand fix the generator cannot yet make goes in as a pinned `ChartPatch`, never as an exempt file.
+No chart is committed. At release, hyperi-ci emits the contract with `generate-artefacts` and assembles a thin chart from it on the scalo-service library chart at `release.helm.library`. The contract is schema version 4: a 120 s startup budget, `kubernetes.io/h2c` on the Push port, the Kafka Secret mounted into the per-endpoint SASL names, no writable path beyond the library's scratch `/tmp` under a read-only root, requests 100m/128Mi, limits 500m/512Mi and a 45 s grace period.
 
-The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. The deployed chart in dfe-infra renders its own ScaledObject, CPU plus a scaling-pressure trigger wherever `keda.pressure.enabled` is set.
+The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
 ### How many instances run
 
