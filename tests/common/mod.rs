@@ -33,8 +33,9 @@ impl TestMode {
     }
 }
 
+/// Load this repo's own `.env`: `dotenvy::dotenv()` would load the first `.env` in any parent.
 pub fn load_dotenv() {
-    let _ = dotenvy::dotenv();
+    let _ = dotenvy::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env"));
 }
 
 // =============================================================================

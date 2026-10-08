@@ -7,7 +7,7 @@
 # Configuration cascade (highest to lowest priority):
 #   1. CLI args (--config, --log-level, etc.)
 #   2. Environment variables (DFE_TRANSFORM_*)
-#   3. .env file
+#   3. .env file in the working directory (never a parent's)
 #   4. Config file (this file)
 #   5. Hard-coded defaults
 
@@ -60,6 +60,8 @@ pipeline:
 #     password: ""
 #   tls:
 #     enabled: true
+#     # DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
+#     # turns this on for source and sink. No value turns it off.
 #     # A private broker CA, as a path in the pod. The chart mounts no file, so
 #     # in Kubernetes put the PEM text in librdkafka_options ssl.ca.pem instead.
 #     # ca_cert_file: "/etc/ssl/certs/kafka-ca.pem"

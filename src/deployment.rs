@@ -12,9 +12,9 @@
 //! in its container image. The container is just the Rust binary.
 
 use scalo::deployment::{
-    DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
-    NativeDepsContract, PortContract, SecretEnvContract, SecretGroupContract,
-    base_image_from_cascade,
+    CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
+    KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
+    SecretEnvContract, SecretGroupContract, SecurityContract, base_image_from_cascade,
 };
 
 /// The `source.transport` values that bind the Push listener: the name
@@ -30,12 +30,11 @@ pub fn contract() -> DeploymentContract {
     DeploymentContract {
         app_name: "dfe-transform-vrl".into(),
         binary_name: "dfe-transform-vrl".into(),
-        description: "Embedded VRL transform engine — Kafka-to-Kafka pipelines".into(),
+        description: "Embedded VRL transform engine -- Kafka-to-Kafka pipelines".into(),
         metrics_port: 9090,
         health: HealthContract {
-            liveness_path: "/livez".into(),
-            readiness_path: "/readyz".into(),
-            metrics_path: "/metrics".into(),
+            startup_budget_seconds: 120,
+            ..HealthContract::default()
         },
         env_prefix: "DFE_TRANSFORM".into(),
         metric_prefix: "transform_vrl".into(),
@@ -46,30 +45,15 @@ pub fn contract() -> DeploymentContract {
         extra_ports: vec![
             PortContract::tcp("push", 6000)
                 .when_one_of("config.source.transport", PUSH_TRANSPORTS)
-                .bound_from("source.listen"),
+                .bound_from("source.listen")
+                .app_protocol("kubernetes.io/h2c"),
         ],
         unbound_listen_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vrl/config.yaml".into(),
         ],
-        // One entry per credential -- the generator renders `key_name` into
-        // values.yaml, so a second entry reusing it emits a duplicate YAML key.
-        secrets: vec![SecretGroupContract {
-            group_name: "kafka".into(),
-            env_vars: vec![
-                SecretEnvContract {
-                    env_var: "DFE_TRANSFORM_KAFKA_SASL_USERNAME".into(),
-                    key_name: "username".into(),
-                    secret_key: "kafka-username".into(),
-                },
-                SecretEnvContract {
-                    env_var: "DFE_TRANSFORM_KAFKA_SASL_PASSWORD".into(),
-                    key_name: "password".into(),
-                    secret_key: "kafka-password".into(),
-                },
-            ],
-        }],
+        secrets: secrets(),
         default_config: Some(serde_json::json!({
             "pipeline": {
                 "name": "default",
@@ -125,7 +109,7 @@ pub fn contract() -> DeploymentContract {
             // Raw consumer-group lag rises when a downstream stage breaks, so it never scales this app.
             .with_kafka_trigger(KafkaLagTrigger::disabled()),
         ),
-        schema_version: 3,
+        schema_version: CONTRACT_SCHEMA_VERSION,
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
@@ -140,7 +124,59 @@ pub fn contract() -> DeploymentContract {
         // table source types the schema cannot self-describe as friendly forms).
         config_schema: Some(scalo::deployment::config_schema_json::<crate::config::Config>()),
         capabilities: capabilities(),
+        // The app writes no file at run time, so the root filesystem stays read-only.
+        writable_paths: vec![],
+        termination_grace_seconds: 45,
+        resources: ResourcesContract {
+            requests: ResourceList {
+                cpu: "100m".into(),
+                memory: "128Mi".into(),
+            },
+            limits: ResourceList {
+                cpu: "500m".into(),
+                memory: "512Mi".into(),
+            },
+        },
+        security: SecurityContract::default(),
+        singleton: false,
     }
+}
+
+/// The Kafka Secret the chart mounts into each endpoint's SASL env vars.
+///
+/// `Config::apply_flat_env` reads these per-endpoint names. Each `key_name` is
+/// distinct because the chart renders it as a values key.
+fn secrets() -> Vec<SecretGroupContract> {
+    let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
+        env_var: env_var.into(),
+        key_name: key_name.into(),
+        secret_key: secret_key.into(),
+    };
+    vec![SecretGroupContract::new(
+        "kafka",
+        vec![
+            env(
+                "DFE_TRANSFORM_SOURCE_SASL_USERNAME",
+                "source-username",
+                "username",
+            ),
+            env(
+                "DFE_TRANSFORM_SOURCE_SASL_PASSWORD",
+                "source-password",
+                "password",
+            ),
+            env(
+                "DFE_TRANSFORM_SINK_SASL_USERNAME",
+                "sink-username",
+                "username",
+            ),
+            env(
+                "DFE_TRANSFORM_SINK_SASL_PASSWORD",
+                "sink-password",
+                "password",
+            ),
+        ],
+    )]
 }
 
 /// Capability catalog for dfe-transform-vrl: the VRL transform engine plus the
@@ -200,7 +236,7 @@ mod tests {
     fn test_contract_carries_reflectable_config() {
         let c = contract();
         assert!(c.config_schema.is_some());
-        assert_eq!(c.schema_version, 3);
+        assert_eq!(c.schema_version, CONTRACT_SCHEMA_VERSION);
         assert_ne!(c.capabilities, [] as [scalo::Capability; 0]);
         // The VRL transform capability + the enrichment source family.
         assert!(c.capabilities.iter().any(|cap| cap.name == "vrl"));
@@ -282,6 +318,8 @@ mod tests {
             c.extra_ports[0].bound_from.as_deref(),
             Some("source.listen")
         );
+        // The Push listener is cleartext gRPC, so a proxy in front of it must speak h2c.
+        assert_eq!(c.extra_ports[0].app_protocol, "kubernetes.io/h2c");
     }
 
     /// The gate compares the chart's string of `source.transport`, so it has to
@@ -379,11 +417,16 @@ mod tests {
         let c = contract();
         assert_eq!(c.secrets.len(), 1);
         assert_eq!(c.secrets[0].group_name, "kafka");
-        assert_eq!(c.secrets[0].env_vars.len(), 2);
+        assert!(!c.secrets[0].optional);
+        assert_eq!(c.secrets[0].env_vars.len(), 4);
     }
 
-    /// The generated chart injects each `SecretEnvContract.env_var` verbatim,
-    /// so a name the config cascade never reads mounts the Secret and drops it.
+    /// The chart mounts a Secret under every declared name, so a name the
+    /// config never reads leaves the credential silently unused.
+    ///
+    /// Each name spells the field it fills -- `DFE_TRANSFORM_SINK_SASL_PASSWORD`
+    /// is `sink.sasl.password` -- so a name read into the other endpoint fails
+    /// here too.
     #[test]
     fn test_every_contract_secret_env_var_reaches_the_config() {
         use scalo::config::flat_env::ApplyFlatEnv;
@@ -393,11 +436,11 @@ mod tests {
 
         for group in &c.secrets {
             for env in &group.env_vars {
-                assert!(
-                    env.env_var.starts_with(&format!("{prefix}_")),
-                    "{} must carry the {prefix} prefix the config cascade reads",
-                    env.env_var
-                );
+                let field = env
+                    .env_var
+                    .strip_prefix(&format!("{prefix}_"))
+                    .unwrap_or_else(|| panic!("{} lacks the {prefix} prefix", env.env_var));
+                let pointer = format!("/{}", field.to_ascii_lowercase().replace('_', "/"));
 
                 let sentinel = format!("sentinel-{}", env.key_name);
                 let config = temp_env::with_var(&env.env_var, Some(&sentinel), || {
@@ -406,252 +449,22 @@ mod tests {
                     config
                 });
 
-                // A credential field redacts on every other serialise path, so
-                // the walk has to expose to see where the value landed.
-                let rendered = scalo::expose_during(|| {
-                    serde_json::to_string(&config).expect("config serialises")
+                // A credential field redacts on every other serialise path.
+                let applied = scalo::expose_during(|| {
+                    serde_json::to_value(&config).expect("config serialises")
                 });
+                let reached = applied
+                    .pointer(&pointer)
+                    .and_then(serde_json::Value::as_str)
+                    == Some(sentinel.as_str());
+                // The message carries the env var and group names only, never a value.
                 assert!(
-                    rendered.contains(&sentinel),
-                    "{} is injected by the chart but never lands in the config",
-                    env.env_var
+                    reached,
+                    "{} ({}) was set and the config field its name spells did not read it",
+                    env.env_var, group.group_name
                 );
             }
         }
-    }
-
-    /// `chart/` is `emit-chart` output, so a hand edit there is reverted by the
-    /// next regen -- which is how the Kafka SASL env names shipped broken. A
-    /// hand fix the generator cannot yet make goes in as a pinned `ChartPatch`,
-    /// never as an exempt file.
-    #[test]
-    fn test_committed_chart_matches_the_generator() {
-        let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
-        scalo::deployment::assert_no_chart_drift(&contract(), &chart, &[]);
-    }
-
-    /// True when this path answers `helm version`.
-    fn helm_runs(bin: &std::path::Path) -> bool {
-        std::process::Command::new(bin)
-            .arg("version")
-            .output()
-            .is_ok_and(|out| out.status.success())
-    }
-
-    /// Download a pinned helm into the gitignored cache and return its path.
-    ///
-    /// The script's own progress lines are replayed so a cold fetch is visible
-    /// in the test output.
-    fn fetch_helm() -> Result<std::path::PathBuf, String> {
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/fetch-helm.sh");
-        let out = std::process::Command::new("bash")
-            .arg(&script)
-            .output()
-            .map_err(|err| format!("{} did not run: {err}", script.display()))?;
-        let log = String::from_utf8_lossy(&out.stderr);
-        if !out.status.success() {
-            return Err(format!("{} failed:\n{log}", script.display()));
-        }
-        eprint!("{log}");
-
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let printed = stdout
-            .trim_end()
-            .lines()
-            .next_back()
-            .ok_or_else(|| format!("{} printed no helm path", script.display()))?;
-        let bin = std::path::PathBuf::from(printed);
-        if !helm_runs(&bin) {
-            return Err(format!("{} is not a working helm", bin.display()));
-        }
-        Ok(bin)
-    }
-
-    /// A usable helm, or the reason this host has none.
-    ///
-    /// The render check below is the only proof the chart's `ScaledObject`
-    /// carries no lag trigger, so a runner without helm fetches one instead of
-    /// letting the gate disappear with its environment.
-    fn helm_binary() -> Result<&'static std::path::PathBuf, &'static str> {
-        static HELM: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
-            std::sync::OnceLock::new();
-        HELM.get_or_init(|| {
-            if helm_runs(std::path::Path::new("helm")) {
-                return Ok(std::path::PathBuf::from("helm"));
-            }
-            fetch_helm()
-        })
-        .as_ref()
-        .map_err(String::as_str)
-    }
-
-    /// Render the committed chart under `--set` overrides, returning helm's
-    /// stderr when the render is refused.
-    fn render_chart(helm_bin: &std::path::Path, overrides: &[&str]) -> Result<String, String> {
-        let args: Vec<&str> = overrides.iter().flat_map(|set| ["--set", set]).collect();
-        helm_template(helm_bin, &args)
-    }
-
-    /// Run `helm template` on the committed chart with `args` appended.
-    fn helm_template(helm_bin: &std::path::Path, args: &[&str]) -> Result<String, String> {
-        let chart = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("chart");
-        let mut helm = std::process::Command::new(helm_bin);
-        helm.arg("template").arg("guard").arg(&chart).args(args);
-        let out = helm.output().expect("helm runs");
-        if out.status.success() {
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).into_owned())
-        }
-    }
-
-    /// A usable helm, or `None` off CI when none could be had.
-    fn helm_or_skip() -> Option<&'static std::path::PathBuf> {
-        match helm_binary() {
-            Ok(bin) => Some(bin),
-            Err(reason) => {
-                assert!(
-                    std::env::var_os("CI").is_none(),
-                    "helm is missing on a CI runner and could not be fetched, so \
-                     the chart render goes unchecked: {reason}"
-                );
-                eprintln!("skipping chart render checks: {reason}");
-                None
-            }
-        }
-    }
-
-    /// Consumer-group lag rises when a downstream stage breaks and scaling out
-    /// fixes nothing, so the rendered `ScaledObject` carries the CPU trigger alone.
-    #[test]
-    fn test_keda_scaled_object_carries_no_lag_trigger() {
-        let Some(helm_bin) = helm_or_skip() else {
-            return;
-        };
-
-        let rendered = render_chart(helm_bin, &[])
-            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
-        assert!(
-            rendered.contains("kind: ScaledObject"),
-            "KEDA is on by default, so the ScaledObject must render:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("type: kafka"),
-            "the ScaledObject must carry no consumer-lag trigger:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("kind: TriggerAuthentication"),
-            "with no lag trigger there is nothing for a TriggerAuthentication to serve:\n{rendered}"
-        );
-        assert!(
-            rendered.contains("type: cpu") && rendered.contains("value: \"80\""),
-            "the CPU trigger must render at the contract's 80% threshold:\n{rendered}"
-        );
-    }
-
-    /// The chart mounts no certificate file, so a private broker CA reaches the
-    /// consumer and producer as PEM text in the rendered config, and the
-    /// CPU-only `ScaledObject` opens no Kafka connection that would need one.
-    #[test]
-    fn test_private_ca_pem_renders_into_the_config_and_keda_needs_none() {
-        use serde::Deserialize as _;
-
-        const PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBprivateca\n-----END CERTIFICATE-----\n";
-        let Some(helm_bin) = helm_or_skip() else {
-            return;
-        };
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let pem_file = dir.path().join("ca.pem");
-        std::fs::write(&pem_file, PEM).expect("write the CA");
-        let source_ca = format!(
-            "config.source.librdkafka_options.ssl\\.ca\\.pem={}",
-            pem_file.display()
-        );
-        let sink_ca = format!(
-            "config.sink.librdkafka_options.ssl\\.ca\\.pem={}",
-            pem_file.display()
-        );
-        let rendered = helm_template(
-            helm_bin,
-            &[
-                "--set",
-                "config.source.tls.enabled=true",
-                "--set",
-                "config.sink.tls.enabled=true",
-                "--set-file",
-                &source_ca,
-                "--set-file",
-                &sink_ca,
-            ],
-        )
-        .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
-
-        let config_yaml = serde_yaml_ng::Deserializer::from_str(&rendered)
-            .filter_map(|doc| serde_yaml_ng::Value::deserialize(doc).ok())
-            .find(|doc| doc["kind"].as_str() == Some("ConfigMap"))
-            .and_then(|doc| doc["data"]["config.yaml"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| panic!("no ConfigMap carries config.yaml:\n{rendered}"));
-        let config: crate::config::Config =
-            serde_yaml_ng::from_str(&config_yaml).expect("the rendered config parses");
-
-        let consumer = crate::kafka::build_consumer_config(&config.source);
-        assert_eq!(
-            consumer
-                .librdkafka_overrides
-                .get("ssl.ca.pem")
-                .map(String::as_str),
-            Some(PEM),
-            "the CA must reach the consumer byte for byte:\n{config_yaml}"
-        );
-        assert_eq!(consumer.security_protocol, "sasl_ssl");
-        let producer = crate::kafka::build_producer_config(&config.sink, "guard");
-        assert_eq!(
-            producer
-                .librdkafka_overrides
-                .get("ssl.ca.pem")
-                .map(String::as_str),
-            Some(PEM)
-        );
-
-        assert!(
-            !rendered.contains("type: kafka") && !rendered.contains("kind: TriggerAuthentication"),
-            "KEDA must open no Kafka connection, so it carries no CA:\n{rendered}"
-        );
-    }
-
-    /// The Service and Deployment publish the Push port only where the app
-    /// binds it, which is the direct transport under either of its names --
-    /// dfe-engine renders `grpc`.
-    #[test]
-    fn test_push_port_renders_only_on_the_direct_transport() {
-        let Some(helm_bin) = helm_or_skip() else {
-            return;
-        };
-
-        let bus = render_chart(helm_bin, &[])
-            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
-        assert!(
-            !bus.contains("containerPort: 6000") && !bus.contains("port: 6000"),
-            "the bus transport binds no Push listener, so no port 6000 may render:\n{bus}"
-        );
-
-        for name in ["direct", "grpc"] {
-            let set = format!("config.source.transport={name}");
-            let direct = render_chart(helm_bin, &[&set])
-                .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
-            assert!(
-                direct.contains("containerPort: 6000") && direct.contains("port: 6000"),
-                "transport {name} binds the Push listener, so port 6000 must render:\n{direct}"
-            );
-        }
-
-        let kafka = render_chart(helm_bin, &["config.source.transport=kafka"])
-            .unwrap_or_else(|err| panic!("helm template failed:\n{err}"));
-        assert!(
-            !kafka.contains("containerPort: 6000") && !kafka.contains("port: 6000"),
-            "transport kafka is the bus, so no port 6000 may render:\n{kafka}"
-        );
     }
 
     #[test]

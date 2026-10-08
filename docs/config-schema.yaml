@@ -245,7 +245,6 @@ $defs:
       password:
         type: string
         x-scalo-secret: true
-        x-dfe-secret: true
         writeOnly: true
   TlsConfig:
     description: TLS configuration for Kafka.
