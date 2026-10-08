@@ -533,8 +533,8 @@ const ENV_PREFIX: &str = "DFE_TRANSFORM";
 
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
-/// `deployment::contract()` declares the SASL names separately for the chart it
-/// generates, so a rename here without one there stops the credential arriving.
+/// `deployment::contract()` declares the per-endpoint SASL names the chart
+/// mounts, so a rename here without one there stops the credential arriving.
 /// Uses scalo `flat_env_*` helpers for consistent parsing and logging.
 impl ApplyFlatEnv for Config {
     fn apply_flat_env(&mut self, prefix: &str) {
@@ -544,7 +544,7 @@ impl ApplyFlatEnv for Config {
         }
         // Shared Kafka credentials, applied before the per-endpoint names so
         // those override them. One cluster with one SCRAM principal is the
-        // default shape, so a single Secret feeds both endpoints.
+        // default shape, so one pair feeds both endpoints.
         if let Some(v) = flat_env_string(prefix, "KAFKA_SASL_USERNAME") {
             self.source.sasl.username.clone_from(&v);
             self.sink.sasl.username = v;
@@ -552,6 +552,15 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env_string_sensitive(prefix, "KAFKA_SASL_PASSWORD") {
             self.source.sasl.password = SensitiveString::new(v.clone());
             self.sink.sasl.password = SensitiveString::new(v);
+        }
+        // A TLS listener turns TLS on for both endpoints. Any other protocol
+        // leaves the setting alone: writing false would switch off TLS the
+        // config file turned on.
+        if flat_env_string(prefix, "KAFKA_SECURITY_PROTOCOL")
+            .is_some_and(|protocol| protocol.to_ascii_uppercase().contains("SSL"))
+        {
+            self.source.tls.enabled = true;
+            self.sink.tls.enabled = true;
         }
         // Source
         if let Some(v) = flat_env_string(prefix, "SOURCE_TRANSPORT") {
@@ -652,11 +661,11 @@ impl Config {
     ///   1. CLI args (handled by caller)
     ///   2. Flat env overrides (`DFE_TRANSFORM_SOURCE_BROKERS`, etc.)
     ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_SOURCE__BROKERS`)
-    ///   4. `.env` file (via dotenvy)
+    ///   4. `.env` file: the binary's `load_config` seeds scalo's cascade first,
+    ///      which reads `./.env` and no parent directory's
     ///   5. Config YAML file
     ///   6. Hard-coded defaults
     pub fn load(config_path: Option<&str>) -> Result<Self> {
-        let _ = dotenvy::dotenv();
         let mut config = Self::default();
 
         if let Some(path) = config_path {
@@ -1136,8 +1145,8 @@ enrichment_tables:
     // Flat env overrides
     //
     // These drive `apply_flat_env` on a `Config::default()` directly, never
-    // `Config::load()` -- load touches dotenvy, the CWD and the global config
-    // registry, so it is order-dependent under a parallel harness.
+    // `Config::load()` -- load touches the CWD and the global config registry,
+    // so it is order-dependent under a parallel harness.
     // ---------------------------------------------------------------------
 
     /// Every name `apply_flat_env` reads must land on its field. A name that is
@@ -1198,7 +1207,7 @@ enrichment_tables:
     }
 
     /// One cluster with one SCRAM principal is the default shape, so the shared
-    /// pair the chart injects must reach both endpoints from a single Secret.
+    /// pair must reach both endpoints.
     #[test]
     fn flat_env_kafka_sasl_fans_out_to_source_and_sink() {
         let config = temp_env::with_vars(
@@ -1262,6 +1271,57 @@ enrichment_tables:
         assert_eq!(source_specific.source.sasl.password.expose(), "src-pass");
         assert_eq!(source_specific.sink.sasl.username, "shared-user");
         assert_eq!(source_specific.sink.sasl.password.expose(), "shared-pass");
+    }
+
+    /// `config` with `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
+    /// or unset for `None`, through the flat env layer.
+    fn with_security_protocol(config: Config, protocol: Option<&str>) -> Config {
+        temp_env::with_var("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", protocol, || {
+            let mut config = config;
+            config.apply_flat_env(ENV_PREFIX);
+            config
+        })
+    }
+
+    /// The chart stamps the broker's protocol, and a TLS listener needs TLS on
+    /// both endpoints whatever case the protocol is spelled in.
+    #[test]
+    fn an_ssl_security_protocol_turns_tls_on_for_both_endpoints() {
+        for protocol in ["SASL_SSL", "SSL", "sasl_ssl"] {
+            let config = with_security_protocol(Config::default(), Some(protocol));
+            assert!(
+                config.source.tls.enabled,
+                "{protocol}: source TLS stayed off"
+            );
+            assert!(config.sink.tls.enabled, "{protocol}: sink TLS stayed off");
+        }
+    }
+
+    #[test]
+    fn a_plaintext_or_unset_security_protocol_leaves_tls_off() {
+        for protocol in [Some("SASL_PLAINTEXT"), Some("PLAINTEXT"), None] {
+            let config = with_security_protocol(Config::default(), protocol);
+            assert!(
+                !config.source.tls.enabled,
+                "{protocol:?}: source TLS came on"
+            );
+            assert!(!config.sink.tls.enabled, "{protocol:?}: sink TLS came on");
+        }
+    }
+
+    /// The env only ever turns TLS on, so a plaintext protocol cannot switch
+    /// off the TLS a config file asked for.
+    #[test]
+    fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
+        let file: Config = serde_yaml_ng::from_str(
+            "source:\n  tls:\n    enabled: true\nsink:\n  tls:\n    enabled: true\n",
+        )
+        .unwrap();
+
+        let config = with_security_protocol(file, Some("SASL_PLAINTEXT"));
+
+        assert!(config.source.tls.enabled, "source TLS was switched off");
+        assert!(config.sink.tls.enabled, "sink TLS was switched off");
     }
 
     /// The config registry serialises the whole section into a process-global

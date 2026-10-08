@@ -108,6 +108,7 @@ anything not here is not read:
 | `DFE_TRANSFORM_PIPELINE_NAME` | `pipeline.name` |
 | `DFE_TRANSFORM_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
 | `DFE_TRANSFORM_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
+| `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` | `source.tls.enabled` + `sink.tls.enabled`, set true when the value contains `SSL`, never set false |
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
 | `DFE_TRANSFORM_SOURCE_GROUP_ID` | `source.group_id` |
@@ -121,10 +122,10 @@ anything not here is not read:
 | `DFE_TRANSFORM_SINK_SASL_PASSWORD` | `sink.sasl.password` |
 | `DFE_TRANSFORM_TRANSFORMS_DIR` | `transforms.dir` |
 
-The chart mounts the Kafka Secret into the `KAFKA_SASL_*` pair, which reaches
-both endpoints and beats whatever the config file set for either. The
-`SOURCE_`/`SINK_` names override it back, per endpoint -- but `chart/` injects
-only the shared pair, so a two-cluster deployment has to add them to the chart.
+The chart mounts the Kafka Secret's `username` and `password` into both the
+`SOURCE_SASL_*` and the `SINK_SASL_*` pair, so one Secret serves both endpoints.
+The shared `KAFKA_SASL_*` pair reaches both endpoints for a deployment outside
+the chart, and the per-endpoint names override it.
 
 Either half turns SASL on, an enabled block still missing one once the env
 layer has run refuses to start, and the password is redacted on every output
@@ -233,13 +234,11 @@ cargo run -- config-check --config config.yaml
 
 ### Helm chart
 
-`chart/` is generated. `cargo run --bin dfe-transform-vrl -- emit-chart chart`
-rewrites it from `src/deployment.rs::contract()`, so a hand edit under `chart/`
-is reverted the next time anyone regenerates. Fix the contract, not the output.
+No chart is committed here. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. Keep that version at the scalo version in `Cargo.toml`: a library renders only the contract version its scalo release writes.
 
-`test_committed_chart_matches_the_generator` runs scalo's `assert_no_chart_drift`, so any chart file that differs from `emit-chart` fails the suite. A hand fix the generator cannot yet make is pinned there as a `ChartPatch`, never exempted.
+To see the chart a release would ship, build the binary and run `hyperi-ci chart assemble --binary target/debug/dfe-transform-vrl --image ghcr.io/hyperi-io/dfe-transform-vrl:<tag>@sha256:<digest> --version <version>`. It prints the chart directory it wrote. `emit-chart` still writes scalo's full chart for local use.
 
-The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. The deployed chart in dfe-infra (`helm/library/dfe-common/templates/_keda.tpl`) renders its own ScaledObject, CPU plus a scaling-pressure trigger through dfe-keda-shim wherever `keda.pressure.enabled` is set.
+The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
 ## Documentation
 
@@ -279,8 +278,8 @@ turn.
 | `src/engine/` | `compiler.rs` builds one program from the transform files, `runner.rs` runs it per event, `budget.rs` holds the compile memory floor |
 | `src/config/` | `Config`, validation, `HotConfig`, `INERT_SETTINGS`, `SCALO_CASCADE_SECTIONS` |
 | `src/enrichment/` | Table loading (CSV, JSON, YAML, MMDB, STIX, SQLite), refresh, the custom VRL functions |
-| `src/deployment.rs` | `contract()` -- the single source the Dockerfile and `chart/` are generated from |
-| `chart/`, `Dockerfile` | Generator output, not hand-authored |
+| `src/deployment.rs` | `contract()` -- the single source the Dockerfile and the released chart are generated from |
+| `Dockerfile` | Generator output, not hand-authored |
 | `pipelines/filebeat/` | Opt-in data bundle (212,218 bytes of VRL plus a lookup table), not engine capability |
 | `tests/` | `integration/` runs mostly without Kafka, `e2e/` needs a broker, `TESTING.md` explains the modes |
 | `docs/architecture.md` | Why the service is shaped this way, and the invariants |
@@ -292,7 +291,7 @@ make check                                        # hyperi-ci check -- quality +
 cargo nextest run --features enrichment-mmdb,enrichment-sqlite  # what CI actually runs
 cargo nextest run --all-features --run-ignored    # adds the broker-dependent e2e tests
 cargo run -- config-check --config config.yaml    # validate a config without starting
-cargo run --bin dfe-transform-vrl -- emit-chart chart    # regenerate the chart
+cargo run --bin dfe-transform-vrl -- emit-dockerfile > Dockerfile    # regenerate the Dockerfile
 ```
 
 Green lies here in three ways, and all three are on by default.
@@ -315,7 +314,8 @@ checked.
 
 | Don't | Do | Why |
 |---|---|---|
-| Hand-edit `chart/` or `Dockerfile` | Fix `src/deployment.rs::contract()` and regenerate | Both are generator output and a hand edit is reverted by the next regeneration. The chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- fixed in the generator so `emit-chart` keeps it |
+| Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships. A chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- `test_every_contract_secret_env_var_reaches_the_config` now holds every declared name to the field it spells |
+| Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
 | Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in the config file | Set it through the env layer, on a **double** underscore | scalo's cascade finds files by fixed base name and can never be pointed at `config.yaml`, so the section parses and reaches nothing. Full list above under Configuration |
 | Trust `pipeline.batch_size`, `pipeline.batch_timeout_ms`, `sink.key_field` or `source.commit_interval_ms` | Size a chunk with `batch_processing.max_chunk_size` | `config::INERT_SETTINGS` -- accepted, validated, reaching nothing. Table above under Configuration |
@@ -333,10 +333,12 @@ Inbound -- what this repo depends on:
   second range covering the dev dependency. A scalo release arrives through that
   range: `cargo update -p scalo` and rebuild if it admits the version, widen the
   range first if not.
-- **scalo-rs** (`generated-file`, lockstep). The `Dockerfile` and everything under
-  `chart/` are written by scalo's generators from this crate's
-  `deployment::contract()`. A generator or schema change upstream means
-  regenerating with the command in the file's own header and committing the diff.
+- **scalo-rs** (`generated-file`, lockstep). The `Dockerfile` is written by
+  scalo's generator from this crate's `deployment::contract()`, at contract
+  schema version 4. A generator or schema change upstream means regenerating
+  with the command in the file's own header and committing the diff. The
+  released chart is assembled on the scalo-service library chart at
+  `release.helm.library`, which moves with the scalo version in `Cargo.toml`.
 - **dfe-infra** (`apps.yaml`, deploy-time authority). The suite manifest declares
   what this app is: `multiplicity: per_config` (one deployment per source config,
   never a singleton), `scale_deployed: true`, both transports, and a source

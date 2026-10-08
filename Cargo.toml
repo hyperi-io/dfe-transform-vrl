@@ -65,7 +65,7 @@ bytes = ">=1.12.1, <2"
 # memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
 # From 2.14.0 the contract carries no vendor defaults, so the app names its own.
-scalo = { version = "2.14.1", features = [
+scalo = { version = "2.14.3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -109,7 +109,6 @@ clap = { version = ">=4.6.7, <5", features = ["derive"] }
 
 # Configuration (project-specific schema, not duplicating scalo config cascade)
 figment = { version = ">=0.10.19, <0.11", features = ["env"] }
-dotenvy = ">=0.15.7, <0.16"
 serde_yaml_ng = ">=0.10.0, <0.11"
 
 # Metrics types (Counter, Gauge, Histogram) returned by scalo MetricsManager
@@ -178,10 +177,12 @@ testcontainers-modules = { version = ">=0.15.0, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = "2.14.1", features = ["transport-memory"] }
+scalo = { version = "2.14.3", features = ["transport-memory"] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
+# The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
+dotenvy = ">=0.15.7, <0.16"
 # The Push tests read the gRPC status code a sender gets, which scalo's client
 # folds into `SendResult`. Same range as scalo so cargo unifies to one tonic.
 tonic = { version = ">=0.14.6, <0.15", default-features = false }

@@ -258,7 +258,6 @@
         "password": {
           "type": "string",
           "x-scalo-secret": true,
-          "x-dfe-secret": true,
           "writeOnly": true
         }
       }
