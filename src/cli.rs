@@ -89,7 +89,8 @@ impl ServiceApp for App {
         // `from_cascade()` -- metrics.address, logger.*, scaling.*,
         // worker_pool.*, batch_processing.*, self_regulation.*,
         // version_check.* -- resolves to its hard-coded default, and no env
-        // var moves it. Must run before the logger and the ServiceRuntime.
+        // var moves it. `to_config_options` hands it the `--config` file as
+        // its settings layer. Must run before the logger and the ServiceRuntime.
         if let Err(e) = scalo::config::setup(self.common.to_config_options(self.env_prefix())) {
             // The cascade is a OnceLock; a second load keeps the first seed.
             debug!(error = %e, "scalo config cascade already seeded");
@@ -350,12 +351,9 @@ async fn run_transform_service(
     );
 
     // Config reloader: file polling + SIGHUP → reload hot-config subset
-    let resolved_config_path = config_path.map(PathBuf::from).or_else(|| {
-        ["config.yaml", "config.yml"]
-            .iter()
-            .map(PathBuf::from)
-            .find(|p| p.exists())
-    });
+    let resolved_config_path = config_path
+        .map(PathBuf::from)
+        .or_else(|| crate::config::working_dir_config_file().map(PathBuf::from));
 
     let _reloader_handle = {
         let reload_path = resolved_config_path.clone();
@@ -425,8 +423,8 @@ async fn run_transform_service(
     // worker pool (which feeds `worker_pool_saturation`). The pipeline's per-pod
     // ticker feeds the `kafka_lag` component + the outbound circuit latch + the
     // memory HARD gate. This collapses the old dual-engine model (the separate
-    // runtime `ScalingSignalsCell` is gone). `None` when `scaling.enabled =
-    // false` -- the ticker is then not spawned.
+    // runtime `ScalingSignalsCell` is gone). With `scaling.enabled = false` the
+    // engine still exists and reports zero pressure.
     let scaling = runtime.scaling.clone();
 
     // Stops on `shutdown_token`; aborted below as well, for a pipeline that

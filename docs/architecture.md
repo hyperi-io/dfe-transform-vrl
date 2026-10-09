@@ -131,12 +131,13 @@ The `--config` file plus `DFE_TRANSFORM_*` env vars resolve this crate's own
 
 scalo resolves its own sections -- `metrics`, `logger`, `scaling`,
 `worker_pool`, `batch_processing`, `self_regulation`, `version_check` -- from a
-separate cascade that discovers files by fixed base name (`settings.yaml`,
-`defaults.yaml`). It has no way to be pointed at a file called `config.yaml`, so
-one of those sections written into the mounted config parses cleanly and reaches
-nothing. They are set through the env layer, where a section nests on a double
-underscore. The wrapper warns at startup for each section aimed and missed,
-rather than letting the deployment believe it took.
+separate cascade, which the wrapper seeds with the `--config` file as its
+settings layer. So the mounted config carries both, each authority taking the
+sections it owns. The env layer outranks the file for both, and there a scalo
+section nests on a double underscore. A `config.yaml` read from the working
+directory with no `--config` reaches the wrapper only, so the wrapper warns at
+startup for each scalo section in it, rather than letting the deployment believe
+it took.
 
 A second list, `config::INERT_SETTINGS`, covers fields this crate accepts and
 validates but does not act on, each with the reason and the replacement where one

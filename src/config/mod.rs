@@ -16,9 +16,9 @@
 //!   5. Hard-coded defaults
 //!
 //! That cascade covers [`Config`] only. scalo resolves its own sections
-//! ([`SCALO_CASCADE_SECTIONS`]) from a second cascade that discovers files by
-//! fixed base name and so cannot read a `config.yaml`; those are set through
-//! the env layer, which [`crate::cli`] seeds at startup.
+//! ([`SCALO_CASCADE_SECTIONS`]) from a second cascade, which [`crate::cli`]
+//! seeds at startup with the `--config` file as its settings layer, so both
+//! read the same file.
 
 pub mod hot;
 pub mod loader;
@@ -29,5 +29,5 @@ pub use loader::{
     Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, INERT_SETTINGS,
     InertSetting, PipelineConfig, RefreshConfig, SCALO_CASCADE_SECTIONS, SaslConfig, SinkConfig,
     SourceConfig, StixAuthConfig, TlsConfig, TransformConfig, Transport,
-    warn_unreachable_scalo_settings,
+    warn_unreachable_scalo_settings, working_dir_config_file,
 };

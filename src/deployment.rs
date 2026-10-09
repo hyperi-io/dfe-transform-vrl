@@ -80,14 +80,11 @@ pub fn contract() -> DeploymentContract {
                 "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
                 "tls": { "enabled": false }
             },
-            // No `metrics`, `logger` or `scaling` section: those are scalo's,
-            // and scalo's cascade discovers files by fixed base name, so it
-            // never reads this one. Shipping them here put values in front of
-            // operators that the process could not act on. They are set through
-            // the env layer -- see `config::SCALO_CASCADE_SECTIONS`, and the
-            // startup warning that fires when one turns up in the file anyway.
-            // Readiness is served by the metrics listener, so there is no
-            // `health` section either.
+            // No `metrics`, `logger` or `scaling` section: scalo's own defaults
+            // apply without one, and `config_schema` below describes `Config`
+            // alone. A deployment moves one in the rendered file or the env
+            // layer -- see `config::SCALO_CASCADE_SECTIONS`. Readiness is served
+            // by the metrics listener, so there is no `health` section either.
             "transforms": {
                 "dir": "/etc/dfe-transform-vrl/transforms"
             }
@@ -476,15 +473,10 @@ mod tests {
         assert!(cfg.get("sink").is_some());
     }
 
-    /// The shipped `--config` must carry no section that only scalo's cascade
-    /// could read.
+    /// The shipped `--config` carries no section only scalo's cascade reads.
     ///
-    /// `scalo::config` finds files by fixed base name (`settings.yaml`,
-    /// `defaults.yaml`, `settings.{env}.yaml`), so it never reads the
-    /// `config.yaml` this contract mounts. A `scaling:` or `metrics:` block in
-    /// here parses, renders into the `ConfigMap`, and changes nothing, so
-    /// asserting that such a block deserialises into scalo's type proves only
-    /// its shape -- this asserts it is not shipped at all.
+    /// Such a block would pin a copy of scalo's own default, and the contract's
+    /// `config_schema` describes `Config` alone.
     #[test]
     fn test_default_config_carries_no_scalo_cascade_section() {
         let cfg = contract().default_config.expect("default_config present");
@@ -493,8 +485,8 @@ mod tests {
         for (section, instead) in crate::config::SCALO_CASCADE_SECTIONS {
             assert!(
                 !map.contains_key(*section),
-                "default_config ships a `{section}` section, which scalo's \
-                 cascade cannot read from this file -- set it via {instead}"
+                "default_config ships a `{section}` section, which pins scalo's \
+                 default and is absent from the config schema -- set it via {instead}"
             );
         }
     }
@@ -518,7 +510,7 @@ mod tests {
             assert!(
                 known.contains(section),
                 "default_config ships a `{section}` section that is not a field \
-                 of Config, so nothing deserialises it"
+                 of Config, so the wrapper does not read it"
             );
         }
     }
