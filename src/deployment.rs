@@ -21,6 +21,10 @@ use scalo::deployment::{
 /// `Transport::Direct` serialises to, and the alias dfe-engine renders.
 const PUSH_TRANSPORTS: [&str; 2] = ["direct", "grpc"];
 
+/// The chart description and the OCI image description, kept as one string so
+/// the two cannot drift.
+const DESCRIPTION: &str = "Embedded VRL transform engine -- Kafka-to-Kafka pipelines";
+
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
 pub fn contract() -> DeploymentContract {
@@ -30,7 +34,7 @@ pub fn contract() -> DeploymentContract {
     DeploymentContract {
         app_name: "dfe-transform-vrl".into(),
         binary_name: "dfe-transform-vrl".into(),
-        description: "Embedded VRL transform engine -- Kafka-to-Kafka pipelines".into(),
+        description: DESCRIPTION.into(),
         metrics_port: 9090,
         health: HealthContract {
             startup_budget_seconds: 120,
@@ -110,11 +114,12 @@ pub fn contract() -> DeploymentContract {
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
+            title: "dfe-transform-vrl".into(),
+            description: DESCRIPTION.into(),
             vendor: "HYPERI PTY LIMITED".into(),
             label_namespace: "io.hyperi".into(),
             licenses: "BUSL-1.1".into(),
             copyright: "(c) 2026 HYPERI PTY LIMITED".into(),
-            ..Default::default()
         },
         // Reflectable config (scalo-rs#6): derived JSON Schema of the full
         // Config + the capability catalog (the VRL transform + the enrichment-
@@ -227,6 +232,16 @@ mod tests {
         assert_eq!(c.binary_name, "dfe-transform-vrl");
         assert_eq!(c.env_prefix, "DFE_TRANSFORM");
         assert_eq!(c.metric_prefix, "transform_vrl");
+    }
+
+    /// The OCI title and description feed the image labels and the registry
+    /// package page, and scalo leaves both empty unless the app sets them.
+    #[test]
+    fn test_oci_title_and_description_are_set() {
+        let c = contract();
+        assert_eq!(c.oci_labels.title, c.app_name);
+        assert_eq!(c.oci_labels.description, c.description);
+        assert_ne!(c.oci_labels.description, "");
     }
 
     #[test]
