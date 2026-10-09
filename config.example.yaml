@@ -174,17 +174,26 @@ pipeline:
 # -----------------------------------------------------------------------------
 # scalo's own settings -- /livez and /readyz are served by the metrics listener
 # -----------------------------------------------------------------------------
-# metrics, logger, scaling, worker_pool, batch_processing, self_regulation and
-# version_check belong to scalo's config cascade, which reads the file passed
-# with --config as its settings layer, once at startup. They take effect from
-# this file when it is passed that way. A config.yaml found in the working
-# directory without --config reaches the wrapper only, and the wrapper warns at
-# startup for each scalo section in it.
+# metrics, logger, scaling, worker_pool, batch_processing, self_regulation,
+# version_check and otel_tracing belong to scalo's config cascade, which reads
+# the file passed with --config as its settings layer, once at startup. They
+# take effect from this file when it is passed that way. A config.yaml found in
+# the working directory without --config reaches the wrapper only, and the
+# wrapper warns at startup for each scalo section in it.
 #
 # scaling:
 #   memory_gate_threshold: 0.8
 # batch_processing:
 #   max_chunk_size: 10000
+#
+# OTLP export is on by default, to localhost:4317. Span export is the
+# otel_tracing section and metric push is metrics.otel:
+#
+# otel_tracing:
+#   enabled: false
+# metrics:
+#   otel:
+#     enabled: false
 #
 # The env layer outranks this file. The section nests on a DOUBLE underscore,
 # and a single one produces a flat key that matches nothing:
@@ -195,6 +204,8 @@ pipeline:
 #   DFE_TRANSFORM_SCALING__ENABLED=true
 #   DFE_TRANSFORM_SCALING__MEMORY_GATE_THRESHOLD=0.8
 #   DFE_TRANSFORM_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+#   DFE_TRANSFORM_OTEL_TRACING__ENABLED=false
+#   DFE_TRANSFORM_METRICS__OTEL__ENABLED=false
 #
 # batch_processing.max_chunk_size is the events-per-chunk dial the batch engine
 # actually reads. pipeline.batch_size above is NOT it -- see the "accepted but

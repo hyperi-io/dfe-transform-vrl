@@ -155,7 +155,8 @@ scales on CPU and opens no Kafka connection, so it needs no CA.
 ### scalo's own settings share the config file
 
 `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
-`self_regulation` and `version_check` are resolved by scalo, not by the wrapper.
+`self_regulation`, `version_check` and `otel_tracing` are resolved by scalo, not
+by the wrapper.
 scalo reads the file passed with `--config` as its settings layer, once at
 startup, so those sections take effect from the mounted `config.yaml` beside the
 wrapper's own:
@@ -180,6 +181,8 @@ LOG_LEVEL=debug                    # or DFE_TRANSFORM_LOGGER__LEVEL
 LOG_FORMAT=json                    # or DFE_TRANSFORM_LOGGER__FORMAT
 DFE_TRANSFORM_SCALING__MEMORY_GATE_THRESHOLD=0.8
 DFE_TRANSFORM_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+DFE_TRANSFORM_OTEL_TRACING__ENABLED=false    # OTLP span export, on by default
+DFE_TRANSFORM_METRICS__OTEL__ENABLED=false   # OTLP metric push, on by default
 ```
 
 A single underscore (`DFE_TRANSFORM_METRICS_ADDRESS`) produces a flat key that
@@ -329,7 +332,7 @@ checked.
 | Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships. A chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- `test_every_contract_secret_env_var_reaches_the_config` now holds every declared name to the field it spells |
 | Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
-| Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in a `config.yaml` the binary finds in its working directory | Pass the file with `--config`, or set the section through the env layer on a **double** underscore | scalo reads the `--config` file as its settings layer but finds other files only by fixed base name (`settings.yaml`, `defaults.yaml`), so a working-directory `config.yaml` reaches the wrapper alone. Full list above under Configuration |
+| Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`, `otel_tracing`) in a `config.yaml` the binary finds in its working directory | Pass the file with `--config`, or set the section through the env layer on a **double** underscore | scalo reads the `--config` file as its settings layer but finds other files only by fixed base name (`settings.yaml`, `defaults.yaml`), so a working-directory `config.yaml` reaches the wrapper alone. Full list above under Configuration |
 | Trust `pipeline.batch_size`, `pipeline.batch_timeout_ms`, `sink.key_field` or `source.commit_interval_ms` | Size a chunk with `batch_processing.max_chunk_size` | `config::INERT_SETTINGS` -- accepted, validated, reaching nothing. Table above under Configuration |
 | Call a bare `cargo nextest run` green | Pass `--features enrichment-mmdb,enrichment-sqlite` | `default = []`, so the MMDB and SQLite tests are not compiled in and the run is green without having tested them |
 | Set `sasl.enabled` with an empty username or password | Supply both, or neither | librdkafka's SCRAM check is a NULL check that an empty string passes, so that pod authenticated against nothing and still reported Ready. Refused at startup now |
