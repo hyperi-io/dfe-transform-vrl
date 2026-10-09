@@ -152,15 +152,27 @@ The same two keys go under `sink`. A CA is public, so a ConfigMap can hold it.
 Mutual TLS is not supported through the chart, which mounts no client key. KEDA
 scales on CPU and opens no Kafka connection, so it needs no CA.
 
-### scalo's own settings are not in the config file
+### scalo's own settings share the config file
 
 `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
-`self_regulation` and `version_check` are resolved by scalo, from a cascade
-that discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and
-therefore never reads the mounted `config.yaml`. Writing one of those sections
-into that file parses cleanly and changes nothing; the wrapper warns at startup
-when it finds one. Set them through the env layer, where the section nests on a
-**double** underscore:
+`self_regulation` and `version_check` are resolved by scalo, not by the wrapper.
+scalo reads the file passed with `--config` as its settings layer, once at
+startup, so those sections take effect from the mounted `config.yaml` beside the
+wrapper's own:
+
+```yaml
+scaling:
+  memory_gate_threshold: 0.8
+batch_processing:
+  max_chunk_size: 10000
+```
+
+A `config.yaml` picked up from the working directory with no `--config` is read
+by the wrapper alone, so a scalo section in it changes nothing and the wrapper
+warns at startup. Pass the file with `--config`.
+
+The env layer outranks the file, and there the section nests on a **double**
+underscore:
 
 ```bash
 METRICS_ADDR=0.0.0.0:9090          # or DFE_TRANSFORM_METRICS__ADDRESS
@@ -317,7 +329,7 @@ checked.
 | Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships. A chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- `test_every_contract_secret_env_var_reaches_the_config` now holds every declared name to the field it spells |
 | Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
-| Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in the config file | Set it through the env layer, on a **double** underscore | scalo's cascade finds files by fixed base name and can never be pointed at `config.yaml`, so the section parses and reaches nothing. Full list above under Configuration |
+| Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`) in a `config.yaml` the binary finds in its working directory | Pass the file with `--config`, or set the section through the env layer on a **double** underscore | scalo reads the `--config` file as its settings layer but finds other files only by fixed base name (`settings.yaml`, `defaults.yaml`), so a working-directory `config.yaml` reaches the wrapper alone. Full list above under Configuration |
 | Trust `pipeline.batch_size`, `pipeline.batch_timeout_ms`, `sink.key_field` or `source.commit_interval_ms` | Size a chunk with `batch_processing.max_chunk_size` | `config::INERT_SETTINGS` -- accepted, validated, reaching nothing. Table above under Configuration |
 | Call a bare `cargo nextest run` green | Pass `--features enrichment-mmdb,enrichment-sqlite` | `default = []`, so the MMDB and SQLite tests are not compiled in and the run is green without having tested them |
 | Set `sasl.enabled` with an empty username or password | Supply both, or neither | librdkafka's SCRAM check is a NULL check that an empty string passes, so that pod authenticated against nothing and still reported Ready. Refused at startup now |

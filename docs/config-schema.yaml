@@ -3,16 +3,15 @@ title: Config
 description: |-
   Main configuration.
 
-  ## This struct is the whole of the `--config` file
+  ## This struct is the wrapper's half of the `--config` file
 
-  It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`,
-  and nothing else belongs in that file. scalo's own sections --
-  `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
-  `self_regulation`, `version_check` -- resolve from scalo's cascade, which
-  discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and so
-  never reads a file named `config.yaml`. They are set through the env layer
-  instead; [`SCALO_CASCADE_SECTIONS`] carries the mapping and
-  [`warn_unreachable_scalo_settings`] says so when one turns up here.
+  It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
+  scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
+  `batch_processing`, `self_regulation`, `version_check` -- may sit beside
+  them: scalo's cascade reads the same file as its settings layer, and its
+  env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists them, and
+  [`warn_unreachable_scalo_settings`] warns for one in a working-directory
+  `config.yaml` read without `--config`, which scalo never sees.
 
   ## Requires pod restart (bound at startup)
 

@@ -172,16 +172,22 @@ pipeline:
 #       path: "/etc/dfe-transform-vrl/enrichment/GeoLite2-City.mmdb"
 
 # -----------------------------------------------------------------------------
-# scalo's own settings -- NOT in this file, /livez and /readyz included
+# scalo's own settings -- /livez and /readyz are served by the metrics listener
 # -----------------------------------------------------------------------------
 # metrics, logger, scaling, worker_pool, batch_processing, self_regulation and
-# version_check belong to scalo's config cascade. That cascade discovers files
-# by fixed base name (defaults.yaml, settings.yaml, settings.{env}.yaml) and so
-# never reads a file called config.yaml -- writing those sections here parses
-# cleanly and changes nothing, and the wrapper warns at startup if it finds one.
+# version_check belong to scalo's config cascade, which reads the file passed
+# with --config as its settings layer, once at startup. They take effect from
+# this file when it is passed that way. A config.yaml found in the working
+# directory without --config reaches the wrapper only, and the wrapper warns at
+# startup for each scalo section in it.
 #
-# Set them through the env layer instead. The section nests on a DOUBLE
-# underscore; a single one produces a flat key that matches nothing:
+# scaling:
+#   memory_gate_threshold: 0.8
+# batch_processing:
+#   max_chunk_size: 10000
+#
+# The env layer outranks this file. The section nests on a DOUBLE underscore,
+# and a single one produces a flat key that matches nothing:
 #
 #   METRICS_ADDR=0.0.0.0:9090            # or DFE_TRANSFORM_METRICS__ADDRESS
 #   LOG_LEVEL=debug                      # or DFE_TRANSFORM_LOGGER__LEVEL
