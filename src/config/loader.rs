@@ -68,11 +68,12 @@ pub struct TlsConfig {
 ///
 /// It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
 /// scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
-/// `batch_processing`, `self_regulation`, `version_check` -- may sit beside
-/// them: scalo's cascade reads the same file as its settings layer, and its
-/// env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists them, and
-/// [`warn_unreachable_scalo_settings`] warns for one in a working-directory
-/// `config.yaml` read without `--config`, which scalo never sees.
+/// `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
+/// may sit beside them: scalo's cascade reads the same file as its settings
+/// layer, and its env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists
+/// them, and [`warn_unreachable_scalo_settings`] warns for one in a
+/// working-directory `config.yaml` read without `--config`, which scalo never
+/// sees.
 ///
 /// ## Requires pod restart (bound at startup)
 ///
@@ -430,6 +431,7 @@ pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
     ("batch_processing", "DFE_TRANSFORM_BATCH_PROCESSING__*"),
     ("self_regulation", "DFE_TRANSFORM_SELF_REGULATION__*"),
     ("version_check", "DFE_TRANSFORM_VERSION_CHECK__*"),
+    ("otel_tracing", "DFE_TRANSFORM_OTEL_TRACING__*"),
 ];
 
 /// Warn for each [`SCALO_CASCADE_SECTIONS`] entry a deployment has aimed at

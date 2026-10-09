@@ -291,6 +291,11 @@ fn warns_for_scaling(line: &str) -> bool {
     line.contains("belongs to the scalo cascade") && line.contains("scaling")
 }
 
+/// The same warning for the `otel_tracing` section.
+fn warns_for_otel_tracing(line: &str) -> bool {
+    line.contains("belongs to the scalo cascade") && line.contains("otel_tracing")
+}
+
 /// A scalo section in the `--config` file is applied, so it draws no warning.
 #[test]
 fn scalo_section_in_the_config_file_does_not_warn() {
@@ -309,6 +314,27 @@ fn scalo_section_in_the_config_file_does_not_warn() {
         !seen.lines().any(warns_for_scaling),
         "a `scaling:` section in the --config file reaches scalo and must not \
          warn\nstderr: {seen}"
+    );
+}
+
+/// `otel_tracing`, the span-export switch, is a scalo section like `scaling`:
+/// in a working-directory `config.yaml` it is reported, not obeyed.
+#[test]
+fn otel_tracing_section_in_a_working_directory_config_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_scaling_probe(dir.path());
+    let mut body = std::fs::read_to_string(&config).unwrap();
+    body.push_str("otel_tracing:\n  enabled: false\n");
+    std::fs::write(&config, body).unwrap();
+
+    // The warnings are logged before the topology line, in the same function.
+    let (reached, seen) = run_until(dir.path(), &[], |line| line.contains("DFE topology"));
+
+    assert!(reached, "the run never logged its topology\nstderr: {seen}");
+    assert!(
+        seen.lines().any(warns_for_otel_tracing),
+        "an `otel_tracing:` section in a working-directory config.yaml must warn \
+         that it is not applied\nstderr: {seen}"
     );
 }
 
