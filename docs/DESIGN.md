@@ -174,11 +174,11 @@ sink:
 ```
 
 That is the wrapper's whole schema. `metrics`, `logger`, `scaling`,
-`worker_pool`, `batch_processing`, `self_regulation` and `version_check` belong
-to scalo's cascade, which reads this file as its settings layer when it is
-passed with `--config`, so they may sit beside these sections. The env layer
-(`METRICS_ADDR`, `LOG_LEVEL`, `DFE_TRANSFORM_SCALING__*`, ...) outranks the
-file.
+`worker_pool`, `batch_processing`, `self_regulation`, `version_check` and
+`otel_tracing` belong to scalo's cascade, which reads this file as its settings
+layer when it is passed with `--config`, so they may sit beside these sections.
+The env layer (`METRICS_ADDR`, `LOG_LEVEL`, `DFE_TRANSFORM_SCALING__*`, ...)
+outranks the file.
 
 ## Comparison: dfe-transform-vrl vs dfe-transform-vector
 

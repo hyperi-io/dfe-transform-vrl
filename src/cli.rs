@@ -86,10 +86,10 @@ impl ServiceApp for App {
 
     fn load_config(&self, path: Option<&str>) -> Result<Config, CliError> {
         // Seed scalo's cascade. While `try_get()` is None every runtime
-        // `from_cascade()` -- metrics.address, logger.*, scaling.*,
+        // `from_cascade()` -- metrics.* (address, otel.*), logger.*, scaling.*,
         // worker_pool.*, batch_processing.*, self_regulation.*,
-        // version_check.* -- resolves to its hard-coded default, and no env
-        // var moves it. `to_config_options` hands it the `--config` file as
+        // version_check.*, otel_tracing.* -- resolves to its hard-coded
+        // default, and no env var moves it. `to_config_options` hands it the `--config` file as
         // its settings layer. Must run before the logger and the ServiceRuntime.
         if let Err(e) = scalo::config::setup(self.common.to_config_options(self.env_prefix())) {
             // The cascade is a OnceLock; a second load keeps the first seed.
