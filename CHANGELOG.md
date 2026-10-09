@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.31](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.30...v1.1.31) (2026-10-09)
+
+### Bug Fixes
+
+* emit deployment contract v4 ([#97](https://github.com/hyperi-io/dfe-transform-vrl/issues/97)) ([bd4d81e](https://github.com/hyperi-io/dfe-transform-vrl/commit/bd4d81e193e93f0aadbdc2ba10e6031a51d35935))
+* list otel_tracing among the scalo sections ([#100](https://github.com/hyperi-io/dfe-transform-vrl/issues/100)) ([4eb8366](https://github.com/hyperi-io/dfe-transform-vrl/commit/4eb8366c55e521e98a04fe12a2f310c9c4687463))
+* stop warning that scalo never reads the --config file ([#98](https://github.com/hyperi-io/dfe-transform-vrl/issues/98)) ([f3a8151](https://github.com/hyperi-io/dfe-transform-vrl/commit/f3a8151ad5ede00bc9cdb50a01908635d458d3a1))
+* switch off telemetry in the smoke tests ([#99](https://github.com/hyperi-io/dfe-transform-vrl/issues/99)) ([13e630b](https://github.com/hyperi-io/dfe-transform-vrl/commit/13e630b2ab631b53ad7e66c0c9f16ec447f63388))
+
 ## [1.1.30](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.29...v1.1.30) (2026-10-06)
 
 ### Bug Fixes
