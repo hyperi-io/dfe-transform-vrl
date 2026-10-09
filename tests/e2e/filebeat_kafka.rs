@@ -328,7 +328,7 @@ async fn filebeat_corpus_round_trips_through_kafka() {
 
     // kill_on_drop reaps the app on every exit path, assertion failures
     // included.
-    let mut app = tokio::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vrl"))
+    let mut app = tokio::process::Command::from(common::offline::binary())
         .arg("--config")
         .arg(&config_path)
         .arg("--metrics-addr")

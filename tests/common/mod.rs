@@ -14,6 +14,7 @@
 
 use std::env;
 
+pub mod offline;
 pub mod ports;
 
 /// Test backend mode.
