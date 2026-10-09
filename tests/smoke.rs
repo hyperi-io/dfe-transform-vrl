@@ -24,9 +24,24 @@ const fn binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_dfe-transform-vrl")
 }
 
+/// The binary as a `Command`, with its telemetry switched off.
+///
+/// The version check and the OTLP span and metric export all default to on:
+/// `run` posts to the release server, and the logger and the runtime dial the
+/// OTLP endpoint (`localhost:4317` unless the caller's environment names one).
+/// A test run must reach neither, so every spawn goes through here.
+fn binary() -> Command {
+    let mut command = Command::new(binary_path());
+    command
+        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
+        .env("DFE_TRANSFORM_OTEL_TRACING__ENABLED", "false")
+        .env("DFE_TRANSFORM_METRICS__OTEL__ENABLED", "false");
+    command
+}
+
 #[test]
 fn binary_help_exits_zero() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("--help")
         .output()
         .expect("failed to execute binary");
@@ -47,7 +62,7 @@ fn binary_help_exits_zero() {
 
 #[test]
 fn binary_version_exits_zero() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("--version")
         .output()
         .expect("failed to execute binary");
@@ -62,7 +77,7 @@ fn binary_version_exits_zero() {
 
 #[test]
 fn config_check_without_config_fails() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("config-check")
         .output()
         .expect("failed to execute binary");
@@ -89,7 +104,7 @@ fn config_check_with_checked_in_fixture_exits_zero() {
         fixture.display()
     );
 
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("--config")
         .arg(fixture.to_str().expect("fixture path utf8"))
         .arg("config-check")
@@ -130,7 +145,7 @@ fn scalo_cascade_env_reaches_the_runtime() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/configs/minimal.yaml");
 
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("--config")
         .arg(fixture.to_str().expect("fixture path utf8"))
         .arg("config-check")
@@ -177,7 +192,7 @@ fn scalo_sections_in_the_config_file_reach_the_runtime() {
     )
     .unwrap();
 
-    let output = Command::new(binary_path())
+    let output = binary()
         .current_dir(dir.path())
         .arg("--config")
         .arg(config.to_str().expect("config path utf8"))
@@ -236,7 +251,7 @@ fn run_until(dir: &std::path::Path, args: &[&str], stop: impl Fn(&str) -> bool) 
     use std::sync::mpsc::RecvTimeoutError;
     use std::time::{Duration, Instant};
 
-    let mut child = Command::new(binary_path())
+    let mut child = binary()
         .current_dir(dir)
         .args(args)
         .arg("run")
@@ -244,8 +259,6 @@ fn run_until(dir: &std::path::Path, args: &[&str], stop: impl Fn(&str) -> bool) 
         // The topology line is logged at info, which a stricter level would hide.
         .env("LOG_LEVEL", "info")
         .env_remove("RUST_LOG")
-        // A test run reports no version to the release server.
-        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -366,7 +379,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
     // the host running the test suite (the scalo metrics server uses
     // METRICS_ADDR; we set both health/metrics via env to ephemeral high
     // ports).
-    let mut child = std::process::Command::new(binary_path())
+    let mut child = binary()
         .arg("--config")
         .arg(&fixture)
         .arg("run")
@@ -411,7 +424,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
 /// contract change that was never regenerated cannot ship a stale image.
 #[test]
 fn checked_in_dockerfile_matches_emit_dockerfile() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("emit-dockerfile")
         .output()
         .expect("failed to execute binary");
@@ -434,7 +447,7 @@ fn checked_in_dockerfile_matches_emit_dockerfile() {
 
 #[test]
 fn emit_compose_outputs_yaml() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("emit-compose")
         .output()
         .expect("failed to execute binary");
@@ -454,7 +467,7 @@ fn emit_compose_outputs_yaml() {
 
 #[test]
 fn emit_contract_outputs_json() {
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("emit-contract")
         .output()
         .expect("failed to execute binary");
@@ -479,7 +492,7 @@ fn emit_chart_creates_directory() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let chart_dir = dir.path().join("chart-output");
 
-    let output = Command::new(binary_path())
+    let output = binary()
         .arg("emit-chart")
         .arg(chart_dir.to_str().unwrap())
         .output()
