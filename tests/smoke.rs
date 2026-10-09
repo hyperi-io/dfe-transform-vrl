@@ -16,28 +16,12 @@
 //! - Broken CLI argument parsing
 //! - Broken emit subcommands (Dockerfile, Helm, Compose, Contract)
 
-use std::process::Command;
+// Shared with the integration and e2e binaries, so every spawn of the binary
+// has its telemetry switched off by the one definition.
+#[path = "common/offline.rs"]
+mod offline;
 
-const fn binary_path() -> &'static str {
-    // Cargo resolves this at compile time to the binary it just built, so it
-    // still points at one when coverage redirects the build with --target-dir.
-    env!("CARGO_BIN_EXE_dfe-transform-vrl")
-}
-
-/// The binary as a `Command`, with its telemetry switched off.
-///
-/// The version check and the OTLP span and metric export all default to on:
-/// `run` posts to the release server, and the logger and the runtime dial the
-/// OTLP endpoint (`localhost:4317` unless the caller's environment names one).
-/// A test run must reach neither, so every spawn goes through here.
-fn binary() -> Command {
-    let mut command = Command::new(binary_path());
-    command
-        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
-        .env("DFE_TRANSFORM_OTEL_TRACING__ENABLED", "false")
-        .env("DFE_TRANSFORM_METRICS__OTEL__ENABLED", "false");
-    command
-}
+use offline::binary;
 
 #[test]
 fn binary_help_exits_zero() {
@@ -244,8 +228,9 @@ fn write_scaling_probe(dir: &std::path::Path) -> std::path::PathBuf {
 /// Start `run` from `dir` with `args`, and read its stderr until a line
 /// satisfies `stop`, the process exits, or 30 s pass.
 ///
-/// Returns whether `stop` matched, and every line read. The run never exits on
-/// its own, so it is killed either way.
+/// Returns whether `stop` matched, and every line read, including those that
+/// arrive in the 200 ms after a match. The run never exits on its own, so it is
+/// killed either way.
 fn run_until(dir: &std::path::Path, args: &[&str], stop: impl Fn(&str) -> bool) -> (bool, String) {
     use std::io::{BufRead, BufReader};
     use std::sync::mpsc::RecvTimeoutError;
@@ -294,6 +279,15 @@ fn run_until(dir: &std::path::Path, args: &[&str], stop: impl Fn(&str) -> bool) 
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
+    // A task racing the one that logged the matching line writes its own a few
+    // milliseconds either side, so the lines in flight are read before the kill.
+    if matched {
+        let settled = Instant::now() + Duration::from_millis(200);
+        while let Ok(line) = rx.recv_timeout(settled.saturating_duration_since(Instant::now())) {
+            seen.push_str(&line);
+            seen.push('\n');
+        }
+    }
     let _ = child.kill();
     let _ = child.wait();
     (matched, seen)
@@ -338,6 +332,35 @@ fn scalo_section_in_a_working_directory_config_warns() {
         warned,
         "a `scaling:` section in a working-directory config.yaml must warn that \
          it is not applied\nstderr: {seen}"
+    );
+}
+
+/// The settings `binary()` applies take effect in the running service.
+///
+/// A scalo release that renames one of the keys turns it into a no-op, and the
+/// tests would go back to phoning home with nothing failing. The two OTLP
+/// lines are logged when scalo reads its switches, ahead of the topology line.
+#[test]
+fn binary_helper_switches_telemetry_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_scaling_probe(dir.path());
+
+    let (reached, seen) = run_until(
+        dir.path(),
+        &["--config", config.to_str().unwrap()],
+        |line| line.contains("DFE topology"),
+    );
+
+    assert!(reached, "the run never logged its topology\nstderr: {seen}");
+    for line in ["OTLP span export disabled", "OTLP metric push disabled"] {
+        assert!(
+            seen.contains(line),
+            "expected `{line}` in the startup log\nstderr: {seen}"
+        );
+    }
+    assert!(
+        !seen.contains("version check ON"),
+        "the version check announced itself\nstderr: {seen}"
     );
 }
 
