@@ -173,11 +173,12 @@ sink:
   max_buffer_bytes: 67108864        # 64 MiB producer buffer
 ```
 
-That is the whole file. `metrics`, `logger`, `scaling`, `worker_pool`,
-`batch_processing`, `self_regulation` and `version_check` belong to scalo's
-cascade, which finds files by fixed base name and so never reads this one --
-they are set through the env layer (`METRICS_ADDR`, `LOG_LEVEL`,
-`DFE_TRANSFORM_SCALING__*`, ...) and the wrapper warns if one appears here.
+That is the wrapper's whole schema. `metrics`, `logger`, `scaling`,
+`worker_pool`, `batch_processing`, `self_regulation` and `version_check` belong
+to scalo's cascade, which reads this file as its settings layer when it is
+passed with `--config`, so they may sit beside these sections. The env layer
+(`METRICS_ADDR`, `LOG_LEVEL`, `DFE_TRANSFORM_SCALING__*`, ...) outranks the
+file.
 
 ## Comparison: dfe-transform-vrl vs dfe-transform-vector
 

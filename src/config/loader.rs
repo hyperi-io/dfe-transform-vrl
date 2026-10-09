@@ -64,16 +64,15 @@ pub struct TlsConfig {
 
 /// Main configuration.
 ///
-/// ## This struct is the whole of the `--config` file
+/// ## This struct is the wrapper's half of the `--config` file
 ///
-/// It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`,
-/// and nothing else belongs in that file. scalo's own sections --
-/// `metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
-/// `self_regulation`, `version_check` -- resolve from scalo's cascade, which
-/// discovers files by fixed base name (`settings.yaml`, `defaults.yaml`) and so
-/// never reads a file named `config.yaml`. They are set through the env layer
-/// instead; [`SCALO_CASCADE_SECTIONS`] carries the mapping and
-/// [`warn_unreachable_scalo_settings`] says so when one turns up here.
+/// It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
+/// scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
+/// `batch_processing`, `self_regulation`, `version_check` -- may sit beside
+/// them: scalo's cascade reads the same file as its settings layer, and its
+/// env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists them, and
+/// [`warn_unreachable_scalo_settings`] warns for one in a working-directory
+/// `config.yaml` read without `--config`, which scalo never sees.
 ///
 /// ## Requires pod restart (bound at startup)
 ///
@@ -410,14 +409,16 @@ pub struct TransformConfig {
 // scalo's own config sections
 // =============================================================================
 
-/// Top-level sections that belong to scalo's cascade, not to [`Config`].
+/// Top-level sections that scalo's cascade resolves, not [`Config`].
 ///
-/// `scalo::config` discovers files by fixed base name -- `defaults.yaml`,
-/// `settings.yaml`, `settings.{env}.yaml` -- in the working directory,
-/// `config/`, `/config/`, `~/.config/{app}/` and any extra directory. There is
-/// no way to point it at a file called `config.yaml`, so a section listed here
-/// reaches nothing when it is written into the `--config` file. The env layer
-/// does reach it, hence the paired variable.
+/// [`crate::cli`] seeds that cascade with the `--config` file as its settings
+/// layer, so a section listed here takes effect from that file, read once at
+/// startup. The env layer outranks the file, hence the paired variable.
+///
+/// Without `--config` the wrapper reads a `config.yaml` from the working
+/// directory ([`working_dir_config_file`]), and scalo does not: it finds files
+/// there by fixed base name (`defaults.yaml`, `settings.yaml`,
+/// `settings.{env}.yaml`), so a section listed here reaches nothing from it.
 pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
     ("metrics", "METRICS_ADDR, or DFE_TRANSFORM_METRICS__*"),
     (
@@ -434,23 +435,28 @@ pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
 /// Warn for each [`SCALO_CASCADE_SECTIONS`] entry a deployment has aimed at
 /// and missed.
 ///
-/// The two ways to miss are writing the section into the `--config` file, and
-/// spelling its env var with one underscore where the cascade splits on two.
-/// Re-reads the file rather than threading the raw YAML through [`Config`]:
-/// once, at startup, and only to report.
+/// The two ways to miss are writing the section into a working-directory
+/// `config.yaml` read without `--config`, and spelling its env var with one
+/// underscore where the cascade splits on two. A section in a file passed with
+/// `--config` is applied, so it draws no warning. Re-reads the file rather than
+/// threading the raw YAML through [`Config`]: once, at startup, and only to
+/// report.
 pub fn warn_unreachable_scalo_settings(config_path: Option<&str>) {
-    if let Some(path) = config_path
+    // Only the working-directory fallback is read by the wrapper alone.
+    if config_path.is_none()
+        && let Some(path) = working_dir_config_file()
         && let Ok(content) = std::fs::read_to_string(path)
         && let Ok(serde_yaml_ng::Value::Mapping(map)) = serde_yaml_ng::from_str(&content)
     {
         for (section, instead) in SCALO_CASCADE_SECTIONS {
-            if map.contains_key(serde_yaml_ng::Value::String((*section).to_string())) {
+            if map.contains_key(*section) {
                 tracing::warn!(
                     section = section,
                     instead = instead,
                     path = path,
-                    "config section belongs to the scalo cascade, which cannot \
-                     read this file -- the values in it are not applied"
+                    "config section belongs to the scalo cascade, which reads a file \
+                     passed with --config but not one found in the working directory \
+                     -- the values in it are not applied"
                 );
             }
         }
@@ -530,6 +536,15 @@ use scalo::config::flat_env::{
 };
 
 const ENV_PREFIX: &str = "DFE_TRANSFORM";
+
+/// The `config.yaml` or `config.yml` in the working directory, which the
+/// wrapper reads when no `--config` names a file.
+#[must_use]
+pub fn working_dir_config_file() -> Option<&'static str> {
+    ["config.yaml", "config.yml"]
+        .into_iter()
+        .find(|path| Path::new(path).exists())
+}
 
 /// Flat env overrides for K8s-friendly single-underscore env vars.
 ///
@@ -682,17 +697,12 @@ impl Config {
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
             config = serde_yaml_ng::from_str(&content)?;
             debug!(path, "loaded configuration file");
-        } else {
+        } else if let Some(path) = working_dir_config_file() {
             // No --config: lenient fallback search in CWD.
-            for path in &["config.yaml", "config.yml"] {
-                if Path::new(path).exists() {
-                    let content = std::fs::read_to_string(path)
-                        .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-                    config = serde_yaml_ng::from_str(&content)?;
-                    debug!(path, "loaded configuration file");
-                    break;
-                }
-            }
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
+            config = serde_yaml_ng::from_str(&content)?;
+            debug!(path, "loaded configuration file");
         }
 
         // Figment env (double-underscore nesting). The round-trip serialises the

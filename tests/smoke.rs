@@ -157,20 +157,60 @@ fn scalo_cascade_env_reaches_the_runtime() {
     assert_eq!(reported_setting(&stderr, "metrics_addr"), "127.0.0.1:19099");
 }
 
-/// A scalo section written into the `--config` file is reported, not obeyed.
+/// scalo's own sections take effect from the `--config` file.
+///
+/// scalo reads that file as its settings layer, so `logger` and `metrics`
+/// written there reach the runtime with no env var set. It runs in an empty
+/// directory, so no `.env` or `settings.yaml` can supply the values instead.
 #[test]
-fn scalo_section_in_the_config_file_warns_at_startup() {
-    use std::io::{BufRead, BufReader};
-    use std::sync::mpsc::RecvTimeoutError;
-    use std::time::{Duration, Instant};
-
+fn scalo_sections_in_the_config_file_reach_the_runtime() {
     let dir = tempfile::tempdir().unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/configs/minimal.yaml");
+    let config = dir.path().join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "{}\nlogger:\n  level: warn\nmetrics:\n  address: \"127.0.0.1:19098\"\n",
+            std::fs::read_to_string(&fixture).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(binary_path())
+        .current_dir(dir.path())
+        .arg("--config")
+        .arg(config.to_str().expect("config path utf8"))
+        .arg("config-check")
+        // Cleared so the assertions cannot pass on a higher-priority source.
+        .env_remove("LOG_LEVEL")
+        .env_remove("METRICS_ADDR")
+        .env_remove("DFE_TRANSFORM_LOGGER__LEVEL")
+        .env_remove("DFE_TRANSFORM_METRICS__ADDRESS")
+        .output()
+        .expect("failed to execute binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "config-check should exit 0\nstderr: {stderr}"
+    );
+
+    // Each value differs from the default it would fall back to -- info and
+    // 0.0.0.0:9090.
+    assert_eq!(reported_setting(&stderr, "log_level"), "warn");
+    assert_eq!(reported_setting(&stderr, "metrics_addr"), "127.0.0.1:19098");
+}
+
+/// Write a config carrying a `scaling:` section into `dir`, with a transform
+/// program on disk, and return its path.
+fn write_scaling_probe(dir: &std::path::Path) -> std::path::PathBuf {
     // A program on disk takes the run past scalo's idle gate, which sits
     // before the startup warnings (scalo-rs #69); the broker is never there.
-    let transforms = dir.path().join("transforms");
+    let transforms = dir.join("transforms");
     std::fs::create_dir(&transforms).unwrap();
     std::fs::write(transforms.join("100_probe.vrl"), ".marked = true\n").unwrap();
-    let config = dir.path().join("config.yaml");
+    let config = dir.join("config.yaml");
     std::fs::write(
         &config,
         format!(
@@ -183,15 +223,29 @@ fn scalo_section_in_the_config_file_warns_at_startup() {
         ),
     )
     .unwrap();
+    config
+}
 
-    // The run never exits on its own: read the warning off the live process,
-    // then stop it.
+/// Start `run` from `dir` with `args`, and read its stderr until a line
+/// satisfies `stop`, the process exits, or 30 s pass.
+///
+/// Returns whether `stop` matched, and every line read. The run never exits on
+/// its own, so it is killed either way.
+fn run_until(dir: &std::path::Path, args: &[&str], stop: impl Fn(&str) -> bool) -> (bool, String) {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::{Duration, Instant};
+
     let mut child = Command::new(binary_path())
-        .arg("--config")
-        .arg(config.to_str().unwrap())
+        .current_dir(dir)
+        .args(args)
         .arg("run")
         .env("METRICS_ADDR", "127.0.0.1:0")
-        .env("DFE_TRANSFORM_HEALTH__ADDRESS", "127.0.0.1:0")
+        // The topology line is logged at info, which a stricter level would hide.
+        .env("LOG_LEVEL", "info")
+        .env_remove("RUST_LOG")
+        // A test run reports no version to the release server.
+        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -208,14 +262,14 @@ fn scalo_section_in_the_config_file_warns_at_startup() {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut seen = String::new();
-    let mut warned = false;
+    let mut matched = false;
     while Instant::now() < deadline {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(line) => {
-                warned = line.contains("scalo cascade") && line.contains("scaling");
+                matched = stop(&line);
                 seen.push_str(&line);
                 seen.push('\n');
-                if warned {
+                if matched {
                     break;
                 }
             }
@@ -229,11 +283,48 @@ fn scalo_section_in_the_config_file_warns_at_startup() {
     }
     let _ = child.kill();
     let _ = child.wait();
+    (matched, seen)
+}
+
+/// The startup warning for a scalo section the wrapper's file cannot deliver.
+fn warns_for_scaling(line: &str) -> bool {
+    line.contains("belongs to the scalo cascade") && line.contains("scaling")
+}
+
+/// A scalo section in the `--config` file is applied, so it draws no warning.
+#[test]
+fn scalo_section_in_the_config_file_does_not_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_scaling_probe(dir.path());
+
+    // The warnings are logged before the topology line, in the same function.
+    let (reached, seen) = run_until(
+        dir.path(),
+        &["--config", config.to_str().unwrap()],
+        |line| line.contains("DFE topology"),
+    );
+
+    assert!(reached, "the run never logged its topology\nstderr: {seen}");
+    assert!(
+        !seen.lines().any(warns_for_scaling),
+        "a `scaling:` section in the --config file reaches scalo and must not \
+         warn\nstderr: {seen}"
+    );
+}
+
+/// A `config.yaml` found in the working directory is read by the wrapper
+/// alone, so a scalo section in it is reported, not obeyed.
+#[test]
+fn scalo_section_in_a_working_directory_config_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    write_scaling_probe(dir.path());
+
+    let (warned, seen) = run_until(dir.path(), &[], warns_for_scaling);
 
     assert!(
         warned,
-        "a `scaling:` section in the config file must warn that it is not \
-         applied\nstderr: {seen}"
+        "a `scaling:` section in a working-directory config.yaml must warn that \
+         it is not applied\nstderr: {seen}"
     );
 }
 

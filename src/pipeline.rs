@@ -201,8 +201,9 @@ pub async fn run(
     //     memory_gate_threshold forces pressure to 100 -> immediate scale-up).
     // These replace the old per-pod `ScalingSignalsCell` push, which fed the
     // SAME source values into a now-removed second engine. Stops on shutdown.
-    // Only spawned when the runtime built the engine (`scaling.enabled`);
-    // absent it, `set_component`/`set_memory` would have no engine to feed.
+    // The runtime builds the engine whenever scalo's `scaling` feature is
+    // compiled, even with `scaling.enabled = false`, so this is `None` only in
+    // a build without that feature.
     let signal_task = scaling.map(|scaling| {
         let consumer = Arc::clone(&consumer);
         let circuit_open = Arc::clone(&circuit_open);
