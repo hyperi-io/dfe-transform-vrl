@@ -93,7 +93,7 @@ fn test_env_override_pipeline_name() {
 
 /// `config-check` run by the binary from `dir`, returning what it printed.
 fn config_check_in(dir: &std::path::Path) -> String {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dfe-transform-vrl"))
+    let out = crate::offline::binary()
         .arg("config-check")
         .current_dir(dir)
         .env_remove("DFE_TRANSFORM_PIPELINE_NAME")

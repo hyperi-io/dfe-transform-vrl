@@ -82,6 +82,11 @@ mod pipeline_memory;
 #[path = "integration/vrl_deep.rs"]
 mod vrl_deep;
 
+// The binary as a Command with its telemetry switched off, shared with the
+// smoke and e2e binaries.
+#[path = "common/offline.rs"]
+mod offline;
+
 // Host ports below 10240 for the listeners the direct-transport tests start.
 #[allow(clippy::expect_used)]
 #[path = "common/ports.rs"]
