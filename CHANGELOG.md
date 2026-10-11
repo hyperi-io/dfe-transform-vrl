@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.32](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.31...v1.1.32) (2026-10-11)
+
+### Bug Fixes
+
+* move to scalo 2.14.6, drop emit-chart ([fa40c9b](https://github.com/hyperi-io/dfe-transform-vrl/commit/fa40c9b9556a0da5eca81eb1db6cef21250fb12f))
+* set the OCI title and description on the transform-vrl deployment contract ([#101](https://github.com/hyperi-io/dfe-transform-vrl/issues/101)) ([3c0525b](https://github.com/hyperi-io/dfe-transform-vrl/commit/3c0525b7de60dc5c58883b507f2686645353ca19))
+
 ## [1.1.31](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.30...v1.1.31) (2026-10-09)
 
 ### Bug Fixes
