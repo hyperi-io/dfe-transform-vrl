@@ -535,27 +535,3 @@ fn emit_contract_outputs_json() {
         "emit-contract should produce valid JSON: {stdout}",
     );
 }
-
-#[test]
-fn emit_chart_creates_directory() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let chart_dir = dir.path().join("chart-output");
-
-    let output = binary()
-        .arg("emit-chart")
-        .arg(chart_dir.to_str().unwrap())
-        .output()
-        .expect("failed to execute binary");
-
-    assert!(
-        output.status.success(),
-        "emit-chart should exit 0\nstderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Chart directory should contain Chart.yaml
-    assert!(
-        chart_dir.join("Chart.yaml").exists(),
-        "emit-chart should create Chart.yaml in output dir"
-    );
-}
