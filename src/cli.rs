@@ -21,7 +21,7 @@ use clap::{Parser, Subcommand};
 use scalo::cli::{CliError, CommonArgs, ServiceApp, StandardCommand, VersionInfo};
 use scalo::config::reloader::{ConfigReloader, ReloaderConfig};
 use scalo::config::shared::SharedConfig;
-use scalo::deployment::{generate_chart, generate_compose_fragment, generate_dockerfile};
+use scalo::deployment::{generate_compose_fragment, generate_dockerfile};
 use scalo::scaling::ScalingComponent;
 use tracing::{debug, error, info};
 
@@ -48,8 +48,6 @@ enum AppCommand {
     Standard(StandardCommand),
     #[command(name = "emit-dockerfile")]
     EmitDockerfile,
-    #[command(name = "emit-chart")]
-    EmitChart { dir: String },
     #[command(name = "emit-compose")]
     EmitCompose,
     #[command(name = "emit-contract")]
@@ -166,15 +164,6 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
         AppCommand::EmitDockerfile => {
             let contract = deployment::contract();
             println!("{}", generate_dockerfile(&contract, None));
-            Some(())
-        }
-        AppCommand::EmitChart { dir } => {
-            let contract = deployment::contract();
-            if let Err(e) = generate_chart(&contract, dir, None) {
-                eprintln!("error: failed to generate Helm chart: {e}");
-                std::process::exit(1);
-            }
-            eprintln!("Helm chart generated in {dir}/");
             Some(())
         }
         AppCommand::EmitCompose => {
@@ -516,15 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn app_parses_emit_chart_with_dir() {
-        let app = parse(&["emit-chart", "/tmp/chart-out"]);
-        match &app.command {
-            Some(AppCommand::EmitChart { dir }) => assert_eq!(dir, "/tmp/chart-out"),
-            other => panic!("expected EmitChart, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn app_parses_emit_compose_command() {
         let app = parse(&["emit-compose"]);
         assert!(matches!(app.command, Some(AppCommand::EmitCompose)));
@@ -693,17 +673,6 @@ transforms:
         let app = parse(&["emit-contract"]);
         let result = handle_emit_command(&app);
         assert_eq!(result, Some(()));
-    }
-
-    #[test]
-    fn handle_emit_command_chart_generates_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = parse(&["emit-chart", dir.path().to_str().unwrap()]);
-        let result = handle_emit_command(&app);
-        assert_eq!(result, Some(()));
-        // Verify chart dir is non-empty
-        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert!(!entries.is_empty(), "chart dir should contain files");
     }
 
     #[test]

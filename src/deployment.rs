@@ -6,7 +6,8 @@
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Deployment contract for Dockerfile, Helm chart, and compose fragment generation.
+//! Deployment contract for Dockerfile and compose fragment generation, and
+//! for the thin chart the release assembles.
 //!
 //! Unlike dfe-transform-vector, this service does NOT need the Vector binary
 //! in its container image. The container is just the Rust binary.
@@ -14,7 +15,8 @@
 use scalo::deployment::{
     CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
     KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
-    SecretEnvContract, SecretGroupContract, SecurityContract, base_image_from_cascade,
+    SecretEnvContract, SecretGroupContract, SecurityContract, ServiceAccount,
+    base_image_from_cascade,
 };
 
 /// The `source.transport` values that bind the Push listener: the name
@@ -141,6 +143,7 @@ pub fn contract() -> DeploymentContract {
         },
         security: SecurityContract::default(),
         singleton: false,
+        service_account: ServiceAccount::Own,
     }
 }
 
@@ -360,8 +363,8 @@ mod tests {
         );
     }
 
-    /// `generate-artefacts` and `generate_chart` write nothing for a contract
-    /// that fails either check.
+    /// `generate-artefacts` writes nothing for a contract that fails either
+    /// check.
     #[test]
     fn test_contract_passes_the_generate_artefacts_checks() {
         let c = contract();
