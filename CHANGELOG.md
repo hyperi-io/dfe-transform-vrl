@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.33](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.32...v1.1.33) (2026-10-12)
+
+### Bug Fixes
+
+* rebuild on scalo 2.14.9 ([be2006a](https://github.com/hyperi-io/dfe-transform-vrl/commit/be2006ade48c201642b83f166a95413dcc7b5e50))
+
 ## [1.1.32](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.31...v1.1.32) (2026-10-11)
 
 ### Bug Fixes
