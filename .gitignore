@@ -8,6 +8,8 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.env.*
+!.env*.example
 *.key
 *.pem
 *.p12
@@ -45,10 +47,15 @@ docs/superpowers/
 .codex/
 .cursor/
 .gemini/
+.superpowers/
+.playwright-mcp/
 .cursorrules
 hyperi-ai/
 .mcp.json
+.hyperi-ai
 .worktrees/
+.kube/
+.secrets/
 CLAUDE.md
 STATE.md
 TODO.md
