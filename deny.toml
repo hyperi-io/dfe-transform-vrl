@@ -20,7 +20,10 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Each entry MUST have a comment with: (1) why the advisory is tolerated,
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.
 # Empty list = nothing tolerated; CI fails on any new advisory.
-ignore = []
+ignore = [
+    # unsafe-libyaml arrives via figment and serde_yaml_ng; tracked in hyperi-io/scalo-rs#341.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, not vulnerable; it parses only operator-supplied config YAML via serde_yaml and serde_yaml_ng (figment, scalo), never untrusted input; drop when scalo moves to a maintained YAML parser" },
+]
 
 [licenses]
 allow = [
