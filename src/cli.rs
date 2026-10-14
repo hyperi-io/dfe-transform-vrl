@@ -172,8 +172,13 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
             Some(())
         }
         AppCommand::EmitContract => {
-            let contract = deployment::contract();
-            println!("{}", contract.to_json());
+            match deployment::contract().to_json() {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("fatal: {e}");
+                    std::process::exit(1);
+                }
+            }
             Some(())
         }
         AppCommand::Standard(_) => None,

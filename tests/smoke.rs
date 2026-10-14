@@ -399,10 +399,7 @@ fn example_config_yaml_parses_as_yaml() {
     // editing it.
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.yaml");
 
-    let body = std::fs::read_to_string(&example)
-        .unwrap_or_else(|e| panic!("read {}: {e}", example.display()));
-
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&body)
+    scalo::yaml::from_path::<serde_json::Value>(&example, scalo::yaml::Profile::Config)
         .unwrap_or_else(|e| panic!("config.example.yaml is not valid YAML: {e}"));
 }
 
