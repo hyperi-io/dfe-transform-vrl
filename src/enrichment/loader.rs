@@ -364,10 +364,11 @@ pub fn load_yaml(
         ))
     })?;
 
-    // Parse YAML to JSON Value array (serde_yaml_ng -> serde_json interop)
-    let yaml_array: Vec<serde_json::Value> = serde_yaml_ng::from_str(&content).map_err(|e| {
-        crate::Error::Enrichment(format!("table '{table_name}': invalid YAML: {e}"))
-    })?;
+    let origin = path.display().to_string();
+    let yaml_array: Vec<serde_json::Value> =
+        scalo::yaml::from_str(&content, &origin, scalo::yaml::Profile::Data).map_err(|e| {
+            crate::Error::Enrichment(format!("table '{table_name}': invalid YAML: {e}"))
+        })?;
 
     json_objects_to_map(&yaml_array, table_name, key_columns, schema)
 }

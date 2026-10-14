@@ -447,8 +447,8 @@ pub fn warn_unreachable_scalo_settings(config_path: Option<&str>) {
     // Only the working-directory fallback is read by the wrapper alone.
     if config_path.is_none()
         && let Some(path) = working_dir_config_file()
-        && let Ok(content) = std::fs::read_to_string(path)
-        && let Ok(serde_yaml_ng::Value::Mapping(map)) = serde_yaml_ng::from_str(&content)
+        && let Ok(serde_json::Value::Object(map)) =
+            scalo::yaml::from_path::<serde_json::Value>(path, scalo::yaml::Profile::Config)
     {
         for (section, instead) in SCALO_CASCADE_SECTIONS {
             if map.contains_key(*section) {
@@ -697,13 +697,13 @@ impl Config {
             }
             let content = std::fs::read_to_string(path)
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-            config = serde_yaml_ng::from_str(&content)?;
+            config = scalo::yaml::from_str(&content, path, scalo::yaml::Profile::Config)?;
             debug!(path, "loaded configuration file");
         } else if let Some(path) = working_dir_config_file() {
             // No --config: lenient fallback search in CWD.
             let content = std::fs::read_to_string(path)
                 .map_err(|e| crate::Error::Config(format!("failed to read {path}: {e}")))?;
-            config = serde_yaml_ng::from_str(&content)?;
+            config = scalo::yaml::from_str(&content, path, scalo::yaml::Profile::Config)?;
             debug!(path, "loaded configuration file");
         }
 
@@ -861,14 +861,23 @@ mod tests {
     fn source_acknowledgements_are_on_unless_the_file_turns_them_off() {
         assert!(Config::default().source.acknowledgements.enabled);
 
-        let untouched: Config = serde_yaml_ng::from_str("source:\n  topics: [events]\n").unwrap();
+        let untouched: Config = scalo::yaml::from_str(
+            "source:\n  topics: [events]\n",
+            "config.yaml",
+            scalo::yaml::Profile::Config,
+        )
+        .unwrap();
         assert!(
             untouched.source.acknowledgements.enabled,
             "a source section without the key keeps the default"
         );
 
-        let off: Config =
-            serde_yaml_ng::from_str("source:\n  acknowledgements:\n    enabled: false\n").unwrap();
+        let off: Config = scalo::yaml::from_str(
+            "source:\n  acknowledgements:\n    enabled: false\n",
+            "config.yaml",
+            scalo::yaml::Profile::Config,
+        )
+        .unwrap();
         assert!(!off.source.acknowledgements.enabled);
     }
 
@@ -974,8 +983,9 @@ sink:
     #[test]
     fn serde_roundtrip() {
         let config = Config::default();
-        let yaml = serde_yaml_ng::to_string(&config).unwrap();
-        let deserialized: Config = serde_yaml_ng::from_str(&yaml).unwrap();
+        let yaml = scalo::yaml::to_string(&config).unwrap();
+        let deserialized: Config =
+            scalo::yaml::from_str(&yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         assert_eq!(config.pipeline.name, deserialized.pipeline.name);
         assert_eq!(config.pipeline.batch_size, deserialized.pipeline.batch_size);
         assert_eq!(config.source.group_id, deserialized.source.group_id);
@@ -985,8 +995,9 @@ sink:
     fn a_source_from_an_older_render_still_loads() {
         // An engine render from before JSON-only still carries source.format.
         let yaml = "source:\n  format: auto\n  group_id: cg\n";
-        let config: Config = serde_yaml_ng::from_str(yaml)
-            .unwrap_or_else(|e| panic!("the removed key is ignored, not refused: {e}"));
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config)
+                .unwrap_or_else(|e| panic!("the removed key is ignored, not refused: {e}"));
         assert_eq!(config.source.group_id, "cg");
     }
 
@@ -1020,7 +1031,8 @@ enrichment_tables:
     path: "/data/services.csv"
     key_columns: ["service_id"]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         assert_eq!(config.enrichment_tables.len(), 1);
         let table = &config.enrichment_tables[0];
         assert_eq!(table.name, "services");
@@ -1040,7 +1052,8 @@ enrichment_tables:
       status_code: "integer"
       commissioned: "date|%d/%m/%Y"
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let table = &config.enrichment_tables[0];
         assert_eq!(
             table.schema.get("status_code").map(String::as_str),
@@ -1060,7 +1073,8 @@ enrichment_tables:
     path: "/data/services.csv"
     key_columns: ["service_id"]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         assert!(config.enrichment_tables[0].schema.is_empty());
     }
 
@@ -1073,7 +1087,8 @@ enrichment_tables:
       type: mmdb
       path: "/data/GeoLite2-City.mmdb"
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
         assert!(matches!(source, EnrichmentSourceConfig::Mmdb { .. }));
     }
@@ -1088,7 +1103,8 @@ enrichment_tables:
       url: "https://taxii.example.com/objects"
     key_columns: ["indicator"]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
         let EnrichmentSourceConfig::Stix { url, .. } = source else {
             unreachable!("expected Stix");
@@ -1106,7 +1122,8 @@ enrichment_tables:
       path: "/data/stix-bundle.json"
     key_columns: ["indicator"]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
         let EnrichmentSourceConfig::Stix { path, .. } = source else {
             unreachable!("expected Stix");
@@ -1125,7 +1142,8 @@ enrichment_tables:
       query: "SELECT msisdn, plan FROM subscribers"
     key_columns: ["msisdn"]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
         assert!(matches!(source, EnrichmentSourceConfig::Sqlite { .. }));
     }
@@ -1148,7 +1166,8 @@ enrichment_tables:
     refresh:
       interval_secs: 3600
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config =
+            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let refresh = config.enrichment_tables[0].refresh.as_ref().unwrap();
         assert_eq!(refresh.interval_secs, 3600);
     }
@@ -1325,8 +1344,10 @@ enrichment_tables:
     /// off the TLS a config file asked for.
     #[test]
     fn a_plaintext_security_protocol_keeps_tls_the_config_file_turned_on() {
-        let file: Config = serde_yaml_ng::from_str(
+        let file: Config = scalo::yaml::from_str(
             "source:\n  tls:\n    enabled: true\nsink:\n  tls:\n    enabled: true\n",
+            "config.yaml",
+            scalo::yaml::Profile::Config,
         )
         .unwrap();
 

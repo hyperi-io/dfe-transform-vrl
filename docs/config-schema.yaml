@@ -33,13 +33,13 @@ description: |-
 type: object
 properties:
   pipeline:
-    $ref: '#/$defs/PipelineConfig'
+    $ref: "#/$defs/PipelineConfig"
     default:
       name: default
       batch_size: 1000
       batch_timeout_ms: 100
   source:
-    $ref: '#/$defs/SourceConfig'
+    $ref: "#/$defs/SourceConfig"
     default:
       transport: bus
       listen: 0.0.0.0:6000
@@ -52,7 +52,7 @@ properties:
       sasl:
         enabled: false
         mechanism: scram_sha_512
-        username: ''
+        username: ""
       tls:
         enabled: false
         ca_cert_file: null
@@ -67,20 +67,20 @@ properties:
       acknowledgements:
         enabled: true
   sink:
-    $ref: '#/$defs/SinkConfig'
+    $ref: "#/$defs/SinkConfig"
     default:
       transport: bus
       endpoint: http://dfe-loader:6000
       brokers:
       - localhost:9092
-      topic: ''
-      key_field: ''
+      topic: ""
+      key_field: ""
       compression: zstd
       max_buffer_bytes: 67108864
       sasl:
         enabled: false
         mechanism: scram_sha_512
-        username: ''
+        username: ""
       tls:
         enabled: false
         ca_cert_file: null
@@ -90,14 +90,14 @@ properties:
       message_timeout_ms: 300000
       librdkafka_options: {}
   transforms:
-    $ref: '#/$defs/TransformConfig'
+    $ref: "#/$defs/TransformConfig"
     default:
       dir: null
       files: null
   enrichment_tables:
     type: array
     items:
-      $ref: '#/$defs/EnrichmentTableConfig'
+      $ref: "#/$defs/EnrichmentTableConfig"
     default: []
 $defs:
   PipelineConfig:
@@ -127,8 +127,8 @@ $defs:
     type: object
     properties:
       transport:
-        description: '`bus` consumes `topics`; `direct` accepts pushes on `listen`.'
-        $ref: '#/$defs/Transport'
+        description: "`bus` consumes `topics`; `direct` accepts pushes on `listen`."
+        $ref: "#/$defs/Transport"
         default: bus
       listen:
         description: Address the Push listener binds on the direct transport.
@@ -156,13 +156,13 @@ $defs:
         minimum: 0
         default: 67108864
       sasl:
-        $ref: '#/$defs/SaslConfig'
+        $ref: "#/$defs/SaslConfig"
         default:
           enabled: false
           mechanism: scram_sha_512
-          username: ''
+          username: ""
       tls:
-        $ref: '#/$defs/TlsConfig'
+        $ref: "#/$defs/TlsConfig"
         default:
           enabled: false
           ca_cert_file: null
@@ -204,7 +204,7 @@ $defs:
           Push answered OK -- only once the transformed records are delivered to
           the sink, so a crash or a failed send re-delivers rather than loses them.
           Off, it is acknowledged at receipt.
-        $ref: '#/$defs/AcknowledgementsConfig'
+        $ref: "#/$defs/AcknowledgementsConfig"
         default:
           enabled: true
   Transport:
@@ -236,12 +236,12 @@ $defs:
         type: boolean
         default: false
       mechanism:
-        description: 'SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`.'
+        description: "SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`."
         type: string
         default: scram_sha_512
       username:
         type: string
-        default: ''
+        default: ""
       password:
         type: string
         x-scalo-secret: true
@@ -256,17 +256,17 @@ $defs:
       ca_cert_file:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       cert_file:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       key_file:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       skip_verify:
         type: boolean
@@ -302,8 +302,8 @@ $defs:
     type: object
     properties:
       transport:
-        description: '`bus` produces to `topic`; `direct` pushes to `endpoint`.'
-        $ref: '#/$defs/Transport'
+        description: "`bus` produces to `topic`; `direct` pushes to `endpoint`."
+        $ref: "#/$defs/Transport"
         default: bus
       endpoint:
         description: Downstream Push listener on the direct transport, e.g. the loader.
@@ -317,13 +317,13 @@ $defs:
         - localhost:9092
       topic:
         type: string
-        default: ''
+        default: ""
       key_field:
         description: Event field path for Kafka partition key (e.g., ".`org_id`").
         type: string
-        default: ''
+        default: ""
       compression:
-        description: 'Compression: none, gzip, lz4, snappy, zstd.'
+        description: "Compression: none, gzip, lz4, snappy, zstd."
         type: string
         default: zstd
       max_buffer_bytes:
@@ -333,13 +333,13 @@ $defs:
         minimum: 0
         default: 67108864
       sasl:
-        $ref: '#/$defs/SaslConfig'
+        $ref: "#/$defs/SaslConfig"
         default:
           enabled: false
           mechanism: scram_sha_512
-          username: ''
+          username: ""
       tls:
-        $ref: '#/$defs/TlsConfig'
+        $ref: "#/$defs/TlsConfig"
         default:
           enabled: false
           ca_cert_file: null
@@ -369,13 +369,13 @@ $defs:
         description: Directory to load all .vrl transform files from (sorted by filename).
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       files:
         description: Explicit list of .vrl file paths (loaded in order).
         type:
         - array
-        - 'null'
+        - "null"
         items:
           type: string
         default: null
@@ -389,13 +389,13 @@ $defs:
     type: object
     properties:
       name:
-        description: 'Table name used in VRL: `get_enrichment_table_record("name", ...)`.'
+        description: "Table name used in VRL: `get_enrichment_table_record(\"name\", ...)`."
         type: string
-        default: ''
+        default: ""
       path:
         description: Path to enrichment data file (legacy flat format — kept for backwards compat).
         type: string
-        default: ''
+        default: ""
       key_columns:
         description: Lookup key column(s). Multiple columns are concatenated with `\x00`.
         type: array
@@ -405,8 +405,8 @@ $defs:
       source:
         description: Source definition (new tagged format). Takes precedence over `path`.
         anyOf:
-        - $ref: '#/$defs/EnrichmentSourceConfig'
-        - type: 'null'
+        - $ref: "#/$defs/EnrichmentSourceConfig"
+        - type: "null"
         default: null
       schema:
         description: |-
@@ -425,8 +425,8 @@ $defs:
       refresh:
         description: Optional periodic refresh.
         anyOf:
-        - $ref: '#/$defs/RefreshConfig'
-        - type: 'null'
+        - $ref: "#/$defs/RefreshConfig"
+        - type: "null"
         default: null
       max_bytes:
         description: |-
@@ -435,7 +435,7 @@ $defs:
           so enrichment memory counts against the pod memory budget.
         type:
         - integer
-        - 'null'
+        - "null"
         format: uint64
         minimum: 0
         default: null
@@ -444,65 +444,65 @@ $defs:
     oneOf:
     - type: object
       properties:
+        type:
+          type: string
+          const: file
         path:
           type: string
         format:
           anyOf:
-          - $ref: '#/$defs/FileFormat'
-          - type: 'null'
+          - $ref: "#/$defs/FileFormat"
+          - type: "null"
           default: null
-        type:
-          type: string
-          const: file
       required:
       - type
       - path
     - type: object
       properties:
-        path:
-          type: string
         type:
           type: string
           const: mmdb
+        path:
+          type: string
       required:
       - type
       - path
     - type: object
       properties:
+        type:
+          type: string
+          const: stix
         path:
           type:
           - string
-          - 'null'
+          - "null"
           default: null
         url:
           type:
           - string
-          - 'null'
+          - "null"
           default: null
         collection:
           type:
           - string
-          - 'null'
+          - "null"
           default: null
         auth:
           anyOf:
-          - $ref: '#/$defs/StixAuthConfig'
-          - type: 'null'
+          - $ref: "#/$defs/StixAuthConfig"
+          - type: "null"
           default: null
-        type:
-          type: string
-          const: stix
       required:
       - type
     - type: object
       properties:
+        type:
+          type: string
+          const: sqlite
         path:
           type: string
         query:
           type: string
-        type:
-          type: string
-          const: sqlite
       required:
       - type
       - path
@@ -520,22 +520,22 @@ $defs:
     type: object
     properties:
       type:
-        description: 'Auth type: `bearer`, `basic`, or `api_key`.'
+        description: "Auth type: `bearer`, `basic`, or `api_key`."
         type: string
       token_env:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       username_env:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
       password_env:
         type:
         - string
-        - 'null'
+        - "null"
         default: null
     required:
     - type
@@ -544,7 +544,7 @@ $defs:
     type: object
     properties:
       interval_secs:
-        description: 'Refresh interval in seconds. Minimum enforced: 60.'
+        description: "Refresh interval in seconds. Minimum enforced: 60."
         type: integer
         format: uint64
         minimum: 0

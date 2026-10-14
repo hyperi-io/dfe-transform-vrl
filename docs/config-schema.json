@@ -484,6 +484,10 @@
         {
           "type": "object",
           "properties": {
+            "type": {
+              "type": "string",
+              "const": "file"
+            },
             "path": {
               "type": "string"
             },
@@ -497,10 +501,6 @@
                 }
               ],
               "default": null
-            },
-            "type": {
-              "type": "string",
-              "const": "file"
             }
           },
           "required": [
@@ -511,12 +511,12 @@
         {
           "type": "object",
           "properties": {
-            "path": {
-              "type": "string"
-            },
             "type": {
               "type": "string",
               "const": "mmdb"
+            },
+            "path": {
+              "type": "string"
             }
           },
           "required": [
@@ -527,6 +527,10 @@
         {
           "type": "object",
           "properties": {
+            "type": {
+              "type": "string",
+              "const": "stix"
+            },
             "path": {
               "type": [
                 "string",
@@ -558,10 +562,6 @@
                 }
               ],
               "default": null
-            },
-            "type": {
-              "type": "string",
-              "const": "stix"
             }
           },
           "required": [
@@ -571,15 +571,15 @@
         {
           "type": "object",
           "properties": {
+            "type": {
+              "type": "string",
+              "const": "sqlite"
+            },
             "path": {
               "type": "string"
             },
             "query": {
               "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "sqlite"
             }
           },
           "required": [

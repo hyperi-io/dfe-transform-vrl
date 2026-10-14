@@ -270,9 +270,8 @@ mod tests {
     #[test]
     fn every_catalogued_enrichment_source_is_in_the_shipped_build() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".hyperi-ci.yaml");
-        let ci: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str(&std::fs::read_to_string(&path).expect("read .hyperi-ci.yaml"))
-                .expect(".hyperi-ci.yaml parses");
+        let ci: serde_json::Value = scalo::yaml::from_path(&path, scalo::yaml::Profile::Config)
+            .expect(".hyperi-ci.yaml parses");
         let features = |stage: &str| -> Vec<String> {
             ci[stage]["rust"]["features"]
                 .as_str()

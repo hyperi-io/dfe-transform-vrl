@@ -35,7 +35,7 @@ pub enum Error {
     Serialisation(String),
 
     #[error("YAML error: {0}")]
-    Yaml(#[from] serde_yaml_ng::Error),
+    Yaml(#[from] scalo::yaml::YamlError),
 
     #[error("validation error: {0}")]
     Validation(String),
@@ -107,7 +107,12 @@ mod tests {
 
     #[test]
     fn from_yaml_error() {
-        let yaml_err = serde_yaml_ng::from_str::<serde_yaml_ng::Value>("{{invalid").unwrap_err();
+        let yaml_err = scalo::yaml::from_str::<serde_json::Value>(
+            "{{invalid",
+            "config.yaml",
+            scalo::yaml::Profile::Config,
+        )
+        .unwrap_err();
         let e: Error = yaml_err.into();
         assert!(matches!(e, Error::Yaml(_)));
     }

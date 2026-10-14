@@ -1,6 +1,6 @@
 - kind: transform
   name: vrl
-  description: 'Vector Remap Language transform engine: applies ordered .vrl programs to each event.'
+  description: "Vector Remap Language transform engine: applies ordered .vrl programs to each event."
   maturity: stable
   fields:
   - name: dir

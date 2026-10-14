@@ -138,8 +138,9 @@ mod tests {
             batch_timeout_ms: 500,
             key_field: ".org_id".to_string(),
         };
-        let yaml = serde_yaml_ng::to_string(&hot).unwrap();
-        let deserialized: HotConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        let yaml = scalo::yaml::to_string(&hot).unwrap();
+        let deserialized: HotConfig =
+            scalo::yaml::from_str(&yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         assert_eq!(hot, deserialized);
     }
 }
