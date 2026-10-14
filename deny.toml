@@ -21,8 +21,8 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.
 # Empty list = nothing tolerated; CI fails on any new advisory.
 ignore = [
-    # unsafe-libyaml arrives via figment and serde_yaml_ng; tracked in hyperi-io/scalo-rs#341.
-    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, not vulnerable; it parses only operator-supplied config YAML via serde_yaml and serde_yaml_ng (figment, scalo), never untrusted input; drop when scalo moves to a maintained YAML parser" },
+    # unsafe-libyaml arrives through the vrl crate's serde_yaml_ng, a normal and a build dependency of it; revisit when vrl moves off serde_yaml_ng.
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, with no known CVE (RUSTSEC-2023-0075 was fixed in 0.2.10). Only operator-written VRL reaches it on event data: the stdlib's parse_yaml hands libyaml what the event carries, and ingested data cannot add that call. Config YAML parses through scalo's serde-saphyr. Drop when the vrl crate moves off serde_yaml_ng." },
 ]
 
 [licenses]
