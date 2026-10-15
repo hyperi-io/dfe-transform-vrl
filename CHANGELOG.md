@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.35](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.34...v1.1.35) (2026-10-15)
+
+### Bug Fixes
+
+* rebuild on scalo 2.14.15 and rustls 0.23.46 ([07445be](https://github.com/hyperi-io/dfe-transform-vrl/commit/07445be3ecae701c08cd15c13d6827d2cdf47f84))
+
 ## [1.1.34](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.33...v1.1.34) (2026-10-14)
 
 ### Bug Fixes
