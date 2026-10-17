@@ -9,7 +9,7 @@
 //! Configuration validation.
 
 use crate::Result;
-use crate::config::loader::{Config, SaslConfig};
+use crate::config::loader::{Config, SaslConfig, SaslMechanism};
 
 impl Config {
     /// Validate the configuration.
@@ -82,13 +82,8 @@ impl Config {
 
         validate_kafka_security(self)?;
 
-        // Transforms — must have at least dir or files
-        if self.transforms.dir.is_none() && self.transforms.files.is_none() {
-            return Err(crate::Error::Validation(
-                "transforms.dir or transforms.files must be specified".into(),
-            ));
-        }
-
+        // No transforms.dir or transforms.files is no program yet, which idles
+        // (see `work_state`) rather than refusing.
         Ok(())
     }
 
@@ -117,11 +112,11 @@ fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
     if !sasl.enabled {
         return Ok(());
     }
-    let valid_mechanisms = ["plain", "scram_sha_256", "scram_sha_512"];
-    if !valid_mechanisms.contains(&sasl.mechanism.as_str()) {
+    if SaslMechanism::parse(&sasl.mechanism).is_none() {
         return Err(crate::Error::Validation(format!(
-            "{prefix}.mechanism must be one of: {}",
-            valid_mechanisms.join(", ")
+            "{prefix}.mechanism must be one of: plain, scram_sha_256, scram_sha_512 \
+             (or PLAIN, SCRAM-SHA-256, SCRAM-SHA-512), got '{}'",
+            sasl.mechanism
         )));
     }
     // librdkafka's SCRAM check is a NULL check that an empty string passes, so
@@ -215,20 +210,59 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
+    /// The chart renders `DFE_TRANSFORM_TRANSFORMS_DIR` empty until the
+    /// source's program is written, so a config naming no transforms is a
+    /// transform waiting for its program, not a bad config.
     #[test]
-    fn test_no_transforms() {
+    fn no_transforms_dir_or_files_idles_rather_than_refusing() {
         let mut config = minimal_config();
         config.transforms.dir = None;
         config.transforms.files = None;
-        assert!(config.validate().is_err());
+
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            config.work_state().reason(),
+            Some("no VRL program in the transforms this config names")
+        );
     }
 
     #[test]
-    fn test_invalid_sasl_mechanism() {
-        let mut config = minimal_config();
-        config.source.sasl.enabled = true;
-        config.source.sasl.mechanism = "SCRAM-SHA-512".to_string();
-        assert!(config.validate().is_err());
+    fn an_unknown_sasl_mechanism_is_refused() {
+        for mechanism in ["GSSAPI", "OAUTHBEARER", "scram-sha-1", ""] {
+            let mut config = sasl_config();
+            config.source.sasl.mechanism = mechanism.to_string();
+
+            let err = config.validate().unwrap_err().to_string();
+            assert!(
+                err.contains("source.sasl.mechanism"),
+                "{mechanism:?}: expected the mechanism key in the error, got: {err}"
+            );
+        }
+    }
+
+    /// The Kafka Secret carries librdkafka's spelling, so it must validate
+    /// beside the config file's own.
+    #[test]
+    fn both_mechanism_spellings_validate() {
+        for mechanism in [
+            "PLAIN",
+            "SCRAM-SHA-256",
+            "SCRAM-SHA-512",
+            "plain",
+            "scram_sha_256",
+            "scram_sha_512",
+            "scram-sha-512",
+        ] {
+            let mut config = sasl_config();
+            config.source.sasl.mechanism = mechanism.to_string();
+            config.sink.sasl.mechanism = mechanism.to_string();
+
+            assert!(
+                config.validate().is_ok(),
+                "{mechanism}: {:?}",
+                config.validate()
+            );
+        }
     }
 
     /// A complete credential on both endpoints, which is what the chart's

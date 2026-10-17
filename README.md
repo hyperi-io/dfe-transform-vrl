@@ -108,6 +108,7 @@ anything not here is not read:
 | `DFE_TRANSFORM_PIPELINE_NAME` | `pipeline.name` |
 | `DFE_TRANSFORM_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
 | `DFE_TRANSFORM_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
+| `DFE_TRANSFORM_KAFKA_SASL_MECHANISM` | `source.sasl.mechanism` + `sink.sasl.mechanism` |
 | `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` | `source.tls.enabled` + `sink.tls.enabled`, set true when the value contains `SSL`, never set false |
 | `DFE_TRANSFORM_SOURCE_BROKERS` | `source.brokers` |
 | `DFE_TRANSFORM_SOURCE_TOPICS` | `source.topics` |
@@ -122,10 +123,7 @@ anything not here is not read:
 | `DFE_TRANSFORM_SINK_SASL_PASSWORD` | `sink.sasl.password` |
 | `DFE_TRANSFORM_TRANSFORMS_DIR` | `transforms.dir` |
 
-The chart mounts the Kafka Secret's `username` and `password` into both the
-`SOURCE_SASL_*` and the `SINK_SASL_*` pair, so one Secret serves both endpoints.
-The shared `KAFKA_SASL_*` pair reaches both endpoints for a deployment outside
-the chart, and the per-endpoint names override it.
+The chart mounts the Kafka Secret's `username` and `password` into both endpoint pairs, and its `sasl.mechanism` (`PLAIN`, `SCRAM-SHA-512`) into `KAFKA_SASL_MECHANISM`. Outside the chart the shared `KAFKA_SASL_*` names reach both endpoints, and the per-endpoint names override them.
 
 Either half turns SASL on, an enabled block still missing one once the env
 layer has run refuses to start, and the password is redacted on every output

@@ -31,7 +31,8 @@ use crate::Result;
 #[serde(default)]
 pub struct SaslConfig {
     pub enabled: bool,
-    /// SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`.
+    /// SASL mechanism: plain, `scram_sha_256`, `scram_sha_512`, or librdkafka's
+    /// `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, in any case.
     pub mechanism: String,
     pub username: String,
     // Skipping an unset password keeps the redaction constant out of the
@@ -47,6 +48,39 @@ impl Default for SaslConfig {
             mechanism: "scram_sha_512".to_string(),
             username: String::new(),
             password: SensitiveString::default(),
+        }
+    }
+}
+
+/// A SASL mechanism the Kafka clients authenticate with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaslMechanism {
+    Plain,
+    ScramSha256,
+    ScramSha512,
+}
+
+impl SaslMechanism {
+    /// Read this config's spelling (`scram_sha_512`) or librdkafka's
+    /// (`SCRAM-SHA-512`), in any case, or `None` for a mechanism the transform
+    /// cannot authenticate with.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "plain" => Some(Self::Plain),
+            "scram_sha_256" => Some(Self::ScramSha256),
+            "scram_sha_512" => Some(Self::ScramSha512),
+            _ => None,
+        }
+    }
+
+    /// The name librdkafka takes in `sasl.mechanism`.
+    #[must_use]
+    pub const fn as_librdkafka(self) -> &'static str {
+        match self {
+            Self::Plain => "PLAIN",
+            Self::ScramSha256 => "SCRAM-SHA-256",
+            Self::ScramSha512 => "SCRAM-SHA-512",
         }
     }
 }
@@ -569,6 +603,12 @@ impl ApplyFlatEnv for Config {
         if let Some(v) = flat_env_string_sensitive(prefix, "KAFKA_SASL_PASSWORD") {
             self.source.sasl.password = SensitiveString::new(v.clone());
             self.sink.sasl.password = SensitiveString::new(v);
+        }
+        // The chart mounts it from the credential's Secret in librdkafka's
+        // spelling, and `validate` refuses a mechanism it does not know.
+        if let Some(v) = flat_env_string(prefix, "KAFKA_SASL_MECHANISM") {
+            self.source.sasl.mechanism.clone_from(&v);
+            self.sink.sasl.mechanism = v;
         }
         // A TLS listener turns TLS on for both endpoints. Any other protocol
         // leaves the setting alone: writing false would switch off TLS the
@@ -1225,6 +1265,7 @@ enrichment_tables:
             [
                 ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
                 ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", Some("PLAIN")),
             ],
             || {
                 let mut config = Config::default();
@@ -1235,6 +1276,93 @@ enrichment_tables:
 
         assert_eq!(shared.source.sasl.username, "shared-user");
         assert_eq!(shared.source.sasl.password.expose(), "shared-pass");
+        assert_eq!(shared.source.sasl.mechanism, "PLAIN");
+    }
+
+    /// `config` after the flat env layer and normalise, with
+    /// `DFE_TRANSFORM_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`)
+    /// beside a complete shared credential, as the chart renders a bus pod.
+    fn with_secret_mechanism(mechanism: Option<&str>) -> Config {
+        temp_env::with_vars(
+            [
+                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("api-key")),
+                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("api-secret")),
+                ("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", Some("SASL_SSL")),
+                ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", mechanism),
+            ],
+            || {
+                let mut config = Config::default();
+                config.sink.topic = "out".to_string();
+                config.transforms.dir = Some("/etc/dfe-transform-vrl-transforms".to_string());
+                config.apply_flat_env(ENV_PREFIX);
+                config.normalize();
+                config
+            },
+        )
+    }
+
+    /// The Kafka Secret carries the broker's mechanism in librdkafka's
+    /// spelling, and both clients must dial with it. Confluent Cloud serves
+    /// PLAIN alone, so a client left on the SCRAM default never joins.
+    #[test]
+    fn the_secret_mechanism_reaches_both_clients_in_every_spelling() {
+        for (given, sent) in [
+            ("PLAIN", "PLAIN"),
+            ("SCRAM-SHA-256", "SCRAM-SHA-256"),
+            ("SCRAM-SHA-512", "SCRAM-SHA-512"),
+            ("plain", "PLAIN"),
+            ("scram_sha_256", "SCRAM-SHA-256"),
+        ] {
+            let config = with_secret_mechanism(Some(given));
+
+            assert_eq!(config.source.sasl.mechanism, given);
+            assert_eq!(config.sink.sasl.mechanism, given);
+            config
+                .validate()
+                .unwrap_or_else(|e| panic!("{given}: refused at startup: {e}"));
+            let consumer = crate::kafka::build_consumer_config(&config.source);
+            let producer = crate::kafka::build_producer_config(&config.sink, "p");
+            assert_eq!(consumer.sasl_mechanism.as_deref(), Some(sent), "{given}");
+            assert_eq!(producer.sasl_mechanism.as_deref(), Some(sent), "{given}");
+        }
+    }
+
+    /// No mechanism in the env, or the empty one a plaintext broker's Secret
+    /// carries, leaves the clients on the built-in SCRAM-SHA-512.
+    #[test]
+    fn an_absent_or_empty_secret_mechanism_keeps_the_default() {
+        for mechanism in [None, Some("")] {
+            let config = with_secret_mechanism(mechanism);
+
+            assert_eq!(
+                config.source.sasl.mechanism, "scram_sha_512",
+                "{mechanism:?}"
+            );
+            assert_eq!(config.sink.sasl.mechanism, "scram_sha_512", "{mechanism:?}");
+            assert!(config.validate().is_ok(), "{mechanism:?}");
+            assert_eq!(
+                crate::kafka::build_consumer_config(&config.source)
+                    .sasl_mechanism
+                    .as_deref(),
+                Some("SCRAM-SHA-512")
+            );
+        }
+    }
+
+    /// A mechanism the transform cannot authenticate with stops startup rather
+    /// than reaching the broker.
+    #[test]
+    fn an_unknown_secret_mechanism_is_refused_at_startup() {
+        for mechanism in ["GSSAPI", "OAUTHBEARER", "SCRAM-SHA-1"] {
+            let err = with_secret_mechanism(Some(mechanism))
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("source.sasl.mechanism") && err.contains(mechanism),
+                "{mechanism}: expected the key and the value in the error, got: {err}"
+            );
+        }
     }
 
     /// One cluster with one SCRAM principal is the default shape, so the shared
