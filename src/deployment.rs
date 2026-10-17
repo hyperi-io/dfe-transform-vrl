@@ -149,8 +149,9 @@ pub fn contract() -> DeploymentContract {
 
 /// The Kafka Secret the chart mounts into each endpoint's SASL env vars.
 ///
-/// `Config::apply_flat_env` reads these per-endpoint names. Each `key_name` is
-/// distinct because the chart renders it as a values key.
+/// `Config::apply_flat_env` reads these names: a credential per endpoint, and
+/// one mechanism for both, since the Secret names its broker's. Each
+/// `key_name` is distinct because the chart renders it as a values key.
 fn secrets() -> Vec<SecretGroupContract> {
     let env = |env_var: &str, key_name: &str, secret_key: &str| SecretEnvContract {
         env_var: env_var.into(),
@@ -179,6 +180,11 @@ fn secrets() -> Vec<SecretGroupContract> {
                 "DFE_TRANSFORM_SINK_SASL_PASSWORD",
                 "sink-password",
                 "password",
+            ),
+            env(
+                "DFE_TRANSFORM_KAFKA_SASL_MECHANISM",
+                "mechanism",
+                "sasl.mechanism",
             ),
         ],
     )]
@@ -432,7 +438,20 @@ mod tests {
         assert_eq!(c.secrets.len(), 1);
         assert_eq!(c.secrets[0].group_name, "kafka");
         assert!(!c.secrets[0].optional);
-        assert_eq!(c.secrets[0].env_vars.len(), 4);
+        assert_eq!(c.secrets[0].env_vars.len(), 5);
+    }
+
+    /// The broker's mechanism is the `sasl.mechanism` key beside the credential
+    /// in the Kafka Secret, so a client never falls back to its own default.
+    #[test]
+    fn test_contract_mounts_the_mechanism_from_the_kafka_secret() {
+        let c = contract();
+        let mechanism = c.secrets[0]
+            .env_vars
+            .iter()
+            .find(|env| env.env_var == "DFE_TRANSFORM_KAFKA_SASL_MECHANISM")
+            .expect("the kafka group mounts the mechanism");
+        assert_eq!(mechanism.secret_key, "sasl.mechanism");
     }
 
     /// The chart mounts a Secret under every declared name, so a name the
@@ -440,7 +459,7 @@ mod tests {
     ///
     /// Each name spells the field it fills -- `DFE_TRANSFORM_SINK_SASL_PASSWORD`
     /// is `sink.sasl.password` -- so a name read into the other endpoint fails
-    /// here too.
+    /// here too. A shared `KAFKA_SASL_*` name spells the field on both.
     #[test]
     fn test_every_contract_secret_env_var_reaches_the_config() {
         use scalo::config::flat_env::ApplyFlatEnv;
@@ -454,7 +473,16 @@ mod tests {
                     .env_var
                     .strip_prefix(&format!("{prefix}_"))
                     .unwrap_or_else(|| panic!("{} lacks the {prefix} prefix", env.env_var));
-                let pointer = format!("/{}", field.to_ascii_lowercase().replace('_', "/"));
+                let path = |field: &str| field.to_ascii_lowercase().replace('_', "/");
+                let pointers: Vec<String> = field.strip_prefix("KAFKA_").map_or_else(
+                    || vec![format!("/{}", path(field))],
+                    |shared| {
+                        ["source", "sink"]
+                            .iter()
+                            .map(|endpoint| format!("/{endpoint}/{}", path(shared)))
+                            .collect()
+                    },
+                );
 
                 let sentinel = format!("sentinel-{}", env.key_name);
                 let config = temp_env::with_var(&env.env_var, Some(&sentinel), || {
@@ -467,10 +495,10 @@ mod tests {
                 let applied = scalo::expose_during(|| {
                     serde_json::to_value(&config).expect("config serialises")
                 });
-                let reached = applied
-                    .pointer(&pointer)
-                    .and_then(serde_json::Value::as_str)
-                    == Some(sentinel.as_str());
+                let reached = pointers.iter().all(|pointer| {
+                    applied.pointer(pointer).and_then(serde_json::Value::as_str)
+                        == Some(sentinel.as_str())
+                });
                 // The message carries the env var and group names only, never a value.
                 assert!(
                     reached,
