@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.36](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.35...v1.1.36) (2026-10-17)
+
+### Bug Fixes
+
+* read the Kafka SASL mechanism from env ([#108](https://github.com/hyperi-io/dfe-transform-vrl/issues/108)) ([2fe08f4](https://github.com/hyperi-io/dfe-transform-vrl/commit/2fe08f4ce0cef993c12fa13373e5d4f63ec74a60))
+* rebuild on scalo 2.14.17 ([75ad171](https://github.com/hyperi-io/dfe-transform-vrl/commit/75ad171477c94b5b86e485cd251f3e3970169afd))
+
 ## [1.1.35](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.34...v1.1.35) (2026-10-15)
 
 ### Bug Fixes
