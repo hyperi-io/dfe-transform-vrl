@@ -150,12 +150,8 @@ fn apply_sasl_tls(
     tls: &config::TlsConfig,
 ) {
     if sasl.enabled {
-        let mechanism = match sasl.mechanism.as_str() {
-            "plain" => "PLAIN",
-            "scram_sha_256" => "SCRAM-SHA-256",
-            "scram_sha_512" => "SCRAM-SHA-512",
-            other => other,
-        };
+        let mechanism = config::SaslMechanism::parse(&sasl.mechanism)
+            .map_or(sasl.mechanism.as_str(), |known| known.as_librdkafka());
         kafka_config.sasl_mechanism = Some(mechanism.to_string());
         kafka_config.sasl_username = Some(sasl.username.clone());
         kafka_config.sasl_password = Some(sasl.password.clone());
@@ -468,5 +464,34 @@ mod tests {
         source.sasl.mechanism = "plain".into();
         let config = build_consumer_config(&source);
         assert_eq!(config.sasl_mechanism, Some("PLAIN".into()));
+    }
+
+    /// The Kafka Secret's spelling reaches librdkafka as librdkafka's own name.
+    #[test]
+    fn librdkafka_mechanism_spellings_reach_the_client_unchanged() {
+        for (given, sent) in [
+            ("PLAIN", "PLAIN"),
+            ("SCRAM-SHA-256", "SCRAM-SHA-256"),
+            ("SCRAM-SHA-512", "SCRAM-SHA-512"),
+            ("scram-sha-512", "SCRAM-SHA-512"),
+        ] {
+            let mut source = default_source();
+            source.sasl.enabled = true;
+            source.sasl.mechanism = given.into();
+            assert_eq!(
+                build_consumer_config(&source).sasl_mechanism.as_deref(),
+                Some(sent),
+                "consumer, {given}"
+            );
+
+            let mut sink = default_sink();
+            sink.sasl.enabled = true;
+            sink.sasl.mechanism = given.into();
+            assert_eq!(
+                build_producer_config(&sink, "p").sasl_mechanism.as_deref(),
+                Some(sent),
+                "producer, {given}"
+            );
+        }
     }
 }

@@ -45,7 +45,8 @@ pipeline:
 #   commit_interval_ms: 5000
 #   sasl:
 #     enabled: true
-#     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512
+#     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512, or PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+#     # DFE_TRANSFORM_KAFKA_SASL_MECHANISM sets it for source and sink.
 #     # This file is NOT interpolated -- a ${VAR} here reaches the broker as a
 #     # literal. Supply credentials by environment instead:
 #     #   DFE_TRANSFORM_KAFKA_SASL_USERNAME   (feeds source and sink)
