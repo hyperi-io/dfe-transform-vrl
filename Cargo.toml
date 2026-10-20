@@ -66,7 +66,7 @@ bytes = ">=1.12.1, <2"
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = "2.14.15", features = [
+scalo = { version = "2.14.18", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -177,7 +177,7 @@ testcontainers-modules = { version = ">=0.15.0, <0.16", features = ["kafka"] }
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport.
-scalo = { version = "2.14.15", features = ["transport-memory"] }
+scalo = { version = "2.14.18", features = ["transport-memory"] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
