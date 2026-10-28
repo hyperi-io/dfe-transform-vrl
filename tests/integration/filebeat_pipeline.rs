@@ -75,9 +75,9 @@ fn field<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
 }
 
 fn str_field(value: &Value, path: &str) -> Option<String> {
-    field(value, path).map(|v| match v {
-        Value::Bytes(b) => String::from_utf8_lossy(b).into_owned(),
-        other => other.to_string(),
+    field(value, path).map(|v| {
+        v.to_str_lossy()
+            .map_or_else(|| v.to_string(), std::borrow::Cow::into_owned)
     })
 }
 

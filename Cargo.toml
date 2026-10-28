@@ -94,7 +94,7 @@ scalo = { version = "2.14.20", features = [
 schemars = { version = ">=1.2.2, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # VRL — Vector Remap Language (embedded transform engine)
-vrl = ">=0.34.0, <0.35"
+vrl = ">=0.37.0, <0.38"
 # Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
 # same version range as vrl so cargo unifies to one chrono-tz.
 chrono-tz = ">=0.10.4, <0.11"
