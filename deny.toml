@@ -21,6 +21,24 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.
 # Empty list = nothing tolerated; CI fails on any new advisory.
 ignore = [
+    # vrl 0.34 -> zstd 0.13 -> zstd-safe 7.3 -> zstd-sys 2.1.1. The fix is zstd >= 0.14.3, which vrl's `zstd = "0.13"` excludes, so `cargo update` cannot reach it.
+    # vrl calls only zstd::decode_all and zstd::encode_all, each on a fresh owned context, with zstd's features limited to std and wasm. Drop all of these when vrl moves to zstd 0.14.
+    { id = "RUSTSEC-2026-0391", reason = "zstd Encoder/Decoder::with_context reuses a borrowed context. vrl never calls it, decode_all and encode_all build their own." },
+    { id = "RUSTSEC-2026-0395", reason = "CParameter::StableInBuffer needs zstd-safe's experimental feature, which is off, and nothing sets the parameter." },
+    { id = "RUSTSEC-2026-0396", reason = "The Seekable API needs zstd-safe's seekable feature, which is off." },
+    { id = "RUSTSEC-2026-0397", reason = "OutBuffer::around_pos is called by neither zstd 0.13.3 nor vrl." },
+    { id = "RUSTSEC-2026-0398", reason = "Seekable::decompress needs zstd-safe's seekable feature, which is off." },
+    { id = "RUSTSEC-2026-0399", reason = "init_using_cdict and init_using_ddict are called by neither zstd 0.13.3 nor vrl." },
+    { id = "RUSTSEC-2026-0400", reason = "Needs a one-shot DCtx::decompress on a context holding an open stream. decode_all streams on its own fresh context and loads no dictionary." },
+    { id = "RUSTSEC-2026-0401", reason = "train_from_buffer builds dictionaries, which vrl never does." },
+    { id = "RUSTSEC-2026-0402", reason = "CCtx::try_clone needs zstd-safe's experimental and zstdmt features, both off." },
+    { id = "RUSTSEC-2026-0403", reason = "Needs a corrupt legacy frame (zstd-sys legacy feature, off) through zstd::stream::write::Decoder. vrl's decode_zstd uses decode_all, which the advisory lists as unaffected." },
+    { id = "RUSTSEC-2026-0404", reason = "DCtx::try_clone needs zstd-safe's experimental feature, which is off." },
+    { id = "RUSTSEC-2026-0405", reason = "SeekableCStream needs zstd-safe's seekable feature, which is off." },
+    { id = "RUSTSEC-2026-0406", reason = "Needs a multithreaded (zstdmt, off) context changed mid-frame. encode_all sets the level once on a new context." },
+    { id = "RUSTSEC-2026-0410", reason = "The allocator shim is compiled for wasm32 only, and this binary targets linux and macos on x86_64 and aarch64." },
+    # vrl -> aes-siv -> cmac and community-id -> sha1, both on digest 0.10 -> block-buffer 0.10.4. The fix is block-buffer >= 0.12.1, which digest 0.10 excludes.
+    { id = "GHSA-qwgh-2vcv-g2f7", reason = "Needs a caught panic inside the compress callback of a buffer that is then reused. The callbacks are the SHA-1 and AES block functions, which do not panic, and each hasher is dropped at the end of its VRL call. Drop when vrl takes digest 0.11." },
     # unsafe-libyaml arrives through the vrl crate's serde_yaml_ng, a normal and a build dependency of it; revisit when vrl moves off serde_yaml_ng.
     { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, with no known CVE (RUSTSEC-2023-0075 was fixed in 0.2.10). Only operator-written VRL reaches it on event data: the stdlib's parse_yaml hands libyaml what the event carries, and ingested data cannot add that call. Config YAML parses through scalo's serde-saphyr. Drop when the vrl crate moves off serde_yaml_ng." },
 ]
