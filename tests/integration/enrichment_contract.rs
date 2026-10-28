@@ -249,6 +249,28 @@ fn case_sensitive_defaults_to_true_and_can_be_turned_off() {
     assert_eq!(user.as_object().unwrap().get("id"), Some(&Value::from("1")));
 }
 
+/// VRL 0.37 returns some strings as `Value::String` rather than `Value::Bytes`.
+/// A condition built by a function must match the CSV cells either way.
+#[test]
+fn a_computed_string_condition_matches_like_a_literal() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = users_registry(dir.path());
+
+    for source in [
+        r#".user = get_enrichment_table_record!("users", {"name": slice!("xBob", 1)})"#,
+        r#".user = get_enrichment_table_record!("users", {"name": join!(["B", "ob"])})"#,
+        r#".user = get_enrichment_table_record!("users", {"name": downcase("BOB")}, case_sensitive: false)"#,
+    ] {
+        let event = run(source, Arc::clone(&registry)).unwrap_or_else(|e| panic!("{source}: {e}"));
+        let user = field(&event, "user").unwrap();
+        assert_eq!(
+            user.as_object().unwrap().get("id"),
+            Some(&Value::from("1")),
+            "{source}"
+        );
+    }
+}
+
 #[test]
 fn wildcard_matches_rows_the_condition_value_does_not() {
     // vector 0.58.0 returns both active rows for this call.

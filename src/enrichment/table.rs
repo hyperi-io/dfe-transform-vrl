@@ -95,9 +95,27 @@ impl Condition {
 ///
 /// Column values are joined with a `\x00` null-byte separator so that
 /// multi-column keys remain unambiguous. `Value::Bytes(b)` contributes its
-/// raw bytes; all other `Value` variants contribute `format!("{v}")`.
+/// raw bytes, as does `Value::String`. All other `Value` variants contribute
+/// `format!("{v}")`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompactKey(Box<[u8]>);
+
+/// The bytes of a string-typed value. VRL 0.37 carries a string as either
+/// `Value::Bytes` or `Value::String`, depending on what produced it.
+fn string_bytes(value: &Value) -> Option<&[u8]> {
+    match value {
+        Value::Bytes(b) => Some(b),
+        Value::String(s) => Some(s.as_bytes()),
+        _ => None,
+    }
+}
+
+fn push_key_bytes(buf: &mut Vec<u8>, value: &Value) {
+    match string_bytes(value) {
+        Some(b) => buf.extend_from_slice(b),
+        None => buf.extend_from_slice(format!("{value}").as_bytes()),
+    }
+}
 
 impl CompactKey {
     /// Build an index key from resolved lookup conditions.
@@ -124,10 +142,7 @@ impl CompactKey {
             }
             first = false;
 
-            match value {
-                Value::Bytes(b) => buf.extend_from_slice(b),
-                other => buf.extend_from_slice(format!("{other}").as_bytes()),
-            }
+            push_key_bytes(&mut buf, value);
         }
 
         Some(Self(buf.into_boxed_slice()))
@@ -150,10 +165,7 @@ impl CompactKey {
             first = false;
 
             if let Some(value) = row.get(&key) {
-                match value {
-                    Value::Bytes(b) => buf.extend_from_slice(b),
-                    other => buf.extend_from_slice(format!("{other}").as_bytes()),
-                }
+                push_key_bytes(&mut buf, value);
             }
             // Missing column → contributes empty bytes (separator still written)
         }
@@ -520,14 +532,12 @@ fn values_equal(cell: &Value, expected: &Value, case_sensitive: bool) -> bool {
     if case_sensitive {
         return cell == expected;
     }
-    match (cell, expected) {
-        (Value::Bytes(a), Value::Bytes(b)) => {
-            match (std::str::from_utf8(a), std::str::from_utf8(b)) {
-                (Ok(a), Ok(b)) => a.to_lowercase() == b.to_lowercase(),
-                (Err(_), Err(_)) => a == b,
-                _ => false,
-            }
-        }
+    match (string_bytes(cell), string_bytes(expected)) {
+        (Some(a), Some(b)) => match (std::str::from_utf8(a), std::str::from_utf8(b)) {
+            (Ok(a), Ok(b)) => a.to_lowercase() == b.to_lowercase(),
+            (Err(_), Err(_)) => a == b,
+            _ => false,
+        },
         _ => cell == expected,
     }
 }
@@ -562,7 +572,7 @@ fn mmdb_find_rows(
         );
     };
 
-    let Value::Bytes(bytes) = value else {
+    let Some(bytes) = string_bytes(value) else {
         return Err(format!(
             "condition field {field:?} must be a string IP address"
         ));

@@ -788,7 +788,7 @@ fn vrl_log_normalisation_pipeline() {
     assert!(
         obj.get("correlation_id")
             .unwrap()
-            .as_str()
+            .to_str_lossy()
             .unwrap()
             .contains("1700000000")
     );
@@ -867,7 +867,7 @@ fn vrl_pii_masking_pipeline() {
     let obj = event.as_object().unwrap();
     assert_eq!(obj.get("email").unwrap(), &Value::from("***MASKED***"));
     assert_eq!(obj.get("user_id").unwrap(), &Value::Integer(42));
-    let card = obj.get("card").unwrap().as_str().unwrap();
+    let card = obj.get("card").unwrap().to_str_lossy().unwrap();
     assert!(card.starts_with("****-****-****-"), "card: {card}");
     assert!(
         card.ends_with("3456"),

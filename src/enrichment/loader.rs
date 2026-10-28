@@ -116,8 +116,8 @@ impl ColumnSchema {
             return Ok(value);
         }
         match &value {
-            Value::Bytes(bytes) => {
-                let raw = String::from_utf8_lossy(bytes).into_owned();
+            Value::Bytes(_) | Value::String(_) => {
+                let raw = value.to_string_lossy().into_owned();
                 self.coerce(table_name, column, &raw)
             }
             _ => Ok(value),
@@ -566,6 +566,7 @@ pub fn estimate_table_bytes(map: &RowMap) -> u64 {
 fn estimate_value_bytes(v: &Value) -> u64 {
     match v {
         Value::Bytes(b) => 24 + b.len() as u64,
+        Value::String(s) => 24 + s.len() as u64,
         Value::Integer(_) | Value::Float(_) | Value::Boolean(_) | Value::Null => 16,
         Value::Object(obj) => {
             let mut size: u64 = 48;

@@ -504,7 +504,7 @@ mod complex_pipeline {
         }));
         assert!(run_vrl(&program, &mut event).is_ok());
         let obj = event.as_object().unwrap();
-        let msg = obj.get("message").unwrap().as_str().unwrap();
+        let msg = obj.get("message").unwrap().to_str_lossy().unwrap();
         assert_eq!(msg.len(), 1024);
         assert_eq!(obj.get("message_truncated"), Some(&Value::Boolean(true)));
     }
