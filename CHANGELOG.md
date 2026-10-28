@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.39](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.38...v1.1.39) (2026-10-28)
+
+### Bug Fixes
+
+* accept the zstd and block-buffer advisories with per-advisory reachability ([#116](https://github.com/hyperi-io/dfe-transform-vrl/issues/116)) ([303f16f](https://github.com/hyperi-io/dfe-transform-vrl/commit/303f16fd95d3fe18a482639066b0b2f19d02dd92)), closes [#114](https://github.com/hyperi-io/dfe-transform-vrl/issues/114)
+* declare the repo classification as product ([#115](https://github.com/hyperi-io/dfe-transform-vrl/issues/115)) ([ccc859a](https://github.com/hyperi-io/dfe-transform-vrl/commit/ccc859a1b08097a5678a989f6010965462acaf15))
+* rebuild on scalo 2.14.21 ([4847c29](https://github.com/hyperi-io/dfe-transform-vrl/commit/4847c292a7ea5ec5c4a674695cf952e90e807f67))
+* take pulldown-cmark to 0.13.5 for RUSTSEC-2026-0414 ([#119](https://github.com/hyperi-io/dfe-transform-vrl/issues/119)) ([0732a07](https://github.com/hyperi-io/dfe-transform-vrl/commit/0732a07326614c6d85beaf1a897d44e1d985d1c0))
+
 ## [1.1.38](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.37...v1.1.38) (2026-10-24)
 
 ### Bug Fixes
