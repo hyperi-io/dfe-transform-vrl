@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.40](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.39...v1.1.40) (2026-10-29)
+
+### Bug Fixes
+
+* 2.2.2 round on scalo 2.14.22 ([#122](https://github.com/hyperi-io/dfe-transform-vrl/issues/122)) ([08e89ae](https://github.com/hyperi-io/dfe-transform-vrl/commit/08e89ae1e434886c49cdf906786b48dc0a3f0f75))
+* bring the clippy config to the baseline ([#121](https://github.com/hyperi-io/dfe-transform-vrl/issues/121)) ([ecd9cb7](https://github.com/hyperi-io/dfe-transform-vrl/commit/ecd9cb7dc911cae7403b4b638fb31119d5534358))
+* **security:** take libz-sys 1.1.31 for RUSTSEC-2026-0418 ([#123](https://github.com/hyperi-io/dfe-transform-vrl/issues/123)) ([3c21386](https://github.com/hyperi-io/dfe-transform-vrl/commit/3c213866e3ab460861c3345bdf2b9b6b31669a40))
+
 ## [1.1.39](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.38...v1.1.39) (2026-10-28)
 
 ### Bug Fixes
