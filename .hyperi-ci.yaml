@@ -48,6 +48,7 @@ build:
   strategies:
     - native
   rust:
+    glibc_max: "2.41"
     # The shipped binary needs these too, not just the test stage - the
     # Dockerfile only COPYs the built binary, so a default build leaves the
     # container rejecting `type: mmdb` and `type: sqlite` tables at startup.
