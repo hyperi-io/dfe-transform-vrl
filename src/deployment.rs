@@ -13,10 +13,9 @@
 //! in its container image. The container is just the Rust binary.
 
 use scalo::deployment::{
-    CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
-    KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
-    SecretEnvContract, SecretGroupContract, SecurityContract, ServiceAccount,
-    base_image_from_cascade,
+    DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
+    NativeDepsContract, PortContract, ResourceList, ResourcesContract, SecretEnvContract,
+    SecretGroupContract, base_image_from_cascade,
 };
 
 /// The `source.transport` values that bind the Push listener: the name
@@ -54,7 +53,6 @@ pub fn contract() -> DeploymentContract {
                 .bound_from("source.listen")
                 .app_protocol("kubernetes.io/h2c"),
         ],
-        unbound_listen_paths: vec![],
         hot_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
@@ -79,7 +77,6 @@ pub fn contract() -> DeploymentContract {
             // Raw consumer-group lag rises when a downstream stage breaks, so it never scales this app.
             .with_kafka_trigger(KafkaLagTrigger::disabled()),
         ),
-        schema_version: CONTRACT_SCHEMA_VERSION,
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
@@ -108,9 +105,7 @@ pub fn contract() -> DeploymentContract {
                 memory: "512Mi".into(),
             },
         },
-        security: SecurityContract::default(),
-        singleton: false,
-        service_account: ServiceAccount::Own,
+        ..DeploymentContract::default()
     }
 }
 
@@ -298,7 +293,7 @@ mod tests {
     fn test_contract_carries_reflectable_config() {
         let c = contract();
         assert!(c.config_schema.is_some());
-        assert_eq!(c.schema_version, CONTRACT_SCHEMA_VERSION);
+        assert_eq!(c.schema_version, scalo::deployment::CONTRACT_SCHEMA_VERSION);
         assert_ne!(c.capabilities, [] as [scalo::Capability; 0]);
         // The VRL transform capability + the enrichment source family.
         assert!(c.capabilities.iter().any(|cap| cap.name == "vrl"));

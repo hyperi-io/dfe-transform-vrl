@@ -173,7 +173,7 @@ pub async fn run(
     // ASSIGNED partitions under memory pressure (member stays in the group,
     // consumer lag rises, KEDA scales up). When the governor is off the plain
     // consumer is used (byte-identical to the pre-governor data path).
-    let consumer = KafkaTransport::new(&consumer_config)
+    let consumer = KafkaTransport::receiver(&consumer_config)
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?
         .with_acknowledgements(config.source.acknowledgements);
@@ -312,7 +312,7 @@ pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
         return Ok(AnySender::Grpc(transport));
     }
 
-    let transport = KafkaTransport::new(&producer_config(config))
+    let transport = KafkaTransport::sender(&producer_config(config))
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))?;
     Ok(AnySender::Kafka(transport))
