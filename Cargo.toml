@@ -211,10 +211,10 @@ panic = "deny"
 dbg_macro = "deny"
 todo = "warn"
 unimplemented = "warn"
+# Types keep descriptive names even where the module path repeats them, so call sites read without it.
 module_name_repetitions = "allow"
+# #[must_use] goes where dropping the value is a bug, not on every pure function.
 must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
 
 [profile.release]
 lto = "thin"

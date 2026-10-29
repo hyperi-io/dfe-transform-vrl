@@ -114,6 +114,10 @@ use crate::metrics::TransformMetrics;
 /// gate attached when self-regulation is on) or the armed Push listener -- and
 /// the sink, then hands the `recv -> process -> send -> release` loop to
 /// [`BatchEngine::pipeline`].
+///
+/// # Errors
+///
+/// Returns an error when the source or sink cannot be built, or the pipeline loop fails.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     config: &Config,
@@ -349,6 +353,10 @@ fn producer_config(config: &Config) -> KafkaConfig {
 /// Exposed `pub` so the e2e integration tests can drive a real Kafka round-trip
 /// with pre-built transports + a stand-alone engine, without going through the
 /// full `ServiceRuntime` bootstrap.
+///
+/// # Errors
+///
+/// Returns an error when the pipeline loop fails.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_governed_pipeline<R, S>(
     engine: &BatchEngine,
