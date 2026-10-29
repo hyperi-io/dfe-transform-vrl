@@ -57,9 +57,8 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
 /// The producer uses the same `KafkaTransport` but only the `send()` path.
 /// We configure it as a separate transport instance with sink brokers/auth.
 pub fn build_producer_config(sink: &config::SinkConfig, pipeline_name: &str) -> KafkaConfig {
-    // Producer profile: empty group (no subscription). scalo 2.9 dropped the
-    // explicit KafkaRole -- an empty group is the producer-only shape; the
-    // `topics` list is the produce destination, not a subscription.
+    // Producer profile: built through `KafkaTransport::sender`, so no consumer
+    // and no subscription. The `topics` list is the produce destination.
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
         brokers: sink.brokers.clone(),
@@ -96,7 +95,7 @@ pub fn build_producer_config(sink: &config::SinkConfig, pipeline_name: &str) -> 
 ///
 /// Returns an error when the Kafka consumer cannot be created from `config`.
 pub async fn create_consumer(config: &KafkaConfig) -> crate::Result<KafkaTransport> {
-    KafkaTransport::new(config)
+    KafkaTransport::receiver(config)
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))
 }
@@ -107,7 +106,7 @@ pub async fn create_consumer(config: &KafkaConfig) -> crate::Result<KafkaTranspo
 ///
 /// Returns an error when the Kafka producer cannot be created from `config`.
 pub async fn create_producer(config: &KafkaConfig) -> crate::Result<KafkaTransport> {
-    KafkaTransport::new(config)
+    KafkaTransport::sender(config)
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create producer: {e}")))
 }

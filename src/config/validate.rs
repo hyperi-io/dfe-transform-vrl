@@ -62,6 +62,7 @@ impl Config {
             }
         }
         validate_sasl("source.sasl", &self.source.sasl)?;
+        validate_librdkafka_options("source", &self.source.librdkafka_options)?;
 
         // Sink
         if self.sink.transport.is_direct() {
@@ -83,6 +84,7 @@ impl Config {
             }
         }
         validate_sasl("sink.sasl", &self.sink.sasl)?;
+        validate_librdkafka_options("sink", &self.sink.librdkafka_options)?;
 
         validate_kafka_security(self)?;
 
@@ -131,6 +133,33 @@ fn validate_sasl(prefix: &str, sasl: &SaslConfig) -> Result<()> {
              {prefix}.enabled is true -- an empty credential authenticates \
              against nothing and the pod still reports Ready"
         )));
+    }
+    Ok(())
+}
+
+/// Refuse a librdkafka option that carries a credential.
+///
+/// `librdkafka_options` is a free-form map of plain strings, serialised and
+/// shown as they are, so a password in it is neither marked in the schema nor
+/// redacted anywhere. The `sasl` block holds the SASL credential as a
+/// `SensitiveString`, which is.
+fn validate_librdkafka_options(
+    prefix: &str,
+    options: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    for key in options.keys() {
+        let lower = key.to_ascii_lowercase();
+        let secret = lower.contains("password")
+            || lower.contains("secret")
+            || lower.ends_with("key.pem")
+            || lower == "sasl.oauthbearer.config";
+        if secret {
+            return Err(crate::Error::Validation(format!(
+                "{prefix}.librdkafka_options.{key} carries a credential in plain text: set a SASL \
+                 credential in {prefix}.sasl, where it is redacted, and keep key material in a \
+                 file named by the tls block"
+            )));
+        }
     }
     Ok(())
 }
@@ -185,6 +214,47 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_credential_in_librdkafka_options_is_refused() {
+        for key in [
+            "sasl.password",
+            "ssl.key.password",
+            "ssl.keystore.password",
+            "sasl.oauthbearer.client.secret",
+            "ssl.key.pem",
+            "sasl.oauthbearer.config",
+        ] {
+            let mut config = minimal_config();
+            config
+                .source
+                .librdkafka_options
+                .insert(key.to_string(), "hunter2".to_string());
+            let err = config.validate().unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("source.librdkafka_options.{key}")),
+                "{err}"
+            );
+
+            let mut config = minimal_config();
+            config
+                .sink
+                .librdkafka_options
+                .insert(key.to_string(), "hunter2".to_string());
+            let err = config.validate().unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("sink.librdkafka_options.{key}")),
+                "{err}"
+            );
+        }
+
+        let mut config = minimal_config();
+        config
+            .source
+            .librdkafka_options
+            .insert("fetch.min.bytes".to_string(), "1".to_string());
+        config.validate().unwrap();
     }
 
     #[test]

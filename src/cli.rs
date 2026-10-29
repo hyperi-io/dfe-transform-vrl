@@ -102,6 +102,18 @@ impl ServiceApp for App {
         Ok(config)
     }
 
+    /// Say so for every dial this deployment has turned that reaches nothing,
+    /// before the idle gate, so an idle pipeline reports it too.
+    fn on_config_loaded(&self, config: &Config) {
+        config.warn_inert_settings();
+        crate::config::warn_unreachable_scalo_settings(self.common.config.as_deref());
+    }
+
+    /// Not ready until `run_service` installs the pipeline's check.
+    fn readiness_check(&self, _config: &Config) -> Option<scalo::metrics::ReadinessFn> {
+        Some(Arc::new(|| false))
+    }
+
     fn work_state(&self, config: &Config) -> scalo::lifecycle::WorkState {
         config.work_state()
     }
@@ -163,12 +175,24 @@ pub fn handle_emit_command(app: &App) -> Option<()> {
     match cmd {
         AppCommand::EmitDockerfile => {
             let contract = deployment::contract();
-            println!("{}", generate_dockerfile(&contract, None));
+            match generate_dockerfile(&contract, None) {
+                Ok(dockerfile) => println!("{dockerfile}"),
+                Err(e) => {
+                    eprintln!("fatal: the deployment contract is invalid: {e}");
+                    std::process::exit(1);
+                }
+            }
             Some(())
         }
         AppCommand::EmitCompose => {
             let contract = deployment::contract();
-            println!("{}", generate_compose_fragment(&contract));
+            match generate_compose_fragment(&contract) {
+                Ok(compose) => println!("{compose}"),
+                Err(e) => {
+                    eprintln!("fatal: the deployment contract is invalid: {e}");
+                    std::process::exit(1);
+                }
+            }
             Some(())
         }
         AppCommand::EmitContract => {
@@ -196,10 +220,6 @@ async fn run_transform_service(
         version = env!("CARGO_PKG_VERSION"),
         "starting dfe-transform-vrl"
     );
-
-    // Say so for every dial this deployment has turned that reaches nothing.
-    config.warn_inert_settings();
-    crate::config::warn_unreachable_scalo_settings(config_path.as_deref());
 
     // Log derived DFE topology — operators rely on this to confirm the
     // wrapper joined the right consumer group and resolves the right
@@ -335,7 +355,7 @@ async fn run_transform_service(
 
     // Reloadable config subset. Every field in it is on `INERT_SETTINGS`, so a
     // reload re-validates the file and changes no pipeline behaviour. Logged at
-    // debug: `warn_inert_settings` above is what an operator needs to see.
+    // debug: `warn_inert_settings` in `on_config_loaded` is what an operator needs to see.
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
     debug!(
         batch_size = config.pipeline.batch_size,
