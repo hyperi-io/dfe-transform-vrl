@@ -35,6 +35,10 @@ impl EnrichmentRegistry {
     /// Dispatches on `resolved_source()` to call the appropriate loader.
     /// STIX HTTP sources are not supported here (require async context).
     /// STIX file sources and all other types are loaded synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any table fails to load.
     pub fn load(configs: &[EnrichmentTableConfig]) -> crate::Result<Self> {
         let mut tables = FxHashMap::default();
 

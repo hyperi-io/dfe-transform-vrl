@@ -56,6 +56,10 @@ enum ColumnType {
 
 impl ColumnSchema {
     /// Compile a `column -> type name` map, failing on an unknown type name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown column type name.
     pub fn compile(spec: &BTreeMap<String, String>, table_name: &str) -> crate::Result<Self> {
         let mut columns = BTreeMap::new();
         for (column, type_name) in spec {
@@ -82,6 +86,10 @@ impl ColumnSchema {
     }
 
     /// Convert one cell, returning it unchanged when the column is undeclared.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `raw` does not parse as the declared column type.
     pub fn coerce(&self, table_name: &str, column: &str, raw: &str) -> crate::Result<Value> {
         let Some(column_type) = self.columns.get(column) else {
             return Ok(Value::from(raw));
@@ -164,6 +172,10 @@ pub(crate) fn union_columns(seen: &mut Vec<KeyString>, row: &ObjectMap) {
 ///
 /// Used by both `EnrichmentRegistry::load()` (startup) and the refresh loop.
 /// STIX and MMDB are handled separately (STIX is async, MMDB uses `TableData::Mmdb`).
+///
+/// # Errors
+///
+/// Returns an error when the source cannot be read or parsed, or the source type is not loaded here.
 pub fn load_from_source(
     source: &EnrichmentSourceConfig,
     table_name: &str,
@@ -237,6 +249,10 @@ pub fn detect_format(path: &str) -> FileFormat {
 ///
 /// Uses the `csv` crate for RFC 4180 compliant parsing (handles quoted fields,
 /// embedded commas, and escaped quotes).
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, is not valid CSV, or lacks a key column.
 pub fn load_csv(
     path: &Path,
     table_name: &str,
@@ -312,6 +328,10 @@ pub fn load_csv(
 // ---------------------------------------------------------------------------
 
 /// Load a JSON array file into an `FxHashMap` keyed by the key columns.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, is not a JSON array, or lacks a key column.
 pub fn load_json(
     path: &Path,
     table_name: &str,
@@ -344,6 +364,10 @@ pub fn load_json(
 // ---------------------------------------------------------------------------
 
 /// Load a YAML array file into an `FxHashMap` keyed by the key columns.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, is not a YAML array, or lacks a key column.
 pub fn load_yaml(
     path: &Path,
     table_name: &str,
