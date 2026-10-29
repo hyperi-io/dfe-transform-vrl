@@ -21,6 +21,10 @@ use crate::Result;
 ///
 /// Mutates the value in place. Returns the VRL program's return value
 /// (which is typically the last expression result, not the event itself).
+///
+/// # Errors
+///
+/// Returns an error when the VRL program aborts on the event.
 #[inline]
 pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
     let mut metadata = Value::Object(std::collections::BTreeMap::default());

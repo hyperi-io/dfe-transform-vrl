@@ -71,6 +71,10 @@ struct StixObject {
 /// - `path` takes precedence if both are set.
 ///
 /// Returns `FxHashMap` keyed by indicator value (IP, domain, hash, etc.).
+///
+/// # Errors
+///
+/// Returns an error when the file or URL cannot be read, or the bundle is not valid STIX 2.1 JSON.
 pub fn load_stix(
     path: Option<&str>,
     url: Option<&str>,
@@ -101,6 +105,10 @@ pub fn load_stix(
 ///
 /// Extracts indicator objects, parses their STIX patterns to get the
 /// indicator value (IP, domain, hash), and builds a lookup table.
+///
+/// # Errors
+///
+/// Returns an error when `json_bytes` is not valid STIX 2.1 JSON.
 pub fn materialise_stix(
     json_bytes: &[u8],
     table_name: &str,

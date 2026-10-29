@@ -193,6 +193,10 @@ impl TableData {
     /// pin every key column by equality and the comparison is case sensitive,
     /// and otherwise scans. The `Mmdb` backend takes exactly one condition,
     /// whose value is the IP address to look up.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a condition names an unknown column or, on the `Mmdb` backend, is not a single valid IP address.
     pub fn find_rows(
         &self,
         conditions: &[Condition],
@@ -346,6 +350,10 @@ impl EnrichmentTable {
     /// Return every row matching *all* `conditions`.
     ///
     /// See [`TableData::find_rows`] for the matching rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as [`TableData::find_rows`].
     pub fn find_rows(
         &self,
         conditions: &[Condition],
@@ -445,6 +453,10 @@ impl EnrichmentTable {
     /// they drop it; all subsequent loads see the new map.
     ///
     /// Returns `Err` if this table is not hash-map-backed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SwapError`] when the table is not hash-map-backed.
     pub fn swap_hashmap(&self, new_rows: RowMap) -> Result<(), SwapError> {
         match &self.data {
             TableData::HashMap(swap) => {

@@ -51,6 +51,10 @@ pub fn program_count(config: &TransformConfig) -> usize {
 /// If `dir` is specified, loads all `.vrl` files sorted by filename.
 /// If `files` is specified, loads files in the given order.
 /// Files are concatenated with newlines between them.
+///
+/// # Errors
+///
+/// Returns an error when a VRL file or directory cannot be read.
 pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
     let mut sources = Vec::new();
 
@@ -133,6 +137,10 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
 ///
 /// The compiled `Program` is reused for every event — zero per-event
 /// compilation cost.
+///
+/// # Errors
+///
+/// Returns an error when the VRL source fails to compile, or calls an enrichment function it may not.
 pub fn compile_vrl(
     source: &str,
     registry: Option<Arc<EnrichmentRegistry>>,

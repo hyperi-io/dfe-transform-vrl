@@ -13,6 +13,10 @@ use crate::config::loader::{Config, SaslConfig, SaslMechanism};
 
 impl Config {
     /// Validate the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first empty, out-of-range or inconsistent setting.
     pub fn validate(&self) -> Result<()> {
         if self.pipeline.name.is_empty() {
             return Err(crate::Error::Validation(
