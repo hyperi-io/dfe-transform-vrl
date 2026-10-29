@@ -1626,6 +1626,75 @@ source:
         );
     }
 
+    /// Every property whose name reads as a secret carries the secret marker in
+    /// the emitted schema, so the next credential field fails here instead of
+    /// shipping as plain config. `*_env` and `*_file` hold the name of a
+    /// variable or a path, not the value, and the exceptions below are columns
+    /// and field paths that happen to say `key`.
+    #[test]
+    fn a_secret_named_property_in_the_schema_is_marked_secret() {
+        const NOT_A_VALUE: [&str; 2] = ["key_field", "key_columns"];
+
+        fn reads_as_secret(name: &str) -> bool {
+            if name.ends_with("_env") || name.ends_with("_file") || NOT_A_VALUE.contains(&name) {
+                return false;
+            }
+            name.split('_')
+                .any(|part| matches!(part, "password" | "secret" | "token" | "key"))
+        }
+
+        fn walk(
+            node: &serde_json::Value,
+            path: &str,
+            unmarked: &mut Vec<String>,
+            seen: &mut usize,
+        ) {
+            match node {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::Object(props)) = map.get("properties") {
+                        for (name, prop) in props {
+                            let here = format!("{path}.{name}");
+                            // An array of secrets marks its items.
+                            let marked = prop["x-scalo-secret"] == true
+                                || prop["items"]["x-scalo-secret"] == true;
+                            if reads_as_secret(name) {
+                                *seen += 1;
+                                if !marked {
+                                    unmarked.push(here.clone());
+                                }
+                            }
+                            walk(prop, &here, unmarked, seen);
+                        }
+                    }
+                    for (key, value) in map {
+                        if key != "properties" {
+                            walk(value, &format!("{path}.{key}"), unmarked, seen);
+                        }
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        walk(item, path, unmarked, seen);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let schema = serde_json::to_value(schemars::schema_for!(Config)).unwrap();
+        let mut unmarked = Vec::new();
+        let mut seen = 0;
+        walk(&schema, "", &mut unmarked, &mut seen);
+        assert!(
+            seen > 0,
+            "the walk found no secret-named property, so it checked nothing"
+        );
+        assert!(
+            unmarked.is_empty(),
+            "secret-named properties without x-scalo-secret: {unmarked:?}"
+        );
+    }
+
     /// A password with no username must not leave the transport on scalo's
     /// plaintext default while the operator believes a credential was supplied.
     #[test]

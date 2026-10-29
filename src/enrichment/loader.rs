@@ -402,6 +402,11 @@ pub fn load_yaml(
 // ---------------------------------------------------------------------------
 
 /// Load rows from a `SQLite` query into a hash map.
+///
+/// # Errors
+///
+/// Returns an error when the database cannot be opened, the query fails, or
+/// its columns lack a key column.
 #[cfg(feature = "enrichment-sqlite")]
 pub fn load_sqlite(
     path: &Path,
@@ -485,6 +490,10 @@ fn sqlite_value_to_vrl(row: &rusqlite::Row<'_>, idx: usize) -> Value {
 // ---------------------------------------------------------------------------
 
 /// Load a `MaxMind` MMDB file. Returns the reader directly (not a hash map).
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read as an MMDB database.
 #[cfg(feature = "enrichment-mmdb")]
 pub fn load_mmdb(path: &Path, table_name: &str) -> crate::Result<maxminddb::Reader<Vec<u8>>> {
     maxminddb::Reader::open_readfile(path).map_err(|e| {

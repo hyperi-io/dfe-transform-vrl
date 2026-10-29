@@ -13,10 +13,9 @@
 //! in its container image. The container is just the Rust binary.
 
 use scalo::deployment::{
-    CONTRACT_SCHEMA_VERSION, DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger,
-    KedaConfig, KedaContract, NativeDepsContract, PortContract, ResourceList, ResourcesContract,
-    SecretEnvContract, SecretGroupContract, SecurityContract, ServiceAccount,
-    base_image_from_cascade,
+    DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
+    NativeDepsContract, PortContract, ResourceList, ResourcesContract, SecretEnvContract,
+    SecretGroupContract, base_image_from_cascade,
 };
 
 /// The `source.transport` values that bind the Push listener: the name
@@ -54,48 +53,13 @@ pub fn contract() -> DeploymentContract {
                 .bound_from("source.listen")
                 .app_protocol("kubernetes.io/h2c"),
         ],
-        unbound_listen_paths: vec![],
         hot_paths: vec![],
         entrypoint_args: vec![
             "--config".into(),
             "/etc/dfe-transform-vrl/config.yaml".into(),
         ],
         secrets: secrets(),
-        default_config: Some(serde_json::json!({
-            "pipeline": {
-                "name": "default",
-                "batch_size": 1000,
-                "batch_timeout_ms": 100
-            },
-            "source": {
-                "transport": "bus",
-                "listen": "0.0.0.0:6000",
-                "brokers": ["kafka:9092"],
-                "topics": ["raw_events"],
-                "group_id": "dfe-transform-vrl-default",
-                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
-                "tls": { "enabled": false },
-                "acknowledgements": { "enabled": true }
-            },
-            "sink": {
-                "transport": "bus",
-                "endpoint": "http://dfe-loader:6000",
-                "brokers": ["kafka:9092"],
-                "topic": "enriched_events",
-                "key_field": ".org_id",
-                "compression": "zstd",
-                "sasl": { "enabled": true, "mechanism": "scram_sha_512" },
-                "tls": { "enabled": false }
-            },
-            // No `metrics`, `logger` or `scaling` section: scalo's own defaults
-            // apply without one, and `config_schema` below describes `Config`
-            // alone. A deployment moves one in the rendered file or the env
-            // layer -- see `config::SCALO_CASCADE_SECTIONS`. Readiness is served
-            // by the metrics listener, so there is no `health` section either.
-            "transforms": {
-                "dir": "/etc/dfe-transform-vrl/transforms"
-            }
-        })),
+        default_config: default_config(),
         depends_on: vec!["kafka".into()],
         native_deps: NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image),
         image_profile: ImageProfile::Production,
@@ -113,7 +77,6 @@ pub fn contract() -> DeploymentContract {
             // Raw consumer-group lag rises when a downstream stage breaks, so it never scales this app.
             .with_kafka_trigger(KafkaLagTrigger::disabled()),
         ),
-        schema_version: CONTRACT_SCHEMA_VERSION,
         // scalo writes no vendor, licence or copyright of its own, so the labels
         // and the generated Dockerfile header carry exactly these.
         oci_labels: scalo::deployment::OciLabels {
@@ -142,9 +105,81 @@ pub fn contract() -> DeploymentContract {
                 memory: "512Mi".into(),
             },
         },
-        security: SecurityContract::default(),
-        singleton: false,
-        service_account: ServiceAccount::Own,
+        ..DeploymentContract::default()
+    }
+}
+
+/// The config keys the contract advertises as the deployment default, read
+/// from `Config::default()` so the two cannot drift.
+const DEFAULT_CONFIG_KEYS: [&str; 12] = [
+    "/pipeline/name",
+    "/pipeline/batch_size",
+    "/pipeline/batch_timeout_ms",
+    "/source/transport",
+    "/source/listen",
+    "/source/tls/enabled",
+    "/source/acknowledgements/enabled",
+    "/sink/transport",
+    "/sink/endpoint",
+    "/sink/key_field",
+    "/sink/compression",
+    "/sink/tls/enabled",
+];
+
+/// The values a deployment decides, which the app has no default for: the
+/// in-cluster broker and topics, the SCRAM credential the chart's Secret
+/// fills in, and the directory the chart mounts the transforms at.
+fn deployment_values() -> [(&'static str, serde_json::Value); 10] {
+    use serde_json::json;
+    [
+        ("/source/brokers", json!(["kafka:9092"])),
+        ("/source/topics", json!(["raw_events"])),
+        ("/source/group_id", json!("dfe-transform-vrl-default")),
+        ("/source/sasl/enabled", json!(true)),
+        ("/source/sasl/mechanism", json!("scram_sha_512")),
+        ("/sink/brokers", json!(["kafka:9092"])),
+        ("/sink/topic", json!("enriched_events")),
+        ("/sink/sasl/enabled", json!(true)),
+        ("/sink/sasl/mechanism", json!("scram_sha_512")),
+        (
+            "/transforms/dir",
+            json!("/etc/dfe-transform-vrl/transforms"),
+        ),
+    ]
+}
+
+/// The deployment default config: [`DEFAULT_CONFIG_KEYS`] from
+/// `Config::default()`, then [`deployment_values`].
+///
+/// `None` when `Config::default()` does not serialise or a listed key is not in
+/// it, which the contract tests refuse.
+fn default_config() -> Option<serde_json::Value> {
+    let defaults = serde_json::to_value(crate::config::Config::default()).ok()?;
+    let mut config = serde_json::Value::Object(serde_json::Map::new());
+    for pointer in DEFAULT_CONFIG_KEYS {
+        set_at(&mut config, pointer, defaults.pointer(pointer)?.clone());
+    }
+    for (pointer, value) in deployment_values() {
+        set_at(&mut config, pointer, value);
+    }
+    Some(config)
+}
+
+/// Set `value` at the JSON pointer `pointer` in `root`, creating the objects on the way.
+fn set_at(root: &mut serde_json::Value, pointer: &str, value: serde_json::Value) {
+    let mut node = root;
+    let mut keys = pointer.trim_start_matches('/').split('/').peekable();
+    while let Some(key) = keys.next() {
+        let Some(object) = node.as_object_mut() else {
+            return;
+        };
+        if keys.peek().is_none() {
+            object.insert(key.to_owned(), value);
+            return;
+        }
+        node = object
+            .entry(key.to_owned())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     }
 }
 
@@ -258,7 +293,7 @@ mod tests {
     fn test_contract_carries_reflectable_config() {
         let c = contract();
         assert!(c.config_schema.is_some());
-        assert_eq!(c.schema_version, CONTRACT_SCHEMA_VERSION);
+        assert_eq!(c.schema_version, scalo::deployment::CONTRACT_SCHEMA_VERSION);
         assert_ne!(c.capabilities, [] as [scalo::Capability; 0]);
         // The VRL transform capability + the enrichment source family.
         assert!(c.capabilities.iter().any(|cap| cap.name == "vrl"));
@@ -508,6 +543,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The advertised default is the app's own default plus the values a
+    /// deployment decides, and it loads and validates as a config file. A key
+    /// the contract hand-wrote would differ from `Config::default()` here.
+    #[test]
+    fn the_default_config_is_the_apps_default_and_loads() {
+        let advertised = contract().default_config.expect("default_config");
+        let defaults = serde_json::to_value(crate::config::Config::default()).expect("config");
+
+        let mut differing = Vec::new();
+        let mut stack = vec![(String::new(), &advertised)];
+        while let Some((path, node)) = stack.pop() {
+            match node {
+                serde_json::Value::Object(map) => {
+                    stack.extend(map.iter().map(|(k, v)| (format!("{path}/{k}"), v)));
+                }
+                leaf if defaults.pointer(&path) != Some(leaf) => differing.push(path),
+                _ => {}
+            }
+        }
+        differing.sort();
+        let mut decided: Vec<String> = deployment_values()
+            .iter()
+            .filter(|(pointer, value)| defaults.pointer(pointer) != Some(value))
+            .map(|(pointer, _)| (*pointer).to_owned())
+            .collect();
+        decided.sort();
+        assert_eq!(
+            differing, decided,
+            "only a deployment-decided value differs"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("config.yaml");
+        std::fs::write(&file, serde_json::to_string(&advertised).expect("json")).expect("write");
+        let mut config = crate::config::Config::load(Some(file.to_str().expect("utf-8")))
+            .expect("the default config loads");
+        // The chart's Secret supplies the SCRAM credential through the env.
+        for sasl in [&mut config.source.sasl, &mut config.sink.sasl] {
+            sasl.username = "from-the-secret".to_owned();
+            sasl.password = scalo::SensitiveString::new("from-the-secret");
+        }
+        config.validate().expect("the default config validates");
     }
 
     #[test]
