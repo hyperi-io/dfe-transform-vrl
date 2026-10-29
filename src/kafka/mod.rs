@@ -91,6 +91,10 @@ pub fn build_producer_config(sink: &config::SinkConfig, pipeline_name: &str) -> 
 }
 
 /// Create a `KafkaTransport` from config (consumer side).
+///
+/// # Errors
+///
+/// Returns an error when the Kafka consumer cannot be created from `config`.
 pub async fn create_consumer(config: &KafkaConfig) -> crate::Result<KafkaTransport> {
     KafkaTransport::new(config)
         .await
@@ -98,6 +102,10 @@ pub async fn create_consumer(config: &KafkaConfig) -> crate::Result<KafkaTranspo
 }
 
 /// Create a `KafkaTransport` from config (producer side).
+///
+/// # Errors
+///
+/// Returns an error when the Kafka producer cannot be created from `config`.
 pub async fn create_producer(config: &KafkaConfig) -> crate::Result<KafkaTransport> {
     KafkaTransport::new(config)
         .await

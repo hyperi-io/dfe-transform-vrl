@@ -48,6 +48,10 @@ pub const fn compile_floor_bytes(program_bytes: u64) -> u64 {
 ///
 /// Logs the limit, the program size and the floor either way, so an operator
 /// sizing the instance sees all three whether or not the check trips.
+///
+/// # Errors
+///
+/// Returns an error when `limit_bytes` is below the compile floor for the program.
 pub fn check_compile_budget(program_bytes: u64, limit_bytes: u64) -> Result<()> {
     let floor_bytes = compile_floor_bytes(program_bytes);
     info!(

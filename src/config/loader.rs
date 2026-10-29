@@ -180,6 +180,10 @@ impl EnrichmentTableConfig {
     ///
     /// If `source` is set (new format), use it directly.
     /// If only `path` is set (legacy format), treat as `File` with auto format detection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when neither `source` nor `path` is set.
     pub fn resolved_source(&self) -> crate::Result<EnrichmentSourceConfig> {
         if let Some(ref source) = self.source {
             return Ok(source.clone());
@@ -722,6 +726,10 @@ impl Config {
     ///      which reads `./.env` and no parent directory's
     ///   5. Config YAML file
     ///   6. Hard-coded defaults
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the config file cannot be read or parsed, or an environment override does not deserialise.
     pub fn load(config_path: Option<&str>) -> Result<Self> {
         let mut config = Self::default();
 
