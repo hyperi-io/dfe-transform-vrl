@@ -21,7 +21,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # (2) the upstream-blocker preventing remediation, (3) when to revisit.
 # Empty list = nothing tolerated; CI fails on any new advisory.
 ignore = [
-    # vrl 0.34 -> zstd 0.13 -> zstd-safe 7.3 -> zstd-sys 2.1.1. The fix is zstd >= 0.14.3, which vrl's `zstd = "0.13"` excludes, so `cargo update` cannot reach it.
+    # vrl -> zstd 0.13 -> zstd-safe 7.3 -> zstd-sys 2.1.1. The fix is zstd >= 0.14.3, which vrl's `zstd = "0.13"` excludes, so `cargo update` cannot reach it.
     # vrl calls only zstd::decode_all and zstd::encode_all, each on a fresh owned context, with zstd's features limited to std and wasm. Drop all of these when vrl moves to zstd 0.14.
     { id = "RUSTSEC-2026-0391", reason = "zstd Encoder/Decoder::with_context reuses a borrowed context. vrl never calls it, decode_all and encode_all build their own." },
     { id = "RUSTSEC-2026-0395", reason = "CParameter::StableInBuffer needs zstd-safe's experimental feature, which is off, and nothing sets the parameter." },
