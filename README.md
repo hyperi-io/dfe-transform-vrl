@@ -259,7 +259,7 @@ The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger
 ## Documentation
 
 - [docs/architecture.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/architecture.md) - What the service is, why it is shaped that way, and the invariants
-- [docs/DESIGN.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/DESIGN.md) - Deeper design detail: memory budget, reload matrix
+- [docs/internals.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/docs/internals.md) - Deeper design detail: memory budget, reload matrix
 - [config.example.yaml](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/config.example.yaml) - Configuration reference
 
 ## Issues
