@@ -183,7 +183,7 @@ group. Adding a source is a manifest edit, not a change here.
 
 ## Not covered here
 
-`docs/DESIGN.md` carries the deeper design detail: the vrl-versus-vector
+`docs/internals.md` carries the deeper design detail: the vrl-versus-vector
 comparison in full, format detection behaviour, the memory budget table, and the
 field-by-field reload matrix.
 

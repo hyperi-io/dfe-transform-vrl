@@ -171,6 +171,15 @@ pub fn input_event(message: &str, conf: Option<&serde_json::Value>) -> serde_jso
     obj
 }
 
+/// An IOS access-list line whose body is 5000 spaces, on which onig panics
+/// inside the filebeat program's grok.
+pub fn ios_grok_panic_line() -> String {
+    format!(
+        "Feb  8 04:00:47.272: %SEC-6-IPACCESSLOGRP: list 177 {}",
+        " ".repeat(5000)
+    )
+}
+
 // =========================================================================
 // What counts as agreeing with the goldens
 // =========================================================================

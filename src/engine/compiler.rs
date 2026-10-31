@@ -123,9 +123,15 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
     Ok(combined)
 }
 
+/// vrl functions a transform may not call, though the stdlib features we build
+/// still carry them. `get_hostname` comes with the `parse_etld` the filebeat
+/// program needs.
+const REFUSED_FUNCTIONS: &[&str] = &["get_hostname"];
+
 /// Compile VRL source code into an executable program.
 ///
-/// Uses the full VRL stdlib plus custom enrichment functions.
+/// Uses the VRL stdlib, less any function that reaches the host, plus custom
+/// enrichment functions. A refused function is an undefined one.
 ///
 /// The `EnrichmentRegistry` is injected into the compile config, and the
 /// enrichment functions use it to resolve the table named in each call. The
@@ -146,6 +152,7 @@ pub fn compile_vrl(
     registry: Option<Arc<EnrichmentRegistry>>,
 ) -> Result<CompilationResult> {
     let mut fns = vrl::stdlib::all();
+    fns.retain(|f| !REFUSED_FUNCTIONS.contains(&f.identifier()));
     fns.extend(vrl_functions::enrichment_functions());
 
     let mut config = CompileConfig::default();
@@ -154,9 +161,9 @@ pub fn compile_vrl(
     }
 
     let external = state::ExternalEnv::default();
+    // Rendered against the source, so the error quotes the call that failed.
     compile_with_external(source, &fns, &external, config).map_err(|diagnostics| {
-        let messages: Vec<String> = diagnostics.into_iter().map(|d| format!("{d:?}")).collect();
-        crate::Error::VrlCompile(messages.join("\n"))
+        crate::Error::VrlCompile(vrl::diagnostic::Formatter::new(source, diagnostics).to_string())
     })
 }
 

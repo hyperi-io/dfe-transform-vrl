@@ -28,6 +28,54 @@ fn test_compile_fails_on_unknown_function() {
     assert!(compile_vrl(".x = this_function_does_not_exist()", None).is_err());
 }
 
+/// A transform reaches no host: its environment, its name, the network and DNS
+/// are refused at compile time, while the parsers stay.
+#[test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "grok's %{NAME:field} is not a Rust format argument"
+)]
+fn a_program_that_reaches_the_host_does_not_compile() {
+    let refused = [
+        ("get_env_var", r#".v = get_env_var!("HOME")"#),
+        ("get_hostname", r".v = get_hostname!()"),
+        (
+            "http_request",
+            r#".v = http_request("http://127.0.0.1:9/", method: "get") ?? null"#,
+        ),
+        ("dns_lookup", r#".v = dns_lookup("localhost") ?? null"#),
+        ("reverse_dns", r#".v = reverse_dns("127.0.0.1") ?? null"#),
+    ];
+    for (function, source) in refused {
+        let err = compile_vrl(source, None)
+            .err()
+            .unwrap_or_else(|| panic!("{function}: a program calling it compiled"));
+        let message = err.to_string();
+        assert!(
+            message.contains("undefined function") && message.contains(function),
+            "{function}: the error must name the undefined function: {message}"
+        );
+    }
+
+    let program = compile(
+        r#".parsed = parse_json!(.raw)
+.groked = parse_groks!(.line, patterns: ["%{WORD:verb} %{INT:code}"])"#,
+    );
+    let mut value = Value::from(serde_json::json!({"raw": r#"{"a":1}"#, "line": "GET 200"}));
+    run_vrl(&program, &mut value).unwrap();
+    let obj = value.as_object().unwrap();
+    assert_eq!(
+        obj.get("parsed"),
+        Some(&Value::from(serde_json::json!({"a": 1})))
+    );
+    assert_eq!(
+        obj.get("groked"),
+        Some(&Value::from(
+            serde_json::json!({"verb": "GET", "code": "200"})
+        ))
+    );
+}
+
 #[test]
 fn test_compile_fails_on_unclosed_string() {
     assert!(compile_vrl(r#".x = "unclosed"#, None).is_err());
@@ -50,25 +98,56 @@ fn test_compile_empty_source_fails() {
 // Known-should-fail: runtime errors
 // =========================================================================
 
+/// A record the program cannot handle fails that record, never the process:
+/// one that took the process down would crash-loop the transform on its
+/// uncommitted offset. The last case panics inside vrl.
 #[test]
-fn test_runtime_fail_parse_json_invalid() {
-    let program = compile(r".parsed = parse_json!(.raw)");
-    let mut value = Value::from(serde_json::json!({"raw": "{{not json}}"}));
-    assert!(run_vrl(&program, &mut value).is_err());
-}
-
-#[test]
-fn test_runtime_fail_to_int_non_numeric() {
-    let program = compile(r".num = int!(.val)");
-    let mut value = Value::from(serde_json::json!({"val": "not_a_number"}));
-    assert!(run_vrl(&program, &mut value).is_err());
-}
-
-#[test]
-fn test_runtime_fail_array_bang_on_object() {
-    let program = compile(r".out = array!(.data)");
-    let mut value = Value::from(serde_json::json!({"data": {"key": "val"}}));
-    assert!(run_vrl(&program, &mut value).is_err());
+fn a_record_the_program_cannot_handle_is_an_error_not_a_crash() {
+    let cases = [
+        (
+            "parse_json on a non-JSON string",
+            r".parsed = parse_json!(.raw)",
+            serde_json::json!({"raw": "{{not json}}"}),
+        ),
+        (
+            "int! on a non-numeric string",
+            r".num = int!(.val)",
+            serde_json::json!({"val": "not_a_number"}),
+        ),
+        (
+            "array! on an object",
+            r".out = array!(.data)",
+            serde_json::json!({"data": {"key": "val"}}),
+        ),
+        (
+            "an overflowed product times zero is NaN",
+            "x = to_float!(.bytes) * to_float!(.weight)\n.y = x * to_float!(.scale)",
+            serde_json::json!({"bytes": 1e200, "weight": 1e200, "scale": 0.0}),
+        ),
+        (
+            "overflows of opposite sign added are NaN",
+            r".r = (to_float!(.a) * 10.0) + (to_float!(.b) * 10.0)",
+            serde_json::json!({"a": 1e308, "b": -1e308}),
+        ),
+        (
+            "the remainder of an overflow is NaN",
+            r".r = mod(to_float!(.a) * 10.0, 3.0)",
+            serde_json::json!({"a": 1e308}),
+        ),
+        (
+            "a string repeated more times than memory can hold",
+            r#".out = "xx" * int!(.count)"#,
+            serde_json::json!({"count": i64::MAX}),
+        ),
+    ];
+    for (case, source, event) in cases {
+        let program = compile(source);
+        let mut value = Value::from(event);
+        assert!(
+            run_vrl(&program, &mut value).is_err(),
+            "{case}: the record must come back as an error"
+        );
+    }
 }
 
 #[test]
