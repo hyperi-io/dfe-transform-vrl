@@ -81,9 +81,12 @@ by filename and executed sequentially against each event:
 del(.message)
 
 # transforms/02_enrich.vrl
-.environment = get_env_var("ENVIRONMENT") ?? "unknown"
+.environment = .labels.env ?? "unknown"
 .processed_at = now()
 ```
+
+Host functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`,
+`reverse_dns`) do not compile.
 
 ### Bundled Pipelines (opt-in)
 

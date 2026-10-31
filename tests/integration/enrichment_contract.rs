@@ -384,11 +384,16 @@ fn the_diagnostic_names_every_unknown_column() {
         r#".x = find_enrichment_table_records!("users", {"id": "1", "alpha": "x", "beta": "y"})"#,
         Some(users_registry(dir.path())),
     );
-    assert!(err.contains("alpha"), "unexpected diagnostic: {err}");
-    assert!(err.contains("beta"), "unexpected diagnostic: {err}");
+    // The rendered diagnostic quotes the source line, so only the message line is checked.
+    let message = err
+        .lines()
+        .find(|line| line.contains("no field called"))
+        .unwrap_or_else(|| panic!("unexpected diagnostic: {err}"));
+    assert!(message.contains("alpha"), "unexpected diagnostic: {err}");
+    assert!(message.contains("beta"), "unexpected diagnostic: {err}");
     // "id" is a real column, so it must not be reported.
     assert!(
-        !err.contains(r#""id""#),
+        !message.contains(r#""id""#),
         "a known column must not be listed: {err}"
     );
 }

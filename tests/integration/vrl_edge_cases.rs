@@ -28,6 +28,54 @@ fn test_compile_fails_on_unknown_function() {
     assert!(compile_vrl(".x = this_function_does_not_exist()", None).is_err());
 }
 
+/// A transform reaches no host: its environment, its name, the network and DNS
+/// are refused at compile time, while the parsers stay.
+#[test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "grok's %{NAME:field} is not a Rust format argument"
+)]
+fn a_program_that_reaches_the_host_does_not_compile() {
+    let refused = [
+        ("get_env_var", r#".v = get_env_var!("HOME")"#),
+        ("get_hostname", r".v = get_hostname!()"),
+        (
+            "http_request",
+            r#".v = http_request("http://127.0.0.1:9/", method: "get") ?? null"#,
+        ),
+        ("dns_lookup", r#".v = dns_lookup("localhost") ?? null"#),
+        ("reverse_dns", r#".v = reverse_dns("127.0.0.1") ?? null"#),
+    ];
+    for (function, source) in refused {
+        let err = compile_vrl(source, None)
+            .err()
+            .unwrap_or_else(|| panic!("{function}: a program calling it compiled"));
+        let message = err.to_string();
+        assert!(
+            message.contains("undefined function") && message.contains(function),
+            "{function}: the error must name the undefined function: {message}"
+        );
+    }
+
+    let program = compile(
+        r#".parsed = parse_json!(.raw)
+.groked = parse_groks!(.line, patterns: ["%{WORD:verb} %{INT:code}"])"#,
+    );
+    let mut value = Value::from(serde_json::json!({"raw": r#"{"a":1}"#, "line": "GET 200"}));
+    run_vrl(&program, &mut value).unwrap();
+    let obj = value.as_object().unwrap();
+    assert_eq!(
+        obj.get("parsed"),
+        Some(&Value::from(serde_json::json!({"a": 1})))
+    );
+    assert_eq!(
+        obj.get("groked"),
+        Some(&Value::from(
+            serde_json::json!({"verb": "GET", "code": "200"})
+        ))
+    );
+}
+
 #[test]
 fn test_compile_fails_on_unclosed_string() {
     assert!(compile_vrl(r#".x = "unclosed"#, None).is_err());

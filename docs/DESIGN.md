@@ -110,13 +110,19 @@ Transform files contain raw VRL source code (not Vector YAML):
 del(.message)
 
 # transforms/02_enrich.vrl
-.environment = get_env_var("ENVIRONMENT") ?? "unknown"
+.environment = .labels.env ?? "unknown"
 .processed_at = now()
 ```
 
 Files are loaded in sorted order (by filename) and concatenated into a single
 VRL program. This matches Vector's remap transform behaviour where multiple
 VRL statements execute sequentially.
+
+vrl is built without its `enable_env_functions` and `enable_network_functions`
+features, and `compile_vrl` drops `get_hostname` from the system functions it
+keeps for `parse_etld`. A program calling `get_env_var`, `get_hostname`,
+`http_request`, `dns_lookup` or `reverse_dns` fails to compile as a call to an
+undefined function.
 
 ### Bundled Pipeline: filebeat-compat (INTERIM)
 
