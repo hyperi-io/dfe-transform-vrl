@@ -3,32 +3,18 @@
 [![Build Status](https://github.com/hyperi-io/dfe-transform-vrl/actions/workflows/ci.yml/badge.svg)](https://github.com/hyperi-io/dfe-transform-vrl/actions)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/LICENSE)
 
-> Running Vector to reshape events costs you a subprocess, its config surface and
-> its failure modes. This embeds the VRL engine instead, so the transform runs
-> in-process and the wrapper owns memory, backpressure and offsets directly.
+Runs your VRL (Vector Remap Language) programs over a DFE deployment's event stream, between the land topic and the loader. The VRL engine is compiled in, so a transform is a file you change, not a release.
 
-Embedded VRL (Vector Remap Language) transform engine with wrapper-controlled Kafka source/sink.
+## What it gives you
 
-## Overview
+- VRL files from a directory, run in filename order against each event.
+- Kafka in and out, or a direct gRPC push with no broker, and the transform you write is the same on both.
+- At-least-once delivery by default: the source is acknowledged only once the sink has the transformed records. `source.acknowledgements.enabled: false` acknowledges at receipt instead.
+- Enrichment tables from CSV, JSON, YAML, MMDB, STIX and SQLite, with custom VRL functions to read them. A table with a `refresh` setting reloads while the service runs, except MMDB, which loads once at start.
+- Host and network functions such as `get_env_var` and `http_request` that do not compile, so a transform cannot reach outside the process.
+- Built on [scalo](https://github.com/hyperi-io/scalo-rs), so config, logs, metrics, health probes and scaling signals work the way they do in every DFE Rust service.
 
-dfe-transform-vrl is a Rust binary that runs VRL transforms on Kafka event streams.
-It embeds the VRL crate directly, giving full control over memory, backpressure,
-and wire format - without running Vector as a subprocess. It is built on the
-[scalo](https://github.com/hyperi-io/scalo-rs) data-plane runtime (config cascade,
-logging, metrics, Kafka transport, health probes, scaling).
-
-**Why this exists (vs dfe-transform-vector):**
-
-| Aspect | dfe-transform-vrl | dfe-transform-vector |
-|--------|-------------------|---------------------|
-| Transform engine | VRL crate (in-process) | Vector subprocess |
-| Memory control | Bounded buffers | Vector unbounded |
-| Supported transforms | VRL only | All Vector transforms |
-| Container image | ~20 MiB | ~170 MiB |
-
-Use **dfe-transform-vrl** for VRL-only transforms (the common case). Use
-**dfe-transform-vector** when you need Vector-native transforms like `lua`,
-`aggregate`, `dedupe`, or `throttle`.
+Use dfe-transform-vector instead when you need one of Vector's own transforms beyond `remap`.
 
 ## Quick Start
 
