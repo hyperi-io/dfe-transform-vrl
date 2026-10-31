@@ -491,6 +491,27 @@ fn checked_in_dockerfile_matches_emit_dockerfile() {
     );
 }
 
+/// The release profile unwinds, or `run_vrl` cannot catch a vrl panic and one
+/// record aborts the process. CI tests the debug profile, so this reads the
+/// manifest.
+#[test]
+fn the_release_profile_unwinds_on_a_panic() {
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .expect("read Cargo.toml");
+    let release = manifest
+        .split("\n[")
+        .find(|section| section.starts_with("profile.release]"))
+        .expect("Cargo.toml has a [profile.release] section");
+    assert!(
+        release
+            .lines()
+            .any(|line| line.trim() == r#"panic = "unwind""#),
+        "[profile.release] must set panic = \"unwind\":\n[{release}"
+    );
+}
+
 #[test]
 fn emit_compose_outputs_yaml() {
     let output = binary()

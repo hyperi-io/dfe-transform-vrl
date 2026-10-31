@@ -219,7 +219,8 @@ must_use_candidate = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# vrl's grok and arithmetic panic on record data, and only an unwinding panic can be caught and failed with its record.
+panic = "unwind"
 strip = true
 opt-level = 3
 

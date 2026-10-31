@@ -51,8 +51,8 @@ fn test_compile_empty_source_fails() {
 // =========================================================================
 
 /// A record the program cannot handle fails that record, never the process:
-/// release builds abort on a panic, so one such record would crash-loop the
-/// transform on its uncommitted offset.
+/// one that took the process down would crash-loop the transform on its
+/// uncommitted offset. The last case panics inside vrl.
 #[test]
 fn a_record_the_program_cannot_handle_is_an_error_not_a_crash() {
     let cases = [
@@ -85,6 +85,11 @@ fn a_record_the_program_cannot_handle_is_an_error_not_a_crash() {
             "the remainder of an overflow is NaN",
             r".r = mod(to_float!(.a) * 10.0, 3.0)",
             serde_json::json!({"a": 1e308}),
+        ),
+        (
+            "a string repeated more times than memory can hold",
+            r#".out = "xx" * int!(.count)"#,
+            serde_json::json!({"count": i64::MAX}),
         ),
     ];
     for (case, source, event) in cases {

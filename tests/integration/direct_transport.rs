@@ -37,6 +37,8 @@ use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::filebeat_corpus as fb;
+use crate::offline::binary;
 use crate::ports;
 
 /// Poll until the port accepts a TCP connection, or fail after 15s.
@@ -428,4 +430,153 @@ async fn a_downstream_refusal_answers_the_upstream_unavailable() {
     shutdown.cancel();
     let stopped = transform.await.expect("transform task");
     assert!(stopped.is_ok(), "{stopped:?}");
+}
+
+/// The binary, killed when the test lets go of it, pass or fail.
+struct Running {
+    child: std::process::Child,
+    stderr: Arc<std::sync::Mutex<String>>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Start the binary on the direct transport with `transforms` as its
+/// `transforms:` section and the downstream at `sink`, and wait until its
+/// pipeline is ready.
+async fn start_binary(dir: &std::path::Path, transforms: &str, sink: &str) -> (Running, String) {
+    let port = ports::free_port();
+    let config = dir.join("config.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "pipeline:\n  name: panic-probe\n\
+             source:\n  transport: direct\n  listen: \"127.0.0.1:{port}\"\n\
+             sink:\n  transport: direct\n  endpoint: \"{sink}\"\n{transforms}"
+        ),
+    )
+    .unwrap();
+    let mut child = binary()
+        .current_dir(dir)
+        .arg("--config")
+        .arg(&config)
+        .arg("run")
+        .env("METRICS_ADDR", "127.0.0.1:0")
+        .env("LOG_LEVEL", "info")
+        .env_remove("RUST_LOG")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn the binary");
+    // Read stderr to the end, so a full pipe never stalls the binary.
+    let stderr = Arc::new(std::sync::Mutex::new(String::new()));
+    let pipe = child.stderr.take().expect("stderr is piped");
+    std::thread::spawn({
+        let stderr = Arc::clone(&stderr);
+        move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                let mut seen = stderr.lock().unwrap();
+                seen.push_str(&line);
+                seen.push('\n');
+            }
+        }
+    });
+    let mut running = Running { child, stderr };
+
+    // An unoptimised build compiles the filebeat program in about a minute.
+    let deadline = Instant::now() + Duration::from_secs(300);
+    while Instant::now() < deadline {
+        if running.stderr.lock().unwrap().contains("pipeline ready") {
+            return (running, format!("http://127.0.0.1:{port}"));
+        }
+        if let Ok(Some(status)) = running.child.try_wait() {
+            panic!(
+                "the binary exited before its pipeline was ready: {status}\n{}",
+                running.stderr.lock().unwrap()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!(
+        "the pipeline was not ready within 300s\n{}",
+        running.stderr.lock().unwrap()
+    );
+}
+
+/// A record that panics vrl fails that record, and the binary keeps
+/// transforming. vrl's grok catches onig's panic itself wherever panics unwind, so
+/// the IOS case proves the release profile only when the suite runs with
+/// `--release`.
+#[tokio::test]
+async fn a_record_that_panics_vrl_leaves_the_binary_running() {
+    let filebeat = fb::repo_path("pipelines/filebeat");
+    let ios_conf = serde_json::json!({ "tz_offset": "UTC" });
+    let cases = [
+        (
+            "an IOS line that panics the grok",
+            format!(
+                "transforms:\n  files: [\"{}\"]\n\
+                 enrichment_tables:\n  - name: timezones\n    path: \"{}\"\n    \
+                 key_columns: [abbreviation]\n",
+                filebeat.join("filebeat.vrl").display(),
+                filebeat.join("timezones.csv").display()
+            ),
+            fb::input_event(&fb::ios_grok_panic_line(), Some(&ios_conf)),
+            fb::input_event(
+                "Feb  8 04:00:47.272: %SEC-6-IPACCESSLOGRP: list 177 denied igmp \
+                 192.168.100.197 -> 224.0.0.22, 1 packet",
+                Some(&ios_conf),
+            ),
+        ),
+        (
+            "a string repeated more times than memory can hold",
+            "transforms:\n  dir: \"./vrl\"\n".to_string(),
+            serde_json::json!({ "count": i64::MAX }),
+            serde_json::json!({ "count": 1 }),
+        ),
+    ];
+    for (case, transforms, mut poison, mut next) in cases {
+        // The filebeat program keeps a root field, so `id` marks each record.
+        poison["id"] = "poison".into();
+        next["id"] = "next".into();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("vrl")).unwrap();
+        std::fs::write(
+            dir.path().join("vrl/100_repeat.vrl"),
+            ".out = \"xx\" * int!(.count)\n",
+        )
+        .unwrap();
+        let (loader_endpoint, loader) = start_listener(false).await;
+        let (mut running, endpoint) = start_binary(dir.path(), &transforms, &loader_endpoint).await;
+        let pusher = GrpcTransport::new(&GrpcConfig::client(&endpoint))
+            .await
+            .expect("push client");
+
+        let _ = pusher.send("in", Bytes::from(poison.to_string())).await;
+        let sent = pusher.send("in", Bytes::from(next.to_string())).await;
+        let (received, _) = take_from(&loader, 1, Duration::from_secs(30)).await;
+
+        let exited = running.child.try_wait().ok().flatten();
+        let stderr = running.stderr.lock().unwrap().clone();
+        assert!(
+            exited.is_none(),
+            "{case}: the binary exited ({exited:?}) on the record\n{stderr}"
+        );
+        assert!(matches!(sent, SendResult::Ok), "{case}: {sent:?}\n{stderr}");
+        assert_eq!(
+            received.len(),
+            1,
+            "{case}: nothing reached the sink\n{stderr}"
+        );
+        let record: serde_json::Value = serde_json::from_slice(&received[0]).expect("valid JSON");
+        assert_eq!(
+            record["id"], "next",
+            "{case}: the first record out must be the one after the panic: {record}"
+        );
+    }
 }
