@@ -24,7 +24,8 @@ use crate::Result;
 ///
 /// # Errors
 ///
-/// Returns an error when the VRL program aborts on the event.
+/// Returns an error when the VRL program aborts on the event, fails on it, or
+/// panics on it. A panic leaves `value` partly transformed.
 #[inline]
 pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
     let mut metadata = Value::Object(std::collections::BTreeMap::default());
@@ -42,12 +43,28 @@ pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
 
     let mut ctx = Context::new(&mut target, &mut state, &timezone);
 
-    program.resolve(&mut ctx).map_err(|e| match e {
+    // vrl's grok and arithmetic panic on record data, so a panic fails this record, not the process.
+    let resolved =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| program.resolve(&mut ctx)))
+            .map_err(|payload| {
+                crate::Error::VrlRuntime(format!("VRL panicked: {}", panic_message(&*payload)))
+            })?;
+
+    resolved.map_err(|e| match e {
         ExpressionError::Abort { message, .. } => {
             crate::Error::VrlAbort(message.unwrap_or_else(|| "aborted".into()))
         }
         other => crate::Error::VrlRuntime(format!("{other}")),
     })
+}
+
+/// The message a panic was raised with, where it carries one.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
 }
 
 /// Transform a batch of events through a compiled VRL program.

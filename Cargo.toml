@@ -93,8 +93,16 @@ scalo = { version = "2.14.22", features = [
 # (scalo-rs#6). Same version range as scalo so cargo unifies to one schemars.
 schemars = { version = ">=1.2.2, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
-# VRL — Vector Remap Language (embedded transform engine)
-vrl = ">=0.34.0, <0.35"
+# VRL — Vector Remap Language (embedded transform engine). Built without its
+# env and network functions, so no transform can read the host environment or
+# reach the network. `enable_system_functions` stays for `parse_etld`, which the
+# filebeat program calls, and the compiler drops its `get_hostname`.
+vrl = { version = ">=0.35.0, <0.36", default-features = false, features = [
+    "compiler",
+    "stdlib-base",
+    "enable_crypto_functions",
+    "enable_system_functions",
+] }
 # Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
 # same version range as vrl so cargo unifies to one chrono-tz.
 chrono-tz = ">=0.10.4, <0.11"
@@ -219,7 +227,8 @@ must_use_candidate = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+# vrl's grok and arithmetic panic on record data, and only an unwinding panic can be caught and failed with its record.
+panic = "unwind"
 strip = true
 opt-level = 3
 
