@@ -100,7 +100,8 @@ pub struct TlsConfig {
 ///
 /// ## This struct is the wrapper's half of the `--config` file
 ///
-/// It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
+/// It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
+/// `dlq`.
 /// scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
 /// `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
 /// may sit beside them: scalo's cascade reads the same file as its settings
@@ -120,12 +121,13 @@ pub struct TlsConfig {
 /// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
 /// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 /// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
+/// - `dlq.*` — the dead-letter queue is spawned at startup
 ///
 /// ## Accepted but not applied
 ///
 /// [`Config::inert_settings`] is the list, and the wrapper warns at startup for
 /// each one a deployment has actually set.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     pub pipeline: PipelineConfig,
@@ -134,6 +136,13 @@ pub struct Config {
     pub transforms: TransformConfig,
     #[serde(default)]
     pub enrichment_tables: Vec<EnrichmentTableConfig>,
+    /// Where a record the sink refuses for good goes: one over the sink's
+    /// size ceiling, or matched by an outbound `dlq` filter. scalo's type
+    /// verbatim. The default writes NDJSON files under `/var/spool/scalo/dlq`,
+    /// which the deployment contract declares writable. With `enabled: false`
+    /// such a record is dropped and counted on
+    /// `pipeline_dead_letters_dropped_total`.
+    pub dlq: scalo::dlq::DlqConfig,
 }
 
 /// Enrichment table configuration.
@@ -168,9 +177,8 @@ pub struct EnrichmentTableConfig {
     /// Optional periodic refresh.
     #[serde(default)]
     pub refresh: Option<RefreshConfig>,
-    /// Maximum materialised table size in bytes. Fail-fast at load if exceeded.
-    /// When set, the loaded table's memory is also registered with `MemoryGuard`
-    /// so enrichment memory counts against the pod memory budget.
+    /// Maximum materialised table size in bytes. A load over it fails startup,
+    /// and a refresh over it is refused and the table keeps the rows it has.
     #[serde(default)]
     pub max_bytes: Option<u64>,
 }
@@ -201,9 +209,10 @@ impl EnrichmentTableConfig {
     }
 }
 
-/// Source definition for an enrichment table.
+/// Source definition for an enrichment table. A key the source type does not
+/// have fails the load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum EnrichmentSourceConfig {
     File {
         path: String,
@@ -213,15 +222,9 @@ pub enum EnrichmentSourceConfig {
     Mmdb {
         path: String,
     },
+    /// A STIX 2.1 bundle on disk.
     Stix {
-        #[serde(default)]
-        path: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-        #[serde(default)]
-        collection: Option<String>,
-        #[serde(default)]
-        auth: Option<StixAuthConfig>,
+        path: String,
     },
     Sqlite {
         path: String,
@@ -237,20 +240,6 @@ pub enum FileFormat {
     Json,
     Yaml,
     Auto,
-}
-
-/// Authentication for STIX/TAXII sources.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct StixAuthConfig {
-    /// Auth type: `bearer`, `basic`, or `api_key`.
-    #[serde(rename = "type")]
-    pub auth_type: String,
-    #[serde(default)]
-    pub token_env: Option<String>,
-    #[serde(default)]
-    pub username_env: Option<String>,
-    #[serde(default)]
-    pub password_env: Option<String>,
 }
 
 /// Periodic refresh configuration.
@@ -347,7 +336,9 @@ pub struct SourceConfig {
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
-    /// Maximum consumer buffer size in bytes.
+    /// Bytes of fetched records librdkafka holds ahead of the pipeline, set
+    /// as `queued.max.messages.kbytes`. One fetch can overshoot it by up to
+    /// `max.partition.fetch.bytes`.
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
     pub tls: TlsConfig,
@@ -355,9 +346,9 @@ pub struct SourceConfig {
     pub session_timeout_ms: u32,
     pub commit_interval_ms: u32,
     /// librdkafka statistics emission interval (ms). 0 = disabled.
-    /// When enabled (and scalo supports `StatsContext` in `KafkaTransport`),
-    /// rdkafka broker RTT, consumer lag, and queue depth metrics auto-emit
-    /// to the Prometheus `/metrics` endpoint.
+    /// The statistics carry the broker RTT, consumer lag and queue depth
+    /// metrics on `/metrics`, and the lag `/scaling/pressure` reports, so 0
+    /// leaves the KEDA lag signal at zero.
     pub statistics_interval_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,
@@ -1141,23 +1132,33 @@ enrichment_tables:
         assert!(matches!(source, EnrichmentSourceConfig::Mmdb { .. }));
     }
 
+    /// Nothing fetches a TAXII feed, so a STIX source names a file, and a key
+    /// a source does not have fails the load rather than being dropped.
     #[test]
-    fn enrichment_config_stix_with_url() {
-        let yaml = r#"
-enrichment_tables:
-  - name: "threats"
-    source:
-      type: stix
-      url: "https://taxii.example.com/objects"
-    key_columns: ["indicator"]
-"#;
-        let config: Config =
-            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
-        let source = config.enrichment_tables[0].resolved_source().unwrap();
-        let EnrichmentSourceConfig::Stix { url, .. } = source else {
-            unreachable!("expected Stix");
-        };
-        assert_eq!(url.as_deref(), Some("https://taxii.example.com/objects"));
+    fn an_enrichment_source_refuses_keys_it_does_not_have() {
+        for (source, key) in [
+            (
+                "type: stix\n      url: \"https://taxii.example.com/objects\"",
+                "url",
+            ),
+            (
+                "type: stix\n      path: \"/a.json\"\n      collection: \"c1\"",
+                "collection",
+            ),
+            (
+                "type: file\n      path: \"/a.csv\"\n      formt: csv",
+                "formt",
+            ),
+        ] {
+            let yaml = format!(
+                "enrichment_tables:\n  - name: \"t\"\n    source:\n      {source}\n    key_columns: [\"k\"]\n"
+            );
+            let err =
+                scalo::yaml::from_str::<Config>(&yaml, "config.yaml", scalo::yaml::Profile::Config)
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
     }
 
     #[test]
@@ -1173,10 +1174,10 @@ enrichment_tables:
         let config: Config =
             scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
-        let EnrichmentSourceConfig::Stix { path, .. } = source else {
+        let EnrichmentSourceConfig::Stix { path } = source else {
             unreachable!("expected Stix");
         };
-        assert_eq!(path.as_deref(), Some("/data/stix-bundle.json"));
+        assert_eq!(path, "/data/stix-bundle.json");
     }
 
     #[test]
@@ -1209,7 +1210,7 @@ enrichment_tables:
   - name: "threats"
     source:
       type: stix
-      url: "https://example.com/stix"
+      path: "/data/stix-bundle.json"
     key_columns: ["indicator"]
     refresh:
       interval_secs: 3600

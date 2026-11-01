@@ -29,10 +29,10 @@ const DESCRIPTION: &str = "Embedded VRL transform engine -- Kafka-to-Kafka pipel
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
 pub fn contract() -> DeploymentContract {
-    // One cascade-resolved base image drives BOTH the runtime FROM and the
-    // native-deps codename (so the Confluent librdkafka repo matches the base).
+    // One cascade-resolved base image drives both the runtime FROM and the
+    // native-deps codename.
     let base_image = base_image_from_cascade();
-    DeploymentContract {
+    let contract = DeploymentContract {
         app_name: "dfe-transform-vrl".into(),
         binary_name: "dfe-transform-vrl".into(),
         description: DESCRIPTION.into(),
@@ -92,7 +92,8 @@ pub fn contract() -> DeploymentContract {
         // table source types the schema cannot self-describe as friendly forms).
         config_schema: Some(scalo::deployment::config_schema_json::<crate::config::Config>()),
         capabilities: capabilities(),
-        // The app writes no file at run time, so the root filesystem stays read-only.
+        // The root filesystem stays read-only. `with_dlq` below adds the file
+        // DLQ's directory, the one place the app writes.
         writable_paths: vec![],
         termination_grace_seconds: 45,
         resources: ResourcesContract {
@@ -106,7 +107,8 @@ pub fn contract() -> DeploymentContract {
             },
         },
         ..DeploymentContract::default()
-    }
+    };
+    contract.with_dlq(&crate::config::Config::default().dlq)
 }
 
 /// The config keys the contract advertises as the deployment default, read
@@ -252,11 +254,8 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
                     .description("MaxMind DB (e.g. GeoIP) lookups.")
                     .field(FieldSpec::string("path").required().description("Path to the .mmdb file.")),
                 Capability::service("stix")
-                    .description("STIX/TAXII threat-intel indicators (file or TAXII URL).")
-                    .field(FieldSpec::string("path").description("Local STIX bundle path."))
-                    .field(FieldSpec::string("url").description("TAXII collection URL."))
-                    .field(FieldSpec::string("collection").description("TAXII collection id."))
-                    .field(FieldSpec::string("auth").description("Auth spec (type + env-var refs for bearer/basic/api_key).")),
+                    .description("STIX 2.1 threat-intel indicators from a bundle file.")
+                    .field(FieldSpec::string("path").required().description("Path to the STIX bundle.")),
                 Capability::service("sqlite")
                     .description("SQLite query result materialised as a lookup table.")
                     .field(FieldSpec::string("path").required().description("Path to the SQLite database."))
@@ -344,6 +343,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The file DLQ writes under a read-only root filesystem, so its directory
+    /// needs an ungated writable path, or the DLQ starts with no backend and
+    /// holds every block that has a dead letter.
+    #[test]
+    fn the_file_dlq_has_somewhere_to_write() {
+        let c = contract();
+        let dir = crate::config::Config::default().dlq.file.path;
+        assert!(c.security.read_only_root_filesystem);
+        assert!(
+            c.writable_paths
+                .iter()
+                .any(|w| w.when.is_none() && dir.starts_with(&w.path)),
+            "no writable path covers {}: {:?}",
+            dir.display(),
+            c.writable_paths
+        );
     }
 
     /// The committed reflectable artefacts under docs/ must not drift from a

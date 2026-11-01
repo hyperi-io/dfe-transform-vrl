@@ -333,6 +333,7 @@ impl FunctionExpression for GetRecordFn {
             ctx,
         )?;
 
+        // Two matches are enough to call the lookup ambiguous.
         let mut rows = self
             .data
             .find_rows(
@@ -340,6 +341,7 @@ impl FunctionExpression for GetRecordFn {
                 self.case_sensitive,
                 wildcard.as_ref(),
                 select.as_deref(),
+                Some(2),
             )
             .map_err(ExpressionError::from)?;
 
@@ -442,6 +444,7 @@ impl FunctionExpression for FindRecordsFn {
                 self.case_sensitive,
                 wildcard.as_ref(),
                 select.as_deref(),
+                None,
             )
             .map_err(ExpressionError::from)?;
 

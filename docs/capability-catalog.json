@@ -66,31 +66,13 @@
       {
         "kind": "service",
         "name": "stix",
-        "description": "STIX/TAXII threat-intel indicators (file or TAXII URL).",
+        "description": "STIX 2.1 threat-intel indicators from a bundle file.",
         "fields": [
           {
             "name": "path",
             "type": "string",
-            "required": false,
-            "description": "Local STIX bundle path."
-          },
-          {
-            "name": "url",
-            "type": "string",
-            "required": false,
-            "description": "TAXII collection URL."
-          },
-          {
-            "name": "collection",
-            "type": "string",
-            "required": false,
-            "description": "TAXII collection id."
-          },
-          {
-            "name": "auth",
-            "type": "string",
-            "required": false,
-            "description": "Auth spec (type + env-var refs for bearer/basic/api_key)."
+            "required": true,
+            "description": "Path to the STIX bundle."
           }
         ]
       },

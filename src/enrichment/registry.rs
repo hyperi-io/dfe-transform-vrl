@@ -33,8 +33,6 @@ impl EnrichmentRegistry {
     /// Load all enrichment tables from config. Fails fast on any error.
     ///
     /// Dispatches on `resolved_source()` to call the appropriate loader.
-    /// STIX HTTP sources are not supported here (require async context).
-    /// STIX file sources and all other types are loaded synchronously.
     ///
     /// # Errors
     ///
@@ -44,18 +42,8 @@ impl EnrichmentRegistry {
 
         for config in configs {
             let source = config.resolved_source()?;
-            let table = load_table_from_source(config, &source)?;
-
-            // Enforce max_bytes if configured
-            if let Some(max_bytes) = config.max_bytes {
-                let estimated = table.estimated_bytes();
-                if estimated > max_bytes {
-                    return Err(crate::Error::Enrichment(format!(
-                        "table '{}': materialised size ({estimated} bytes) exceeds max_bytes ({max_bytes})",
-                        config.name
-                    )));
-                }
-            }
+            let table = load_table_from_source(config, &source)?.with_max_bytes(config.max_bytes);
+            table.check_max_bytes(table.estimated_bytes())?;
 
             info!(
                 table = %table.name(),
@@ -132,7 +120,7 @@ fn load_table_from_source(
                 Ok(EnrichmentTable::new_mmdb(
                     &config.name,
                     reader,
-                    config.source.clone(),
+                    Some(source.clone()),
                     config.refresh.clone(),
                 ))
             }
@@ -145,47 +133,16 @@ fn load_table_from_source(
                 ))
             }
         }
-        EnrichmentSourceConfig::Stix {
-            path,
-            url: _,
-            collection: _,
-            auth: _,
-        } => {
-            // File-based STIX: load synchronously
-            if let Some(file_path) = path {
-                let loaded = crate::enrichment::stix::load_stix(
-                    Some(file_path.as_str()),
-                    None,
-                    None,
-                    &config.name,
-                    &config.key_columns,
-                )?;
-                Ok(EnrichmentTable::new_hashmap(
-                    &config.name,
-                    loaded.rows,
-                    config.key_columns.clone(),
-                    config.source.clone(),
-                    config.refresh.clone(),
-                    schema,
-                    Arc::from(loaded.columns),
-                ))
-            } else {
-                // URL-based STIX requires async — cannot load here
-                Err(crate::Error::Enrichment(format!(
-                    "table '{}': STIX HTTP sources require async loading (wire via refresh task or provide a file path)",
-                    config.name
-                )))
-            }
-        }
-        _ => {
-            // File, SQLite — all dispatched through load_from_source
+        EnrichmentSourceConfig::File { .. }
+        | EnrichmentSourceConfig::Stix { .. }
+        | EnrichmentSourceConfig::Sqlite { .. } => {
             let loaded =
                 loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
             Ok(EnrichmentTable::new_hashmap(
                 &config.name,
                 loaded.rows,
                 config.key_columns.clone(),
-                config.source.clone(),
+                Some(source.clone()),
                 config.refresh.clone(),
                 schema,
                 Arc::from(loaded.columns),
@@ -216,7 +173,7 @@ mod tests {
 
     /// The single row matching `conditions`.
     fn one_row(table: &EnrichmentTable, conditions: &[Condition]) -> vrl::value::ObjectMap {
-        let mut rows = table.find_rows(conditions, true, None, None).unwrap();
+        let mut rows = table.find_rows(conditions, true, None, None, None).unwrap();
         assert_eq!(rows.len(), 1);
         rows.pop().unwrap()
     }
@@ -252,6 +209,29 @@ mod tests {
 
         let row = one_row(table, &eq(&[("service_id", "svc-001")]));
         assert_eq!(row.get("name"), Some(&Value::from("auth")));
+    }
+
+    /// The refresh task reloads from the table's source, so a table written
+    /// with the flat `path` keeps the file it was loaded from.
+    #[test]
+    fn a_flat_path_table_keeps_its_source_for_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_file(dir.path(), "svc.csv", "id,name\n1,auth\n");
+
+        let configs = vec![EnrichmentTableConfig {
+            name: "svc".into(),
+            path: path.clone(),
+            key_columns: vec!["id".into()],
+            refresh: Some(crate::config::RefreshConfig { interval_secs: 60 }),
+            ..Default::default()
+        }];
+
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let table = registry.get_table("svc").unwrap();
+        assert_eq!(
+            table.source_config(),
+            Some(&EnrichmentSourceConfig::File { path, format: None })
+        );
     }
 
     #[test]
@@ -344,10 +324,7 @@ mod tests {
             path: String::new(),
             key_columns: vec!["indicator".into()],
             source: Some(EnrichmentSourceConfig::Stix {
-                path: Some(dir.path().join("stix.json").to_string_lossy().to_string()),
-                url: None,
-                collection: None,
-                auth: None,
+                path: dir.path().join("stix.json").to_string_lossy().to_string(),
             }),
             ..Default::default()
         }];
@@ -474,7 +451,7 @@ mod tests {
         let table = registry.get_table("cities").unwrap();
 
         let matches = table
-            .find_rows(&eq(&[("country", "AU")]), true, None, None)
+            .find_rows(&eq(&[("country", "AU")]), true, None, None, None)
             .unwrap();
         assert_eq!(matches.len(), 2);
     }

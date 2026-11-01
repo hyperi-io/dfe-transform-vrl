@@ -6,19 +6,18 @@
 //! License:   BUSL-1.1
 //! Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Parse STIX 2.1 bundles (file or HTTP) and materialise indicators into
+//! Parse STIX 2.1 bundles from a file and materialise indicators into
 //! `FxHashMap<CompactKey, Arc<ObjectMap>>` for O(1) enrichment lookups.
 //!
-//! Supports both file-based STIX bundles (mounted as `ConfigMap`) and
-//! HTTP-fetched TAXII feeds. No dedicated STIX crate — STIX 2.1 is JSON
-//! with a known schema, parsed via `serde_json`.
+//! The bundle is a mounted file. Nothing here fetches a TAXII feed. No
+//! dedicated STIX crate -- STIX 2.1 is JSON with a known schema, parsed via
+//! `serde_json`.
 
 use std::sync::Arc;
 
 use serde::Deserialize;
 use vrl::value::{KeyString, ObjectMap, Value};
 
-use crate::config::StixAuthConfig;
 use crate::enrichment::loader::LoadedTable;
 use crate::enrichment::table::{CompactKey, RowMap};
 
@@ -64,40 +63,20 @@ struct StixObject {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Load a STIX 2.1 bundle from file or HTTP and materialise indicators.
-///
-/// - If `path` is set, reads from local file (sync).
-/// - If `url` is set, fetches via HTTP (requires tokio runtime).
-/// - `path` takes precedence if both are set.
-///
-/// Returns `FxHashMap` keyed by indicator value (IP, domain, hash, etc.).
+/// Load a STIX 2.1 bundle file and materialise its indicators, keyed by
+/// indicator value (IP, domain, hash, etc.).
 ///
 /// # Errors
 ///
-/// Returns an error when the file or URL cannot be read, or the bundle is not valid STIX 2.1 JSON.
+/// Returns an error when the file cannot be read, or the bundle is not valid STIX 2.1 JSON.
 pub fn load_stix(
-    path: Option<&str>,
-    url: Option<&str>,
-    _auth: Option<&StixAuthConfig>,
+    path: &str,
     table_name: &str,
     key_columns: &[String],
 ) -> crate::Result<LoadedTable> {
-    let json_bytes = if let Some(path) = path {
-        std::fs::read(path).map_err(|e| {
-            crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
-        })?
-    } else if let Some(_url) = url {
-        // HTTP fetch will be wired via scalo HttpClient in the async refresh path.
-        // For now, return a clear error if only URL is provided without async context.
-        return Err(crate::Error::Enrichment(format!(
-            "table '{table_name}': STIX HTTP fetch requires async context (use refresh task or load from file)"
-        )));
-    } else {
-        return Err(crate::Error::Enrichment(format!(
-            "table '{table_name}': STIX source needs 'path' or 'url'"
-        )));
-    };
-
+    let json_bytes = std::fs::read(path).map_err(|e| {
+        crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
+    })?;
     materialise_stix(&json_bytes, table_name, key_columns)
 }
 
@@ -120,6 +99,7 @@ pub fn materialise_stix(
 
     let mut rows = RowMap::default();
     let mut columns: Vec<KeyString> = Vec::new();
+    let mut unsupported: usize = 0;
 
     for obj in &bundle.objects {
         if obj.object_type != "indicator" {
@@ -130,20 +110,17 @@ pub fn materialise_stix(
             continue;
         };
 
-        // Extract indicator value from STIX pattern
-        let Some(indicator_value) = extract_indicator_from_pattern(pattern) else {
+        let Some(comparison) = parse_pattern(pattern) else {
+            unsupported += 1;
             continue;
         };
 
         let mut row = ObjectMap::new();
         row.insert(
-            KeyString::from("indicator"),
-            Value::from(indicator_value.as_str()),
-        );
-        row.insert(
             KeyString::from("indicator_type"),
-            Value::from(indicator_type_from_pattern(pattern)),
+            Value::from(indicator_type(comparison.path)),
         );
+        row.insert(KeyString::from("indicator"), Value::from(comparison.value));
 
         if let Some(ref name) = obj.name {
             row.insert(KeyString::from("name"), Value::from(name.as_str()));
@@ -193,6 +170,14 @@ pub fn materialise_stix(
         rows.entry(key).or_default().push(Arc::new(row));
     }
 
+    if unsupported > 0 {
+        tracing::warn!(
+            table = table_name,
+            indicators = unsupported,
+            "STIX indicators skipped: only a single [<object path> = '<value>'] pattern is supported"
+        );
+    }
+
     Ok(LoadedTable { rows, columns })
 }
 
@@ -200,47 +185,72 @@ pub fn materialise_stix(
 // STIX pattern parsing
 // ---------------------------------------------------------------------------
 
-/// Extract the indicator value from a STIX 2.1 pattern string.
-///
-/// Handles common patterns:
-/// - `[ipv4-addr:value = '1.2.3.4']`
-/// - `[ipv6-addr:value = '2001:db8::1']`
-/// - `[domain-name:value = 'evil.example.com']`
-/// - `[file:hashes.'SHA-256' = 'abc123...']`
-/// - `[url:value = 'http://evil.example.com/malware']`
-/// - `[email-addr:value = 'phish@evil.com']`
-fn extract_indicator_from_pattern(pattern: &str) -> Option<String> {
-    // Find the value between single quotes after '='
-    let eq_pos = pattern.find('=')?;
-    let after_eq = &pattern[eq_pos + 1..];
-    let open_quote = after_eq.find('\'')?;
-    let value_start = open_quote + 1;
-    let close_quote = after_eq[value_start..].find('\'')?;
-    let value = &after_eq[value_start..value_start + close_quote];
-
-    if value.is_empty() {
-        return None;
-    }
-
-    Some(value.to_string())
+/// The one comparison a supported STIX pattern makes.
+struct Comparison<'a> {
+    /// Object path left of the operator, e.g. `ipv4-addr:value`.
+    path: &'a str,
+    /// The quoted value, unescaped.
+    value: String,
 }
 
-/// Determine the indicator type from a STIX pattern prefix.
-fn indicator_type_from_pattern(pattern: &str) -> &'static str {
-    if pattern.contains("ipv4-addr") {
-        "ipv4"
-    } else if pattern.contains("ipv6-addr") {
-        "ipv6"
-    } else if pattern.contains("domain-name") {
-        "domain"
-    } else if pattern.contains("file:hashes") {
-        "hash"
-    } else if pattern.contains("url:") {
-        "url"
-    } else if pattern.contains("email-addr") {
-        "email"
-    } else {
-        "unknown"
+/// Read a pattern that is exactly one `[<object path> = '<value>']`.
+///
+/// Every other shape is refused rather than reduced to its first value: `AND`,
+/// `OR`, a second observation, `!=`, `LIKE`, `IN`, `MATCHES` and qualifiers
+/// such as `WITHIN` all change what the pattern matches. Inside the value,
+/// `\'` and `\\` are the escapes STIX defines.
+fn parse_pattern(pattern: &str) -> Option<Comparison<'_>> {
+    let body = pattern
+        .trim()
+        .strip_prefix('[')?
+        .strip_suffix(']')?
+        .trim_start();
+    let path_end = object_path_end(body)?;
+    let (path, rest) = body.split_at(path_end);
+    let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+    let quoted = rest.strip_prefix('\'')?;
+
+    let mut value = String::new();
+    let mut chars = quoted.char_indices();
+    let close = loop {
+        match chars.next()? {
+            (_, '\\') => value.push(chars.next()?.1),
+            (at, '\'') => break at,
+            (_, c) => value.push(c),
+        }
+    };
+    let trailing = &quoted[close + 1..];
+    (!value.is_empty() && trailing.trim().is_empty()).then_some(Comparison { path, value })
+}
+
+/// Byte length of the object path at the start of `body`: up to the first
+/// space or operator character outside a quoted step such as `'SHA-256'`.
+fn object_path_end(body: &str) -> Option<usize> {
+    let mut quoted = false;
+    for (at, c) in body.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            c if !quoted && (c.is_whitespace() || matches!(c, '=' | '!' | '<' | '>')) => {
+                return (at > 0).then_some(at);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The indicator type, from the object path a pattern compares: `ipv4-addr`,
+/// `ipv6-addr`, `domain-name`, `file:hashes.*`, `url` and `email-addr`.
+fn indicator_type(path: &str) -> &'static str {
+    let (object, property) = path.split_once(':').unwrap_or((path, ""));
+    match object {
+        "ipv4-addr" => "ipv4",
+        "ipv6-addr" => "ipv6",
+        "domain-name" => "domain",
+        "file" if property.starts_with("hashes") => "hash",
+        "url" => "url",
+        "email-addr" => "email",
+        _ => "unknown",
     }
 }
 
@@ -273,6 +283,14 @@ fn extract_tlp_from_markings(markings: &[String]) -> Option<&'static str> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    fn extract_indicator_from_pattern(pattern: &str) -> Option<String> {
+        parse_pattern(pattern).map(|comparison| comparison.value)
+    }
+
+    fn indicator_type_from_pattern(pattern: &str) -> &'static str {
+        parse_pattern(pattern).map_or("unknown", |comparison| indicator_type(comparison.path))
+    }
 
     /// The single row materialised for `indicator`.
     fn indicator_row(rows: &RowMap, indicator: &str) -> Arc<ObjectMap> {
@@ -451,6 +469,72 @@ mod tests {
         assert!(extract_indicator_from_pattern(pattern).is_none());
     }
 
+    /// Only a single `=` comparison on one observation is an indicator value.
+    /// Anything else would be weakened to its first quoted value, so it is refused.
+    #[test]
+    fn a_pattern_is_read_only_when_it_is_one_equality() {
+        for (pattern, want) in [
+            ("[ipv4-addr:value = '1.2.3.4']", Some("1.2.3.4")),
+            ("[ipv4-addr:value='1.2.3.4']", Some("1.2.3.4")),
+            (
+                "  [ domain-name:value = 'evil.example.com' ]  ",
+                Some("evil.example.com"),
+            ),
+            ("[file:hashes.'SHA-256' = 'abc123']", Some("abc123")),
+            ("[file:name = 'it\\'s.exe']", Some("it's.exe")),
+            ("[url:value = 'http://x/a\\\\b']", Some("http://x/a\\b")),
+            ("[ipv4-addr:value != '1.2.3.4']", None),
+            (
+                "[ipv4-addr:value = '1.2.3.4' AND ipv4-addr:value = '5.6.7.8']",
+                None,
+            ),
+            (
+                "[ipv4-addr:value = '1.2.3.4' OR ipv4-addr:value = '5.6.7.8']",
+                None,
+            ),
+            (
+                "[ipv4-addr:value = '1.2.3.4'] OR [ipv4-addr:value = '5.6.7.8']",
+                None,
+            ),
+            ("[ipv4-addr:value = '1.2.3.4'] WITHIN 300 SECONDS", None),
+            ("[domain-name:value LIKE 'evil%']", None),
+            ("[ipv4-addr:value IN ('1.2.3.4', '5.6.7.8')]", None),
+            ("[ipv4-addr:value = '1.2.3.4]", None),
+            ("ipv4-addr:value = '1.2.3.4'", None),
+            ("[ipv4-addr:value = '']", None),
+        ] {
+            assert_eq!(
+                extract_indicator_from_pattern(pattern).as_deref(),
+                want,
+                "{pattern}"
+            );
+        }
+    }
+
+    /// The type comes from the object the pattern compares, not from text
+    /// anywhere in it.
+    #[test]
+    fn the_indicator_type_is_the_compared_object() {
+        assert_eq!(
+            indicator_type_from_pattern("[url:value = 'http://ipv4-addr.example/']"),
+            "url"
+        );
+    }
+
+    /// A refused pattern costs only its own indicator, never the bundle.
+    #[test]
+    fn a_compound_indicator_is_skipped_and_the_rest_load() {
+        let bundle = r#"{"type": "bundle", "objects": [
+            {"type": "indicator", "pattern": "[ipv4-addr:value = '10.0.0.1' AND ipv4-addr:value = '10.0.0.2']"},
+            {"type": "indicator", "pattern": "[ipv4-addr:value = '10.0.0.3']"}
+        ]}"#;
+        let rows = materialise_stix(bundle.as_bytes(), "t", &["indicator".into()])
+            .unwrap()
+            .rows;
+        assert_eq!(rows.len(), 1);
+        indicator_row(&rows, "10.0.0.3");
+    }
+
     #[test]
     fn indicator_type_detection() {
         assert_eq!(
@@ -501,34 +585,14 @@ mod tests {
         let path = dir.path().join("stix.json");
         std::fs::write(&path, sample_stix_bundle()).unwrap();
 
-        let rows = load_stix(
-            Some(path.to_str().unwrap()),
-            None,
-            None,
-            "threats",
-            &["indicator".into()],
-        )
-        .unwrap()
-        .rows;
+        let rows = load_stix(path.to_str().unwrap(), "threats", &["indicator".into()])
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn load_stix_no_source_errors() {
-        assert!(load_stix(None, None, None, "t", &["indicator".into()]).is_err());
-    }
-
-    #[test]
     fn load_stix_missing_file_errors() {
-        assert!(
-            load_stix(
-                Some("/nonexistent/stix.json"),
-                None,
-                None,
-                "t",
-                &["indicator".into()]
-            )
-            .is_err()
-        );
+        assert!(load_stix("/nonexistent/stix.json", "t", &["indicator".into()]).is_err());
     }
 }

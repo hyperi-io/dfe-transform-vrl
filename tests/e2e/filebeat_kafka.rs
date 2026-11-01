@@ -1,12 +1,12 @@
 // Project:   dfe-transform-vrl
 // File:      tests/e2e/filebeat_kafka.rs
-// Purpose:   WS21 acceptance: the filebeat corpus through the app and a broker
+// Purpose:   The filebeat corpus through the app and a broker
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! The transform hop of the WS21 chain, proved on real data.
+//! The transform hop of the filebeat chain, proved on real data.
 //!
 //! ```text
 //! filebeat corpus -> filebeat_land -> dfe-transform-vrl -> filebeat_load
@@ -273,7 +273,7 @@ async fn filebeat_corpus_round_trips_through_kafka() {
 
     let (inputs, goldens) = corpus_workload();
     eprintln!(
-        "WS21: replaying {} corpus lines from {} logs through {LAND_TOPIC} -> {LOAD_TOPIC}",
+        "replaying {} corpus lines from {} logs through {LAND_TOPIC} -> {LOAD_TOPIC}",
         inputs.len(),
         fb::all_logs().len()
     );

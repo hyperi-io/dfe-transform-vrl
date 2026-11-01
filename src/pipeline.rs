@@ -53,6 +53,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use scalo::SelfRegulationGovernor;
 use scalo::config::shared::SharedConfig;
+use scalo::dlq::{Dlq, DlqConfig};
 use scalo::logger::log_sampled;
 use scalo::memory::MemoryGuard;
 use scalo::scaling::ScalingPressure;
@@ -260,6 +261,27 @@ pub async fn run(
     }
 
     result
+}
+
+/// Spawn the DLQ `config` describes and give `engine` its dead letters.
+///
+/// A record the sink would refuse for good, over its size ceiling or matched
+/// by an outbound `dlq` filter, goes there, and its block is released only
+/// once the DLQ holds it. The DLQ runs on its own token, so it outlives the
+/// pipeline loop and takes the dead letters of the blocks drained at
+/// shutdown: shut it down after the loop returns. With `enabled: false` such a
+/// record is dropped and counted.
+///
+/// # Errors
+///
+/// The DLQ cannot be spawned from `config`.
+pub fn with_dead_letter_queue(
+    engine: BatchEngine,
+    config: &DlqConfig,
+) -> crate::Result<(BatchEngine, Dlq)> {
+    let dlq = Dlq::spawn(config, "dfe-transform-vrl", None, CancellationToken::new())
+        .map_err(|e| crate::Error::Config(format!("dlq: {e}")))?;
+    Ok((engine.with_dlq(Arc::new(dlq.clone())), dlq))
 }
 
 /// Start the direct transport's Push listener, armed from its first request.
@@ -653,23 +675,24 @@ fn transform_records(
     // Layer 3: app-specific
     transform_metrics.batch_size.record(batch_len as f64);
 
-    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool.
+    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool. Each payload
+    // moves into its closure, so its bytes go once the event is parsed.
     let deser_start = Instant::now();
     let indexed: Vec<(usize, Bytes)> = records
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(idx, rec)| (idx, rec.payload.clone()))
+        .map(|(idx, rec)| (idx, rec.payload))
         .collect();
 
-    let deser = |(idx, payload): &(usize, Bytes)| -> DeserResult {
-        match deserialize_event(payload) {
-            Ok(v) => Ok((v, *idx)),
-            Err(e) => Err((*idx, e.to_string())),
+    let deser = |(idx, payload): (usize, Bytes)| -> DeserResult {
+        match deserialize_event(&payload) {
+            Ok(v) => Ok((v, idx)),
+            Err(e) => Err((idx, e.to_string())),
         }
     };
     let deser_results: Vec<DeserResult> = match worker_pool {
-        Some(pool) => pool.process_batch(&indexed, deser),
-        None => indexed.iter().map(deser).collect(),
+        Some(pool) => pool.map_owned(indexed, deser),
+        None => indexed.into_iter().map(deser).collect(),
     };
 
     // The error text can quote the record, so it is logged at debug only.
@@ -692,18 +715,18 @@ fn transform_records(
         transform_metrics.record_format("json", events.len() as u64);
     }
 
-    // Phase 2: VRL transform (CPU-bound) -- parallel via the pool.
+    // Phase 2: VRL transform (CPU-bound) -- parallel via the pool. Each event
+    // is moved into its closure and transformed in place, never copied.
     let vrl_start = Instant::now();
-    let vrl = |(value, idx): &(Value, usize)| -> VrlResult {
-        let mut value = value.clone();
+    let vrl = |(mut value, idx): (Value, usize)| -> VrlResult {
         match run_vrl(program, &mut value) {
-            Ok(_) => Ok((value, *idx)),
-            Err(e) => Err((*idx, e)),
+            Ok(_) => Ok((value, idx)),
+            Err(e) => Err((idx, e)),
         }
     };
     let vrl_results: Vec<VrlResult> = match worker_pool {
-        Some(pool) => pool.process_batch(&events, vrl),
-        None => events.iter().map(vrl).collect(),
+        Some(pool) => pool.map_owned(events, vrl),
+        None => events.into_iter().map(vrl).collect(),
     };
 
     let mut transformed: Vec<(Value, usize)> = Vec::with_capacity(vrl_results.len());
@@ -737,9 +760,10 @@ fn transform_records(
     // destination topic, so there is no slot for a partition key); the routing
     // field stays a config surface only until #37 lands.
     let ser_start = Instant::now();
+    // Each event is dropped as soon as its bytes are built.
     let mut out_records: Vec<Record> = Vec::with_capacity(transformed.len());
-    for (value, _idx) in &transformed {
-        match serialize_event(value) {
+    for (value, _idx) in transformed {
+        match serialize_event(&value) {
             Ok(serialized) => {
                 out_records.push(Record {
                     payload: Bytes::from(serialized),

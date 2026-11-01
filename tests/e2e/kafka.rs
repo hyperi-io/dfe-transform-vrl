@@ -212,7 +212,7 @@ async fn round_trip(
 }
 
 #[tokio::test]
-#[ignore = "requires live Kafka broker or testcontainers. \
+#[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_json_transform() {
@@ -247,7 +247,7 @@ async fn test_produce_consume_json_transform() {
 }
 
 #[tokio::test]
-#[ignore = "requires live Kafka broker or testcontainers. \
+#[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_vrl_abort_drops_events() {
