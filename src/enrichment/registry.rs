@@ -132,7 +132,7 @@ fn load_table_from_source(
                 Ok(EnrichmentTable::new_mmdb(
                     &config.name,
                     reader,
-                    config.source.clone(),
+                    Some(source.clone()),
                     config.refresh.clone(),
                 ))
             }
@@ -164,7 +164,7 @@ fn load_table_from_source(
                     &config.name,
                     loaded.rows,
                     config.key_columns.clone(),
-                    config.source.clone(),
+                    Some(source.clone()),
                     config.refresh.clone(),
                     schema,
                     Arc::from(loaded.columns),
@@ -185,7 +185,7 @@ fn load_table_from_source(
                 &config.name,
                 loaded.rows,
                 config.key_columns.clone(),
-                config.source.clone(),
+                Some(source.clone()),
                 config.refresh.clone(),
                 schema,
                 Arc::from(loaded.columns),
@@ -252,6 +252,29 @@ mod tests {
 
         let row = one_row(table, &eq(&[("service_id", "svc-001")]));
         assert_eq!(row.get("name"), Some(&Value::from("auth")));
+    }
+
+    /// The refresh task reloads from the table's source, so a table written
+    /// with the flat `path` keeps the file it was loaded from.
+    #[test]
+    fn a_flat_path_table_keeps_its_source_for_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_file(dir.path(), "svc.csv", "id,name\n1,auth\n");
+
+        let configs = vec![EnrichmentTableConfig {
+            name: "svc".into(),
+            path: path.clone(),
+            key_columns: vec!["id".into()],
+            refresh: Some(crate::config::RefreshConfig { interval_secs: 60 }),
+            ..Default::default()
+        }];
+
+        let registry = EnrichmentRegistry::load(&configs).unwrap();
+        let table = registry.get_table("svc").unwrap();
+        assert_eq!(
+            table.source_config(),
+            Some(&EnrichmentSourceConfig::File { path, format: None })
+        );
     }
 
     #[test]
