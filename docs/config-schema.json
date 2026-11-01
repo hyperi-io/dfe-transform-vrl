@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Main configuration.\n\n## This struct is the wrapper's half of the `--config` file\n\nIt owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.\nscalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,\n`batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --\nmay sit beside them: scalo's cascade reads the same file as its settings\nlayer, and its env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists\nthem, and [`warn_unreachable_scalo_settings`] warns for one in a\nworking-directory `config.yaml` read without `--config`, which scalo never\nsees.\n\n## Requires pod restart (bound at startup)\n\n- `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans\n- `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers\n- `sink.brokers` — rdkafka producer connection established at startup\n- `sink.topic` — output topic (changing mid-stream risks data loss)\n- `sink.compression` — rdkafka `compression.type` set at producer creation\n- `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation\n- `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation\n- `sink.librdkafka_options` — passed to `ClientConfig` at creation\n- `transforms.*` — VRL programs compiled at startup, immutable for process lifetime\n\n## Accepted but not applied\n\n[`Config::inert_settings`] is the list, and the wrapper warns at startup for\neach one a deployment has actually set.",
+  "description": "Main configuration.\n\n## This struct is the wrapper's half of the `--config` file\n\nIt owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and\n`dlq`.\nscalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,\n`batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --\nmay sit beside them: scalo's cascade reads the same file as its settings\nlayer, and its env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists\nthem, and [`warn_unreachable_scalo_settings`] warns for one in a\nworking-directory `config.yaml` read without `--config`, which scalo never\nsees.\n\n## Requires pod restart (bound at startup)\n\n- `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans\n- `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers\n- `sink.brokers` — rdkafka producer connection established at startup\n- `sink.topic` — output topic (changing mid-stream risks data loss)\n- `sink.compression` — rdkafka `compression.type` set at producer creation\n- `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation\n- `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation\n- `sink.librdkafka_options` — passed to `ClientConfig` at creation\n- `transforms.*` — VRL programs compiled at startup, immutable for process lifetime\n- `dlq.*` — the dead-letter queue is spawned at startup\n\n## Accepted but not applied\n\n[`Config::inert_settings`] is the list, and the wrapper warns at startup for\neach one a deployment has actually set.",
   "type": "object",
   "properties": {
     "pipeline": {
@@ -88,6 +88,25 @@
         "$ref": "#/$defs/EnrichmentTableConfig"
       },
       "default": []
+    },
+    "dlq": {
+      "description": "Where a record the sink refuses for good goes: one over the sink's\nsize ceiling, or matched by an outbound `dlq` filter. scalo's type\nverbatim. The default writes NDJSON files under `/var/spool/scalo/dlq`,\nwhich the deployment contract declares writable. With `enabled: false`\nsuch a record is dropped and counted on\n`pipeline_dead_letters_dropped_total`.",
+      "$ref": "#/$defs/DlqConfig",
+      "default": {
+        "enabled": true,
+        "mode": "cascade",
+        "queue_capacity": 10000,
+        "batch_size": 256,
+        "flush_interval_ms": 100,
+        "max_payload_bytes": 524288,
+        "file": {
+          "enabled": true,
+          "path": "/var/spool/scalo/dlq",
+          "rotation": "hourly",
+          "max_age_days": 30,
+          "compress_rotated": true
+        }
+      }
     }
   },
   "$defs": {
@@ -590,6 +609,137 @@
       },
       "required": [
         "interval_secs"
+      ]
+    },
+    "DlqConfig": {
+      "description": "Top-level DLQ configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether DLQ is enabled.",
+          "type": "boolean",
+          "default": true
+        },
+        "mode": {
+          "description": "Backend routing mode.",
+          "$ref": "#/$defs/DlqMode",
+          "default": "cascade"
+        },
+        "queue_capacity": {
+          "description": "Bounded mpsc capacity. When the queue is full, `try_send` returns\n`QueueFull` (overflow=Drop). Sized for failure-burst tolerance.\nDefault 10_000.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 10000
+        },
+        "batch_size": {
+          "description": "Drain coalesces up to this many entries into one backend write.\nDefault 256.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 256
+        },
+        "flush_interval_ms": {
+          "description": "Flush a partial batch after this duration, even if not full.\nDefault 100 ms.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 100
+        },
+        "max_payload_bytes": {
+          "description": "Payload bytes an entry keeps: a longer payload is cut to this and the\nentry marked `truncated` with its original length, so it lands where\nthe whole record could not. `None` keeps every payload whole. Default\n[`DEFAULT_MAX_PAYLOAD_BYTES`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "default": 524288
+        },
+        "file": {
+          "description": "File backend configuration.",
+          "$ref": "#/$defs/FileDlqConfig",
+          "default": {
+            "enabled": true,
+            "path": "/var/spool/scalo/dlq",
+            "rotation": "hourly",
+            "max_age_days": 30,
+            "compress_rotated": true
+          }
+        }
+      }
+    },
+    "DlqMode": {
+      "description": "How backends are used when multiple are enabled.",
+      "oneOf": [
+        {
+          "description": "Try backends in order; stop on first success.\nDefault order: Kafka first, file fallback.",
+          "type": "string",
+          "const": "cascade"
+        },
+        {
+          "description": "Write every batch to all enabled backends. The write succeeds when at\nleast one backend takes the whole batch, and fails only when none does.",
+          "type": "string",
+          "const": "fan_out"
+        },
+        {
+          "description": "File backend only (no Kafka dependency).",
+          "type": "string",
+          "const": "file_only"
+        },
+        {
+          "description": "Kafka backend only (matches a typical consumer's current behaviour).",
+          "type": "string",
+          "const": "kafka_only"
+        }
+      ]
+    },
+    "FileDlqConfig": {
+      "description": "File-based DLQ configuration.\n\nWrites NDJSON files with automatic rotation and cleanup.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable the file backend.",
+          "type": "boolean",
+          "default": true
+        },
+        "path": {
+          "description": "Base directory for DLQ files.\nService name is appended as a subdirectory. Default `/var/spool/scalo/dlq`.",
+          "type": "string",
+          "default": "/var/spool/scalo/dlq"
+        },
+        "rotation": {
+          "description": "File rotation period.",
+          "$ref": "#/$defs/RotationPeriod",
+          "default": "hourly"
+        },
+        "max_age_days": {
+          "description": "Auto-cleanup files older than this many days.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 30
+        },
+        "compress_rotated": {
+          "description": "Compress rotated files with flate2/gzip.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "RotationPeriod": {
+      "description": "File rotation period.",
+      "oneOf": [
+        {
+          "description": "Rotate files every hour.",
+          "type": "string",
+          "const": "hourly"
+        },
+        {
+          "description": "Rotate files every day.",
+          "type": "string",
+          "const": "daily"
+        }
       ]
     }
   }

@@ -26,6 +26,7 @@ RUN chmod +x /usr/local/bin/dfe-transform-vrl
 
 # A base image may ship its own user at UID 1000 (Ubuntu's `ubuntu`), so remove it first.
 RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && useradd --create-home --uid 1000 appuser
+RUN mkdir -p '/var/spool/scalo/dlq' && chown 1000:1000 '/var/spool/scalo/dlq'
 WORKDIR /home/appuser
 # Numeric, so Kubernetes runAsNonRoot can verify it without reading /etc/passwd.
 USER 1000

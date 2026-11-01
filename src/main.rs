@@ -26,7 +26,8 @@ async fn main() {
         return;
     }
 
-    if let Err(e) = scalo::cli::run_app(app).await {
+    // Boxed: the service future is large enough that clippy::large_futures flags it on the stack.
+    if let Err(e) = Box::pin(scalo::cli::run_app(app)).await {
         eprintln!("fatal: {e}");
         std::process::exit(1);
     }

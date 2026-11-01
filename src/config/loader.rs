@@ -100,7 +100,8 @@ pub struct TlsConfig {
 ///
 /// ## This struct is the wrapper's half of the `--config` file
 ///
-/// It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
+/// It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
+/// `dlq`.
 /// scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
 /// `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
 /// may sit beside them: scalo's cascade reads the same file as its settings
@@ -120,12 +121,13 @@ pub struct TlsConfig {
 /// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
 /// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
 /// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
+/// - `dlq.*` — the dead-letter queue is spawned at startup
 ///
 /// ## Accepted but not applied
 ///
 /// [`Config::inert_settings`] is the list, and the wrapper warns at startup for
 /// each one a deployment has actually set.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     pub pipeline: PipelineConfig,
@@ -134,6 +136,13 @@ pub struct Config {
     pub transforms: TransformConfig,
     #[serde(default)]
     pub enrichment_tables: Vec<EnrichmentTableConfig>,
+    /// Where a record the sink refuses for good goes: one over the sink's
+    /// size ceiling, or matched by an outbound `dlq` filter. scalo's type
+    /// verbatim. The default writes NDJSON files under `/var/spool/scalo/dlq`,
+    /// which the deployment contract declares writable. With `enabled: false`
+    /// such a record is dropped and counted on
+    /// `pipeline_dead_letters_dropped_total`.
+    pub dlq: scalo::dlq::DlqConfig,
 }
 
 /// Enrichment table configuration.

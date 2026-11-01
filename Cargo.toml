@@ -72,6 +72,8 @@ scalo = { version = ">=2.14.24, <3", features = [
     "config-reload",
     "config-schema",
     "deployment",
+    # A record the sink refuses for good goes to the file DLQ, never dropped.
+    "dlq",
     "governor",
     # The transports register their health here, and /readyz reads it.
     "health",

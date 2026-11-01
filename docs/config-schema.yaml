@@ -5,7 +5,8 @@ description: |-
 
   ## This struct is the wrapper's half of the `--config` file
 
-  It owns `pipeline`, `source`, `sink`, `transforms` and `enrichment_tables`.
+  It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
+  `dlq`.
   scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
   `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
   may sit beside them: scalo's cascade reads the same file as its settings
@@ -25,6 +26,7 @@ description: |-
   - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
   - `sink.librdkafka_options` — passed to `ClientConfig` at creation
   - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
+  - `dlq.*` — the dead-letter queue is spawned at startup
 
   ## Accepted but not applied
 
@@ -99,6 +101,28 @@ properties:
     items:
       $ref: "#/$defs/EnrichmentTableConfig"
     default: []
+  dlq:
+    description: |-
+      Where a record the sink refuses for good goes: one over the sink's
+      size ceiling, or matched by an outbound `dlq` filter. scalo's type
+      verbatim. The default writes NDJSON files under `/var/spool/scalo/dlq`,
+      which the deployment contract declares writable. With `enabled: false`
+      such a record is dropped and counted on
+      `pipeline_dead_letters_dropped_total`.
+    $ref: "#/$defs/DlqConfig"
+    default:
+      enabled: true
+      mode: cascade
+      queue_capacity: 10000
+      batch_size: 256
+      flush_interval_ms: 100
+      max_payload_bytes: 524288
+      file:
+        enabled: true
+        path: /var/spool/scalo/dlq
+        rotation: hourly
+        max_age_days: 30
+        compress_rotated: true
 $defs:
   PipelineConfig:
     description: Pipeline identity and processing settings.
@@ -520,3 +544,120 @@ $defs:
         minimum: 0
     required:
     - interval_secs
+  DlqConfig:
+    description: Top-level DLQ configuration.
+    type: object
+    properties:
+      enabled:
+        description: Whether DLQ is enabled.
+        type: boolean
+        default: true
+      mode:
+        description: Backend routing mode.
+        $ref: "#/$defs/DlqMode"
+        default: cascade
+      queue_capacity:
+        description: |-
+          Bounded mpsc capacity. When the queue is full, `try_send` returns
+          `QueueFull` (overflow=Drop). Sized for failure-burst tolerance.
+          Default 10_000.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 10000
+      batch_size:
+        description: |-
+          Drain coalesces up to this many entries into one backend write.
+          Default 256.
+        type: integer
+        format: uint
+        minimum: 0
+        default: 256
+      flush_interval_ms:
+        description: |-
+          Flush a partial batch after this duration, even if not full.
+          Default 100 ms.
+        type: integer
+        format: uint64
+        minimum: 0
+        default: 100
+      max_payload_bytes:
+        description: |-
+          Payload bytes an entry keeps: a longer payload is cut to this and the
+          entry marked `truncated` with its original length, so it lands where
+          the whole record could not. `None` keeps every payload whole. Default
+          [`DEFAULT_MAX_PAYLOAD_BYTES`].
+        type:
+        - integer
+        - "null"
+        format: uint
+        minimum: 0
+        default: 524288
+      file:
+        description: File backend configuration.
+        $ref: "#/$defs/FileDlqConfig"
+        default:
+          enabled: true
+          path: /var/spool/scalo/dlq
+          rotation: hourly
+          max_age_days: 30
+          compress_rotated: true
+  DlqMode:
+    description: How backends are used when multiple are enabled.
+    oneOf:
+    - description: |-
+        Try backends in order; stop on first success.
+        Default order: Kafka first, file fallback.
+      type: string
+      const: cascade
+    - description: |-
+        Write every batch to all enabled backends. The write succeeds when at
+        least one backend takes the whole batch, and fails only when none does.
+      type: string
+      const: fan_out
+    - description: File backend only (no Kafka dependency).
+      type: string
+      const: file_only
+    - description: Kafka backend only (matches a typical consumer's current behaviour).
+      type: string
+      const: kafka_only
+  FileDlqConfig:
+    description: |-
+      File-based DLQ configuration.
+
+      Writes NDJSON files with automatic rotation and cleanup.
+    type: object
+    properties:
+      enabled:
+        description: Enable the file backend.
+        type: boolean
+        default: true
+      path:
+        description: |-
+          Base directory for DLQ files.
+          Service name is appended as a subdirectory. Default `/var/spool/scalo/dlq`.
+        type: string
+        default: /var/spool/scalo/dlq
+      rotation:
+        description: File rotation period.
+        $ref: "#/$defs/RotationPeriod"
+        default: hourly
+      max_age_days:
+        description: Auto-cleanup files older than this many days.
+        type: integer
+        format: uint32
+        minimum: 0
+        default: 30
+      compress_rotated:
+        description: Compress rotated files with flate2/gzip.
+        type: boolean
+        default: true
+  RotationPeriod:
+    description: File rotation period.
+    oneOf:
+    - description: Rotate files every hour.
+      type: string
+      const: hourly
+    - description: Rotate files every day.
+      type: string
+      const: daily

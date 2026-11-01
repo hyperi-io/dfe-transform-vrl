@@ -53,6 +53,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use scalo::SelfRegulationGovernor;
 use scalo::config::shared::SharedConfig;
+use scalo::dlq::{Dlq, DlqConfig};
 use scalo::logger::log_sampled;
 use scalo::memory::MemoryGuard;
 use scalo::scaling::ScalingPressure;
@@ -260,6 +261,27 @@ pub async fn run(
     }
 
     result
+}
+
+/// Spawn the DLQ `config` describes and give `engine` its dead letters.
+///
+/// A record the sink would refuse for good, over its size ceiling or matched
+/// by an outbound `dlq` filter, goes there, and its block is released only
+/// once the DLQ holds it. The DLQ runs on its own token, so it outlives the
+/// pipeline loop and takes the dead letters of the blocks drained at
+/// shutdown: shut it down after the loop returns. With `enabled: false` such a
+/// record is dropped and counted.
+///
+/// # Errors
+///
+/// The DLQ cannot be spawned from `config`.
+pub fn with_dead_letter_queue(
+    engine: BatchEngine,
+    config: &DlqConfig,
+) -> crate::Result<(BatchEngine, Dlq)> {
+    let dlq = Dlq::spawn(config, "dfe-transform-vrl", None, CancellationToken::new())
+        .map_err(|e| crate::Error::Config(format!("dlq: {e}")))?;
+    Ok((engine.with_dlq(Arc::new(dlq.clone())), dlq))
 }
 
 /// Start the direct transport's Push listener, armed from its first request.
