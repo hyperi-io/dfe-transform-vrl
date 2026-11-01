@@ -1135,11 +1135,12 @@ mod tests {
             table.find_rows(&cst, true, None, None, None).unwrap().len(),
             5
         );
-        assert!(
+        assert_eq!(
             table
                 .find_rows(&cst, true, None, None, Some(0))
                 .unwrap()
-                .is_empty()
+                .len(),
+            0
         );
     }
 

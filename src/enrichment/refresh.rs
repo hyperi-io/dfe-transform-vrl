@@ -154,6 +154,7 @@ fn reload_table(
 mod tests {
     use super::*;
     use crate::config::loader::{EnrichmentTableConfig, RefreshConfig};
+    use std::fmt::Write as _;
     use std::io::Write;
 
     /// The refresh tests declare no column types.
@@ -349,8 +350,11 @@ mod tests {
             .unwrap()
             .into_arc();
 
-        let rows: String = (0..100).map(|i| format!("key{i},{i}\n")).collect();
-        write_csv(dir.path(), "t.csv", &format!("k,v\n{rows}"));
+        let rows = (0..100).fold(String::from("k,v\n"), |mut csv, i| {
+            let _ = writeln!(csv, "key{i},{i}");
+            csv
+        });
+        write_csv(dir.path(), "t.csv", &rows);
         reload_table(
             &reg_arc,
             "bounded",

@@ -133,8 +133,9 @@ fn load_table_from_source(
                 ))
             }
         }
-        _ => {
-            // File, STIX, SQLite -- all dispatched through load_from_source
+        EnrichmentSourceConfig::File { .. }
+        | EnrichmentSourceConfig::Stix { .. }
+        | EnrichmentSourceConfig::Sqlite { .. } => {
             let loaded =
                 loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
             Ok(EnrichmentTable::new_hashmap(
