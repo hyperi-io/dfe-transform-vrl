@@ -337,9 +337,9 @@ pub struct SourceConfig {
     pub session_timeout_ms: u32,
     pub commit_interval_ms: u32,
     /// librdkafka statistics emission interval (ms). 0 = disabled.
-    /// When enabled (and scalo supports `StatsContext` in `KafkaTransport`),
-    /// rdkafka broker RTT, consumer lag, and queue depth metrics auto-emit
-    /// to the Prometheus `/metrics` endpoint.
+    /// The statistics carry the broker RTT, consumer lag and queue depth
+    /// metrics on `/metrics`, and the lag `/scaling/pressure` reports, so 0
+    /// leaves the KEDA lag signal at zero.
     pub statistics_interval_ms: u32,
     /// Extra librdkafka options.
     pub librdkafka_options: BTreeMap<String, String>,

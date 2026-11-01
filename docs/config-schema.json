@@ -194,7 +194,7 @@
           "default": 5000
         },
         "statistics_interval_ms": {
-          "description": "librdkafka statistics emission interval (ms). 0 = disabled.\nWhen enabled (and scalo supports `StatsContext` in `KafkaTransport`),\nrdkafka broker RTT, consumer lag, and queue depth metrics auto-emit\nto the Prometheus `/metrics` endpoint.",
+          "description": "librdkafka statistics emission interval (ms). 0 = disabled.\nThe statistics carry the broker RTT, consumer lag and queue depth\nmetrics on `/metrics`, and the lag `/scaling/pressure` reports, so 0\nleaves the KEDA lag signal at zero.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0,

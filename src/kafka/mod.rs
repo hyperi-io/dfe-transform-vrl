@@ -42,12 +42,11 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
         prefetch_queue_kib(source.max_buffer_bytes).to_string(),
     );
 
-    if source.statistics_interval_ms > 0 {
-        kafka_config.librdkafka_overrides.insert(
-            "statistics.interval.ms".to_string(),
-            source.statistics_interval_ms.to_string(),
-        );
-    }
+    // Always written: scalo sets 5000 when the key is absent, so 0 must be sent to turn statistics off.
+    kafka_config.librdkafka_overrides.insert(
+        "statistics.interval.ms".to_string(),
+        source.statistics_interval_ms.to_string(),
+    );
 
     for (k, v) in &source.librdkafka_options {
         kafka_config
@@ -304,6 +303,24 @@ mod tests {
             assert!(
                 !config.librdkafka_overrides.contains_key("fetch.max.bytes"),
                 "fetch sizing stays with the sizing surface"
+            );
+        }
+    }
+
+    /// The interval always reaches librdkafka, because scalo sets 5000 when
+    /// none is given, and 0 is how statistics are turned off.
+    #[test]
+    fn statistics_interval_reaches_librdkafka_including_zero() {
+        for interval in [0_u32, 1000, 5000] {
+            let mut source = default_source();
+            source.statistics_interval_ms = interval;
+            let config = build_consumer_config(&source);
+            assert_eq!(
+                config
+                    .librdkafka_overrides
+                    .get("statistics.interval.ms")
+                    .map(String::as_str),
+                Some(interval.to_string().as_str()),
             );
         }
     }
