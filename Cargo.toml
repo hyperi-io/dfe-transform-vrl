@@ -178,18 +178,17 @@ tempfile = ">=3.27.0, <4"
 # timestamps against the elastic golden outputs.
 flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
-# Testcontainers — auto-spawn Apache Kafka for e2e tests when no live broker
-# is available (live broker via $KAFKA_BROKERS / TEST_MODE=docker takes precedence).
-# Container is cleaned up via RAII Drop when the test ends.
-testcontainers = ">=0.27.3, <0.28"
-testcontainers-modules = { version = ">=0.15.0, <0.16", features = ["kafka"] }
 # MemoryTransport for the broker-free pipeline tests
 # (tests/integration/pipeline_memory.rs). A dev-dependency, NOT a crate
 # feature: an optional feature outside the default set gets compiled away by
 # hyperi-ci's `features: default`, which deletes those tests from CI instead of
 # failing. Here they always build, and the shipped binary still does not carry
-# the transport.
-scalo = { version = ">=2.14.24, <3", features = ["transport-memory"] }
+# the transport. transport-kafka-test-support is the run's shared broker
+# container the Kafka tests use.
+scalo = { version = ">=2.14.24, <3", features = [
+    "transport-memory",
+    "transport-kafka-test-support",
+] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
 temp-env = ">=0.3.6, <0.4"
