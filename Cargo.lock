@@ -347,17 +347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "backon"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
-dependencies = [
- "fastrand",
- "gloo-timers",
- "tokio",
-]
-
-[[package]]
 name = "base16"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1756,18 +1745,6 @@ name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
-
-[[package]]
-name = "gloo-timers"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
-dependencies = [
- "futures-channel",
- "futures-core",
- "js-sys",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "governor"
@@ -4461,12 +4438,11 @@ dependencies = [
 
 [[package]]
 name = "scalo"
-version = "2.14.22"
+version = "2.14.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea871e3663df6c7e3501460dad6fa4db5ff87cdf58dd13f3940b4cd39d124e1"
+checksum = "2427c709e6c0b213b7424ba349f1cbe230b93af3e37b38f481c5d3fa27fa289a"
 dependencies = [
  "axum",
- "backon",
  "bytes",
  "chrono",
  "clap",
