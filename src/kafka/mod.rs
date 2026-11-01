@@ -325,6 +325,32 @@ mod tests {
         );
     }
 
+    /// `/readyz` reads scalo's health registry, so each Kafka transport this
+    /// service builds must register there: a refused credential, a missing
+    /// topic or a fenced consumer then takes the pod out of service.
+    #[tokio::test]
+    async fn the_kafka_transports_register_with_readiness() {
+        let count = || {
+            scalo::health::HealthRegistry::components()
+                .iter()
+                .filter(|(name, _)| name == "transport:kafka")
+                .count()
+        };
+        let before = count();
+        let mut source = default_source();
+        source.brokers = vec!["127.0.0.1:1".into()];
+        let consumer = create_consumer(&build_consumer_config(&source))
+            .await
+            .unwrap();
+        let mut sink = default_sink();
+        sink.brokers = vec!["127.0.0.1:1".into()];
+        let producer = create_producer(&build_producer_config(&sink, "p"))
+            .await
+            .unwrap();
+        assert_eq!(count(), before + 2);
+        drop((consumer, producer));
+    }
+
     #[test]
     fn test_build_consumer_config_librdkafka_overrides() {
         let mut source = default_source();

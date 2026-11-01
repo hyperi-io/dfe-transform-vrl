@@ -73,6 +73,8 @@ scalo = { version = "2.14.22", features = [
     "config-schema",
     "deployment",
     "governor",
+    # The transports register their health here, and /readyz reads it.
+    "health",
     "http-server",
     "logger",
     "memory",

@@ -187,10 +187,10 @@ group. Adding a source is a manifest edit, not a change here.
 comparison in full, format detection behaviour, the memory budget table, and the
 field-by-field reload matrix.
 
-Two things are known gaps rather than omissions. Readiness still goes up before
-any successful broker interaction, so a wrong credential or an unreachable broker
-can still report Ready -- the specific case of a credential that cannot possibly
-authenticate is refused at startup, but the general gate needs the readiness flag
-moved behind a broker probe. And rotating the Kafka credential does not roll the
+Two things are known gaps rather than omissions. Readiness reads scalo's health
+registry, so a broker refusing the credentials, a missing topic or a consumer
+that cannot recover takes the pod out of service once the client meets it. But a
+scalo transport registers healthy before it has reached a broker, so a pod whose
+broker it has never reached still reports Ready. And rotating the Kafka credential does not roll the
 pods, because the chart is generator output and the `checksum/secret` annotation
 has to come from scalo (hyperi-io/scalo-rs#110).
