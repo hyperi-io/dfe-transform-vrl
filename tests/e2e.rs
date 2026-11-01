@@ -15,9 +15,9 @@
 //!   `cargo nextest run -- --ignored`
 //!   `TEST_MODE=docker cargo nextest run -- --ignored`
 //!
-//! `filebeat_kafka` and `held_acks` are not among them: they use a broker
-//! container scalo's `shared_service` starts, the run's shared one or one
-//! `held_acks` holds alone, so they run by default like any other test.
+//! `filebeat_kafka`, `held_acks` and `kafka_tls` are not among them: they use a broker
+//! container scalo's test support starts, the run's shared one or one the
+//! test holds alone, so they run by default like any other test.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -37,6 +37,9 @@ mod held_acks;
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
 #[path = "e2e/kafka.rs"]
 mod kafka;
+
+#[path = "e2e/kafka_tls.rs"]
+mod kafka_tls;
 
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
 #[path = "e2e/connectivity.rs"]

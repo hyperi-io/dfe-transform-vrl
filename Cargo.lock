@@ -1398,6 +1398,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "futures"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1465,6 +1480,7 @@ version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -4134,9 +4150,9 @@ dependencies = [
 
 [[package]]
 name = "scalo"
-version = "2.14.24"
+version = "2.14.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2427c709e6c0b213b7424ba349f1cbe230b93af3e37b38f481c5d3fa27fa289a"
+checksum = "20a4403ba4e4d6ac2ea494be7e0922fe24069d96cd64bfbd37b23f2e122f3fac"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -4825,6 +4841,7 @@ version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
 dependencies = [
+ "futures",
  "parking_lot 0.12.5",
 ]
 

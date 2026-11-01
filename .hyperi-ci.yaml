@@ -41,6 +41,9 @@ test:
     # Require process-per-test isolation rather than taking whatever the
     # runner has installed.
     nextest: true
+  # A release runs the full tier, the ignored e2e tests included. tests/TESTING.md says which tests are which.
+  full:
+    required_for_release: true
 
 # Building
 build:

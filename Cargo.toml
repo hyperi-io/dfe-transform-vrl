@@ -66,7 +66,7 @@ bytes = ">=1.12.1, <2"
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = ">=2.14.24, <3", features = [
+scalo = { version = ">=2.14.25, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -185,13 +185,13 @@ tar = ">=0.4.46, <0.5"
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport. transport-kafka-test-support is the run's shared broker
 # container the Kafka tests use.
-scalo = { version = ">=2.14.24, <3", features = [
+scalo = { version = ">=2.14.25, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
 # Env is process-global and the harness runs tests in parallel -- the flat-env
 # tests must scope their vars rather than leak them into a sibling test.
-temp-env = ">=0.3.6, <0.4"
+temp-env = { version = ">=0.3.6, <0.4", features = ["async_closure"] }
 # The repo's own .env for the live-broker tests. The binary's .env is read by scalo's cascade.
 dotenvy = ">=0.15.7, <0.16"
 # The Push tests read the gRPC status code a sender gets, which scalo's client
