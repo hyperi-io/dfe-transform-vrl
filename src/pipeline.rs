@@ -653,23 +653,24 @@ fn transform_records(
     // Layer 3: app-specific
     transform_metrics.batch_size.record(batch_len as f64);
 
-    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool.
+    // Phase 1: parse JSON (CPU-bound) -- parallel via the pool. Each payload
+    // moves into its closure, so its bytes go once the event is parsed.
     let deser_start = Instant::now();
     let indexed: Vec<(usize, Bytes)> = records
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(idx, rec)| (idx, rec.payload.clone()))
+        .map(|(idx, rec)| (idx, rec.payload))
         .collect();
 
-    let deser = |(idx, payload): &(usize, Bytes)| -> DeserResult {
-        match deserialize_event(payload) {
-            Ok(v) => Ok((v, *idx)),
-            Err(e) => Err((*idx, e.to_string())),
+    let deser = |(idx, payload): (usize, Bytes)| -> DeserResult {
+        match deserialize_event(&payload) {
+            Ok(v) => Ok((v, idx)),
+            Err(e) => Err((idx, e.to_string())),
         }
     };
     let deser_results: Vec<DeserResult> = match worker_pool {
-        Some(pool) => pool.process_batch(&indexed, deser),
-        None => indexed.iter().map(deser).collect(),
+        Some(pool) => pool.map_owned(indexed, deser),
+        None => indexed.into_iter().map(deser).collect(),
     };
 
     // The error text can quote the record, so it is logged at debug only.
@@ -692,18 +693,18 @@ fn transform_records(
         transform_metrics.record_format("json", events.len() as u64);
     }
 
-    // Phase 2: VRL transform (CPU-bound) -- parallel via the pool.
+    // Phase 2: VRL transform (CPU-bound) -- parallel via the pool. Each event
+    // is moved into its closure and transformed in place, never copied.
     let vrl_start = Instant::now();
-    let vrl = |(value, idx): &(Value, usize)| -> VrlResult {
-        let mut value = value.clone();
+    let vrl = |(mut value, idx): (Value, usize)| -> VrlResult {
         match run_vrl(program, &mut value) {
-            Ok(_) => Ok((value, *idx)),
-            Err(e) => Err((*idx, e)),
+            Ok(_) => Ok((value, idx)),
+            Err(e) => Err((idx, e)),
         }
     };
     let vrl_results: Vec<VrlResult> = match worker_pool {
-        Some(pool) => pool.process_batch(&events, vrl),
-        None => events.iter().map(vrl).collect(),
+        Some(pool) => pool.map_owned(events, vrl),
+        None => events.into_iter().map(vrl).collect(),
     };
 
     let mut transformed: Vec<(Value, usize)> = Vec::with_capacity(vrl_results.len());
@@ -737,9 +738,10 @@ fn transform_records(
     // destination topic, so there is no slot for a partition key); the routing
     // field stays a config surface only until #37 lands.
     let ser_start = Instant::now();
+    // Each event is dropped as soon as its bytes are built.
     let mut out_records: Vec<Record> = Vec::with_capacity(transformed.len());
-    for (value, _idx) in &transformed {
-        match serialize_event(value) {
+    for (value, _idx) in transformed {
+        match serialize_event(&value) {
             Ok(serialized) => {
                 out_records.push(Record {
                     payload: Bytes::from(serialized),
