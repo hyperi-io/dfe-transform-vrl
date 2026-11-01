@@ -347,7 +347,9 @@ pub struct SourceConfig {
     pub brokers: Vec<String>,
     pub topics: Vec<String>,
     pub group_id: String,
-    /// Maximum consumer buffer size in bytes.
+    /// Bytes of fetched records librdkafka holds ahead of the pipeline, set
+    /// as `queued.max.messages.kbytes`. One fetch can overshoot it by up to
+    /// `max.partition.fetch.bytes`.
     pub max_buffer_bytes: u64,
     pub sasl: SaslConfig,
     pub tls: TlsConfig,

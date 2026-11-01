@@ -30,11 +30,17 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
         topics: source.topics.clone(),
         auto_offset_reset: source.auto_offset_reset.clone(),
         session_timeout_ms: source.session_timeout_ms,
-        fetch_max_bytes: i32::try_from(source.max_buffer_bytes).unwrap_or(i32::MAX),
         ..KafkaConfig::production()
     };
 
     apply_sasl_tls(&mut kafka_config, &source.sasl, &source.tls);
+
+    // Fetch sizes come from scalo's sizing surface, which overwrites the
+    // named fetch fields, so the buffer cap is the prefetch queue itself.
+    kafka_config.librdkafka_overrides.insert(
+        "queued.max.messages.kbytes".to_string(),
+        prefetch_queue_kib(source.max_buffer_bytes).to_string(),
+    );
 
     if source.statistics_interval_ms > 0 {
         kafka_config.librdkafka_overrides.insert(
@@ -50,6 +56,12 @@ pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
     }
 
     kafka_config
+}
+
+/// `max_buffer_bytes` in KiB, inside librdkafka's `1..=2097151` range for
+/// `queued.max.messages.kbytes`.
+fn prefetch_queue_kib(max_buffer_bytes: u64) -> u64 {
+    (max_buffer_bytes / 1024).clamp(1, 2_097_151)
 }
 
 /// Build a `KafkaConfig` for the producer from our sink config.
@@ -266,6 +278,47 @@ mod tests {
         assert_eq!(config.ssl_certificate_location, Some("/cert.pem".into()));
         assert_eq!(config.ssl_key_location, Some("/key.pem".into()));
         assert!(config.ssl_skip_verify);
+    }
+
+    /// `max_buffer_bytes` bounds librdkafka's prefetch queue. The override
+    /// layer is the one the transport applies last, so the queue cap must be
+    /// there, and fetch sizing is left to scalo's sizing surface.
+    #[test]
+    fn max_buffer_bytes_caps_the_consumer_prefetch_queue() {
+        for (bytes, kib) in [(67_108_864_u64, "65536"), (16_777_216, "16384"), (1023, "1")] {
+            let mut source = default_source();
+            source.max_buffer_bytes = bytes;
+            let config = build_consumer_config(&source);
+            assert_eq!(
+                config
+                    .librdkafka_overrides
+                    .get("queued.max.messages.kbytes")
+                    .map(String::as_str),
+                Some(kib),
+                "max_buffer_bytes {bytes}"
+            );
+            assert!(
+                !config.librdkafka_overrides.contains_key("fetch.max.bytes"),
+                "fetch sizing stays with the sizing surface"
+            );
+        }
+    }
+
+    /// An operator's own `queued.max.messages.kbytes` wins over the derived cap.
+    #[test]
+    fn a_librdkafka_option_overrides_the_derived_queue_cap() {
+        let mut source = default_source();
+        source
+            .librdkafka_options
+            .insert("queued.max.messages.kbytes".into(), "2048".into());
+        let config = build_consumer_config(&source);
+        assert_eq!(
+            config
+                .librdkafka_overrides
+                .get("queued.max.messages.kbytes")
+                .map(String::as_str),
+            Some("2048")
+        );
     }
 
     #[test]
