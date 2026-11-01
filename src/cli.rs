@@ -417,11 +417,18 @@ async fn run_transform_service(
     }
 
     // Batch engine: the runtime built it (governed byte-budget lever already
-    // wired when self-regulation is on). The mid-tier transform requires it.
+    // wired when self-regulation is on). The mid-tier transform requires it,
+    // and takes it over to give it the DLQ, which `with_dlq` needs by value.
     let engine = runtime
         .batch_engine
-        .clone()
+        .take()
         .ok_or_else(|| anyhow::anyhow!("batch engine unavailable (worker pool not configured)"))?;
+    let engine = Arc::try_unwrap(engine).map_err(|_| {
+        anyhow::anyhow!("the runtime's batch engine is shared, so no DLQ can be wired")
+    })?;
+    let (engine, dlq) = pipeline::with_dead_letter_queue(engine, &config.dlq)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let engine = Arc::new(engine);
 
     // Self-regulation governor (default-ON, opt-out). Cloned into the pipeline
     // so the Kafka pause-partitions inbound gate can be attached to the consumer.
@@ -468,6 +475,9 @@ async fn run_transform_service(
     )
     .await;
     memory_gauge_task.abort();
+    if let Err(e) = dlq.shutdown().await {
+        error!(error = %e, "the DLQ drain did not stop cleanly");
+    }
 
     match result {
         Ok(()) => info!("pipeline shutdown complete"),

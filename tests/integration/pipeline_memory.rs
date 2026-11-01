@@ -112,15 +112,17 @@ fn compile_program(source: &str) -> Arc<vrl::compiler::Program> {
 /// the bounds from `available_parallelism` and panics on a 1-core CI sandbox
 /// (`min_threads > max_threads`).
 fn engine() -> Arc<BatchEngine> {
+    Arc::new(bare_engine())
+}
+
+/// [`engine`], owned, for a test that gives it a DLQ.
+fn bare_engine() -> BatchEngine {
     let pool = Arc::new(AdaptiveWorkerPool::new(WorkerPoolConfig {
         min_threads: 1,
         max_threads: 1,
         ..Default::default()
     }));
-    Arc::new(BatchEngine::with_pool(
-        pool,
-        BatchProcessingConfig::default(),
-    ))
+    BatchEngine::with_pool(pool, BatchProcessingConfig::default())
 }
 
 #[tokio::test]
@@ -990,4 +992,76 @@ async fn test_pipeline_with_real_metrics_recorder() {
         5,
         "all events should be metricated and delivered"
     );
+}
+
+/// Every DLQ entry written under `dir`, decoded from its NDJSON files.
+fn dlq_entries(dir: &std::path::Path) -> Vec<scalo::dlq::DlqEntry> {
+    let mut entries = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                entries.extend(text.lines().filter_map(|l| serde_json::from_str(l).ok()));
+            }
+        }
+    }
+    entries
+}
+
+/// A record the sink would refuse for good goes to the DLQ the config names.
+/// The sink here is a gRPC client with a 256-byte ceiling and no server, so the
+/// screen dead-letters the record before anything is sent.
+#[tokio::test]
+async fn a_record_the_sink_refuses_for_good_goes_to_the_dlq() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut dlq_config = scalo::dlq::DlqConfig::default();
+    dlq_config.file.path = dir.path().to_path_buf();
+    let (eng, dlq) =
+        dfe_transform_vrl::pipeline::with_dead_letter_queue(bare_engine(), &dlq_config).unwrap();
+
+    let mut grpc = scalo::transport::grpc::GrpcConfig::client("http://127.0.0.1:1");
+    grpc.max_message_size = 256;
+    let sink = scalo::transport::grpc::GrpcTransport::new(&grpc)
+        .await
+        .unwrap();
+
+    let h = Harness::new(10, 50, ".id");
+    let big = format!(r#"{{"id":"too-big","pad":"{}"}}"#, "x".repeat(1024));
+    h.send_json(&big).await;
+
+    let source = Arc::clone(&h.source);
+    let shutdown = h.shutdown.clone();
+    let hot = h.hot_config.clone();
+    let pipeline = tokio::spawn(async move {
+        run_governed_pipeline(
+            &eng,
+            &*source,
+            &sink,
+            compile_program("."),
+            hot,
+            &Arc::new(TransformMetrics::default()),
+            Arc::new(AtomicBool::new(false)),
+            shutdown,
+            None,
+            "out".to_string(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await
+    });
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while dlq_entries(dir.path()).is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    h.shutdown();
+    pipeline.await.unwrap().unwrap();
+    dlq.shutdown().await.unwrap();
+
+    let entries = dlq_entries(dir.path());
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let payload = String::from_utf8_lossy(&entries[0].payload);
+    assert!(payload.contains("too-big"), "{payload}");
 }

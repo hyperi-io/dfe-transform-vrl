@@ -41,6 +41,9 @@ test:
     # Require process-per-test isolation rather than taking whatever the
     # runner has installed.
     nextest: true
+  # A release runs the full tier, the ignored e2e tests included. tests/TESTING.md says which tests are which.
+  full:
+    required_for_release: true
 
 # Building
 build:
@@ -49,6 +52,9 @@ build:
     - native
   rust:
     glibc_max: "2.41"
+    # librdkafka and OpenSSL link statically from hyperi-ci's prefix, so the
+    # image installs no C library packages.
+    static_libs: true
     optimize:
       pgo:
         # Built before the workload clock starts: an uncached arm64 runner takes longer than the workload timeout to compile it.

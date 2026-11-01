@@ -28,6 +28,6 @@ pub use hot::HotConfig;
 pub use loader::{
     Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, INERT_SETTINGS,
     InertSetting, PipelineConfig, RefreshConfig, SCALO_CASCADE_SECTIONS, SaslConfig, SaslMechanism,
-    SinkConfig, SourceConfig, StixAuthConfig, TlsConfig, TransformConfig, Transport,
+    SinkConfig, SourceConfig, TlsConfig, TransformConfig, Transport,
     warn_unreachable_scalo_settings, working_dir_config_file,
 };

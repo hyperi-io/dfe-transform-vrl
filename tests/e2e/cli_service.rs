@@ -8,7 +8,7 @@
 
 //! Drives the full `pipeline::run` path with a real Kafka broker.
 //! Live broker via `.env` (KAFKA_BROKERS) is preferred; falls back to
-//! testcontainers Apache Kafka if no live broker is reachable.
+//! the run's shared Kafka container if no live broker is reachable.
 //!
 //! This test is the only thing that exercises `pipeline::run` (which
 //! constructs `KafkaTransport` directly and drives the governed engine), so it
@@ -101,7 +101,7 @@ fn seed_producer_config(kf: &common::KafkaTestConfig, topic: &str) -> KafkaConfi
 }
 
 #[tokio::test]
-#[ignore = "requires live Kafka broker or testcontainers. \
+#[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
     NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
 async fn test_pipeline_run_end_to_end_with_live_kafka() {

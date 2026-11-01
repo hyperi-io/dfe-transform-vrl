@@ -9,7 +9,9 @@
 //! Spawns per-table tokio tasks that periodically reload enrichment data
 //! and atomically swap the inner `FxHashMap` via `ArcSwap`.
 //!
-//! Fail-safe: on reload failure, keeps existing data and logs the error.
+//! Fail-safe: on reload failure, keeps existing data and logs the error. A
+//! reload over the table's `max_bytes` is a failure too, found once the new
+//! rows are built, so the old and new rows are both held until it is refused.
 //! Minimum interval enforced: 60 seconds (clamped at runtime).
 
 use std::sync::Arc;
@@ -97,30 +99,6 @@ fn reload_table(
     let start = std::time::Instant::now();
 
     let result = match source {
-        EnrichmentSourceConfig::Stix {
-            path,
-            url: _,
-            collection: _,
-            auth: _,
-        } => {
-            // File-based STIX only for sync refresh (HTTP needs async wiring)
-            path.as_ref().map_or_else(
-                || {
-                    Err(crate::Error::Enrichment(format!(
-                        "table '{table_name}': STIX HTTP refresh not yet supported"
-                    )))
-                },
-                |file_path| {
-                    crate::enrichment::stix::load_stix(
-                        Some(file_path.as_str()),
-                        None,
-                        None,
-                        table_name,
-                        key_columns,
-                    )
-                },
-            )
-        }
         EnrichmentSourceConfig::Mmdb { .. } => {
             // MMDB refresh would need to swap the Reader, not the HashMap
             Err(crate::Error::Enrichment(format!(
@@ -138,6 +116,12 @@ fn reload_table(
         // against it and a running program cannot be re-validated.
         Ok(new_data) => {
             if let Some(table) = registry.get_table(table_name) {
+                let estimated = loader::estimate_table_bytes(&new_data.rows);
+                if let Err(e) = table.check_max_bytes(estimated) {
+                    error!(table = %table_name, error = %e, "enrichment refresh refused, keeping existing data");
+                    metrics.record_enrichment_reload(table_name, elapsed, false);
+                    return;
+                }
                 if let Err(e) = table.swap_hashmap(new_data.rows) {
                     error!(table = %table_name, error = %e, "enrichment swap failed");
                     metrics.record_enrichment_reload(table_name, elapsed, false);
@@ -170,6 +154,7 @@ fn reload_table(
 mod tests {
     use super::*;
     use crate::config::loader::{EnrichmentTableConfig, RefreshConfig};
+    use std::fmt::Write as _;
     use std::io::Write;
 
     /// The refresh tests declare no column types.
@@ -261,37 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_table_stix_http_without_path_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
-        let table_cfg = EnrichmentTableConfig {
-            name: "stix".to_string(),
-            source: Some(EnrichmentSourceConfig::File {
-                path: csv.to_string_lossy().to_string(),
-                format: None,
-            }),
-            key_columns: vec!["k".to_string()],
-            ..Default::default()
-        };
-        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
-        let reg_arc = registry.into_arc();
-        let metrics = make_metrics();
-
-        // STIX with no path, no URL — should hit the unsupported branch
-        let stix_no_path = EnrichmentSourceConfig::Stix {
-            path: None,
-            url: Some("https://example.invalid/taxii".to_string()),
-            collection: None,
-            auth: None,
-        };
-        reload_table(&reg_arc, "stix", &stix_no_path, &[], &NO_SCHEMA, &metrics);
-
-        // Existing CSV data preserved
-        let table = reg_arc.get_table("stix").unwrap();
-        assert_eq!(table.len(), 1);
-    }
-
-    #[test]
     fn reload_table_missing_file_preserves_existing_data() {
         let dir = tempfile::tempdir().unwrap();
         let csv = write_csv(dir.path(), "ok.csv", "k,v\nhello,world\n");
@@ -365,6 +319,57 @@ mod tests {
 
         let table = reg_arc.get_table("swap").unwrap();
         assert_eq!(table.len(), 3, "table should reflect new rows post-reload");
+    }
+
+    /// A reload that materialises past the table's `max_bytes` is refused, and
+    /// the table keeps the rows it had, as a load past it fails startup.
+    #[test]
+    fn a_reload_past_max_bytes_keeps_the_existing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
+        let source = EnrichmentSourceConfig::File {
+            path: csv.to_string_lossy().to_string(),
+            format: None,
+        };
+        let unbounded = EnrichmentTableConfig {
+            name: "bounded".to_string(),
+            source: Some(source.clone()),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let one_row = crate::enrichment::EnrichmentRegistry::load(&[unbounded.clone()])
+            .unwrap()
+            .get_table("bounded")
+            .unwrap()
+            .estimated_bytes();
+        let table_cfg = EnrichmentTableConfig {
+            max_bytes: Some(one_row),
+            ..unbounded
+        };
+        let reg_arc = crate::enrichment::EnrichmentRegistry::load(&[table_cfg])
+            .unwrap()
+            .into_arc();
+
+        let rows = (0..100).fold(String::from("k,v\n"), |mut csv, i| {
+            let _ = writeln!(csv, "key{i},{i}");
+            csv
+        });
+        write_csv(dir.path(), "t.csv", &rows);
+        reload_table(
+            &reg_arc,
+            "bounded",
+            &source,
+            &["k".to_string()],
+            &NO_SCHEMA,
+            &make_metrics(),
+        );
+
+        let table = reg_arc.get_table("bounded").unwrap();
+        assert_eq!(
+            table.len(),
+            1,
+            "an oversized reload must not replace the table"
+        );
     }
 
     #[test]

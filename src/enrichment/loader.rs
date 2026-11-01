@@ -217,9 +217,9 @@ pub fn load_from_source(
         EnrichmentSourceConfig::Sqlite { .. } => Err(crate::Error::Enrichment(
             "SQLite enrichment support not compiled (enable 'enrichment-sqlite' feature)".into(),
         )),
-        EnrichmentSourceConfig::Stix { .. } => Err(crate::Error::Enrichment(
-            "use load_stix for STIX sources (async)".into(),
-        )),
+        EnrichmentSourceConfig::Stix { path } => {
+            crate::enrichment::stix::load_stix(path, table_name, key_columns)
+        }
         EnrichmentSourceConfig::Mmdb { .. } => Err(crate::Error::Enrichment(
             "MMDB uses TableData::Mmdb, not HashMap — handled by registry directly".into(),
         )),
@@ -987,12 +987,9 @@ mod tests {
     }
 
     #[test]
-    fn load_from_source_stix_returns_error() {
+    fn load_from_source_stix_missing_file_returns_error() {
         let source = EnrichmentSourceConfig::Stix {
-            path: None,
-            url: Some("https://example.com".into()),
-            collection: None,
-            auth: None,
+            path: "/nonexistent/stix.json".into(),
         };
         assert!(load_from_source(&source, "t", &["id".into()], &NO_SCHEMA).is_err());
     }

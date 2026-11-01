@@ -199,7 +199,7 @@ Kubernetes liveness probe. Returns `200 OK` when the process is running.
 
 ### GET /readyz
 
-Kubernetes readiness probe. Returns `503` if Kafka connections are unhealthy.
+Kubernetes readiness probe. Returns `503` until the pipeline is running, while memory is under pressure, and while a transport reports itself unhealthy: a broker refusing the credentials, a missing topic, or a consumer librdkafka could not recover. A broker the pod has not reached yet does not fail it on its own.
 
 ### GET /metrics
 

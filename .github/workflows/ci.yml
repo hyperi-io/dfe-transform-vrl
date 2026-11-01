@@ -8,6 +8,9 @@
 name: CI
 
 on:
+  # Nightly full run, on its own minute so the fleet does not start at once.
+  schedule:
+    - cron: '23 17 * * *'
   push:
     branches: ["**"]
     paths-ignore:

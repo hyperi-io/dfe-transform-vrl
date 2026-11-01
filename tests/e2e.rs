@@ -15,8 +15,9 @@
 //!   `cargo nextest run -- --ignored`
 //!   `TEST_MODE=docker cargo nextest run -- --ignored`
 //!
-//! `filebeat_kafka` and `held_acks` are not among them: each starts and drops
-//! its own broker container, so they run by default like any other test.
+//! `filebeat_kafka`, `held_acks` and `kafka_tls` are not among them: they use a broker
+//! container scalo's test support starts, the run's shared one or one the
+//! test holds alone, so they run by default like any other test.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -37,6 +38,9 @@ mod held_acks;
 #[path = "e2e/kafka.rs"]
 mod kafka;
 
+#[path = "e2e/kafka_tls.rs"]
+mod kafka_tls;
+
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::unwrap_used)]
 #[path = "e2e/connectivity.rs"]
 mod connectivity;
@@ -45,8 +49,5 @@ mod connectivity;
 #[path = "e2e/cli_service.rs"]
 mod cli_service;
 
-// A leak check has to fail the test when the container is still there, and the
-// poll loop it sits after cannot express that as an assert.
-#[allow(clippy::panic)]
 #[path = "e2e/container_hygiene.rs"]
 mod container_hygiene;

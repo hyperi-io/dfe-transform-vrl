@@ -455,10 +455,7 @@ fn test_stix_file_lookup() {
         path: String::new(),
         key_columns: vec!["indicator".into()],
         source: Some(dfe_transform_vrl::config::EnrichmentSourceConfig::Stix {
-            path: Some(dir.path().join("stix.json").to_string_lossy().to_string()),
-            url: None,
-            collection: None,
-            auth: None,
+            path: dir.path().join("stix.json").to_string_lossy().to_string(),
         }),
         ..Default::default()
     }])
