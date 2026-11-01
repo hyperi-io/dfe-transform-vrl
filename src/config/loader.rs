@@ -168,9 +168,8 @@ pub struct EnrichmentTableConfig {
     /// Optional periodic refresh.
     #[serde(default)]
     pub refresh: Option<RefreshConfig>,
-    /// Maximum materialised table size in bytes. Fail-fast at load if exceeded.
-    /// When set, the loaded table's memory is also registered with `MemoryGuard`
-    /// so enrichment memory counts against the pod memory budget.
+    /// Maximum materialised table size in bytes. A load over it fails startup,
+    /// and a refresh over it is refused and the table keeps the rows it has.
     #[serde(default)]
     pub max_bytes: Option<u64>,
 }

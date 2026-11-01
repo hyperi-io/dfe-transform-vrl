@@ -44,18 +44,8 @@ impl EnrichmentRegistry {
 
         for config in configs {
             let source = config.resolved_source()?;
-            let table = load_table_from_source(config, &source)?;
-
-            // Enforce max_bytes if configured
-            if let Some(max_bytes) = config.max_bytes {
-                let estimated = table.estimated_bytes();
-                if estimated > max_bytes {
-                    return Err(crate::Error::Enrichment(format!(
-                        "table '{}': materialised size ({estimated} bytes) exceeds max_bytes ({max_bytes})",
-                        config.name
-                    )));
-                }
-            }
+            let table = load_table_from_source(config, &source)?.with_max_bytes(config.max_bytes);
+            table.check_max_bytes(table.estimated_bytes())?;
 
             info!(
                 table = %table.name(),

@@ -302,6 +302,8 @@ pub struct EnrichmentTable {
     /// declares none. The check is skipped in that case rather than rejecting
     /// every condition.
     columns: Arc<[KeyString]>,
+    /// Ceiling on the materialised size, checked at load and on every reload.
+    max_bytes: Option<u64>,
 }
 
 impl EnrichmentTable {
@@ -323,6 +325,7 @@ impl EnrichmentTable {
             refresh_config,
             schema,
             columns,
+            max_bytes: None,
         }
     }
 
@@ -344,7 +347,33 @@ impl EnrichmentTable {
             // A geo database has no column list to check a condition against;
             // arity is enforced instead, in `mmdb_find_rows`.
             columns: Arc::from(Vec::new()),
+            max_bytes: None,
         }
+    }
+
+    /// Set the ceiling on the table's materialised size.
+    #[must_use]
+    pub const fn with_max_bytes(mut self, max_bytes: Option<u64>) -> Self {
+        self.max_bytes = max_bytes;
+        self
+    }
+
+    /// Refuse an estimated materialised size over this table's `max_bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming both sizes when `estimated` is over the ceiling.
+    pub fn check_max_bytes(&self, estimated: u64) -> crate::Result<()> {
+        let Some(max_bytes) = self.max_bytes else {
+            return Ok(());
+        };
+        if estimated > max_bytes {
+            return Err(crate::Error::Enrichment(format!(
+                "table '{}': materialised size ({estimated} bytes) exceeds max_bytes ({max_bytes})",
+                self.name
+            )));
+        }
+        Ok(())
     }
 
     /// Return every row matching *all* `conditions`.

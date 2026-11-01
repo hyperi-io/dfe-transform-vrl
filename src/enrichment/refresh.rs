@@ -9,7 +9,9 @@
 //! Spawns per-table tokio tasks that periodically reload enrichment data
 //! and atomically swap the inner `FxHashMap` via `ArcSwap`.
 //!
-//! Fail-safe: on reload failure, keeps existing data and logs the error.
+//! Fail-safe: on reload failure, keeps existing data and logs the error. A
+//! reload over the table's `max_bytes` is a failure too, found once the new
+//! rows are built, so the old and new rows are both held until it is refused.
 //! Minimum interval enforced: 60 seconds (clamped at runtime).
 
 use std::sync::Arc;
@@ -138,6 +140,12 @@ fn reload_table(
         // against it and a running program cannot be re-validated.
         Ok(new_data) => {
             if let Some(table) = registry.get_table(table_name) {
+                let estimated = loader::estimate_table_bytes(&new_data.rows);
+                if let Err(e) = table.check_max_bytes(estimated) {
+                    error!(table = %table_name, error = %e, "enrichment refresh refused, keeping existing data");
+                    metrics.record_enrichment_reload(table_name, elapsed, false);
+                    return;
+                }
                 if let Err(e) = table.swap_hashmap(new_data.rows) {
                     error!(table = %table_name, error = %e, "enrichment swap failed");
                     metrics.record_enrichment_reload(table_name, elapsed, false);
@@ -365,6 +373,50 @@ mod tests {
 
         let table = reg_arc.get_table("swap").unwrap();
         assert_eq!(table.len(), 3, "table should reflect new rows post-reload");
+    }
+
+    /// A reload that materialises past the table's `max_bytes` is refused, and
+    /// the table keeps the rows it had, as a load past it fails startup.
+    #[test]
+    fn a_reload_past_max_bytes_keeps_the_existing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
+        let source = EnrichmentSourceConfig::File {
+            path: csv.to_string_lossy().to_string(),
+            format: None,
+        };
+        let unbounded = EnrichmentTableConfig {
+            name: "bounded".to_string(),
+            source: Some(source.clone()),
+            key_columns: vec!["k".to_string()],
+            ..Default::default()
+        };
+        let one_row = crate::enrichment::EnrichmentRegistry::load(&[unbounded.clone()])
+            .unwrap()
+            .get_table("bounded")
+            .unwrap()
+            .estimated_bytes();
+        let table_cfg = EnrichmentTableConfig {
+            max_bytes: Some(one_row),
+            ..unbounded
+        };
+        let reg_arc = crate::enrichment::EnrichmentRegistry::load(&[table_cfg])
+            .unwrap()
+            .into_arc();
+
+        let rows: String = (0..100).map(|i| format!("key{i},{i}\n")).collect();
+        write_csv(dir.path(), "t.csv", &format!("k,v\n{rows}"));
+        reload_table(
+            &reg_arc,
+            "bounded",
+            &source,
+            &["k".to_string()],
+            &NO_SCHEMA,
+            &make_metrics(),
+        );
+
+        let table = reg_arc.get_table("bounded").unwrap();
+        assert_eq!(table.len(), 1, "an oversized reload must not replace the table");
     }
 
     #[test]
