@@ -200,9 +200,10 @@ impl EnrichmentTableConfig {
     }
 }
 
-/// Source definition for an enrichment table.
+/// Source definition for an enrichment table. A key the source type does not
+/// have fails the load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum EnrichmentSourceConfig {
     File {
         path: String,
@@ -212,15 +213,9 @@ pub enum EnrichmentSourceConfig {
     Mmdb {
         path: String,
     },
+    /// A STIX 2.1 bundle on disk.
     Stix {
-        #[serde(default)]
-        path: Option<String>,
-        #[serde(default)]
-        url: Option<String>,
-        #[serde(default)]
-        collection: Option<String>,
-        #[serde(default)]
-        auth: Option<StixAuthConfig>,
+        path: String,
     },
     Sqlite {
         path: String,
@@ -236,20 +231,6 @@ pub enum FileFormat {
     Json,
     Yaml,
     Auto,
-}
-
-/// Authentication for STIX/TAXII sources.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct StixAuthConfig {
-    /// Auth type: `bearer`, `basic`, or `api_key`.
-    #[serde(rename = "type")]
-    pub auth_type: String,
-    #[serde(default)]
-    pub token_env: Option<String>,
-    #[serde(default)]
-    pub username_env: Option<String>,
-    #[serde(default)]
-    pub password_env: Option<String>,
 }
 
 /// Periodic refresh configuration.
@@ -1142,23 +1123,33 @@ enrichment_tables:
         assert!(matches!(source, EnrichmentSourceConfig::Mmdb { .. }));
     }
 
+    /// Nothing fetches a TAXII feed, so a STIX source names a file, and a key
+    /// a source does not have fails the load rather than being dropped.
     #[test]
-    fn enrichment_config_stix_with_url() {
-        let yaml = r#"
-enrichment_tables:
-  - name: "threats"
-    source:
-      type: stix
-      url: "https://taxii.example.com/objects"
-    key_columns: ["indicator"]
-"#;
-        let config: Config =
-            scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
-        let source = config.enrichment_tables[0].resolved_source().unwrap();
-        let EnrichmentSourceConfig::Stix { url, .. } = source else {
-            unreachable!("expected Stix");
-        };
-        assert_eq!(url.as_deref(), Some("https://taxii.example.com/objects"));
+    fn an_enrichment_source_refuses_keys_it_does_not_have() {
+        for (source, key) in [
+            (
+                "type: stix\n      url: \"https://taxii.example.com/objects\"",
+                "url",
+            ),
+            (
+                "type: stix\n      path: \"/a.json\"\n      collection: \"c1\"",
+                "collection",
+            ),
+            (
+                "type: file\n      path: \"/a.csv\"\n      formt: csv",
+                "formt",
+            ),
+        ] {
+            let yaml = format!(
+                "enrichment_tables:\n  - name: \"t\"\n    source:\n      {source}\n    key_columns: [\"k\"]\n"
+            );
+            let err =
+                scalo::yaml::from_str::<Config>(&yaml, "config.yaml", scalo::yaml::Profile::Config)
+                    .unwrap_err()
+                    .to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
     }
 
     #[test]
@@ -1174,10 +1165,10 @@ enrichment_tables:
         let config: Config =
             scalo::yaml::from_str(yaml, "config.yaml", scalo::yaml::Profile::Config).unwrap();
         let source = config.enrichment_tables[0].resolved_source().unwrap();
-        let EnrichmentSourceConfig::Stix { path, .. } = source else {
+        let EnrichmentSourceConfig::Stix { path } = source else {
             unreachable!("expected Stix");
         };
-        assert_eq!(path.as_deref(), Some("/data/stix-bundle.json"));
+        assert_eq!(path, "/data/stix-bundle.json");
     }
 
     #[test]
@@ -1210,7 +1201,7 @@ enrichment_tables:
   - name: "threats"
     source:
       type: stix
-      url: "https://example.com/stix"
+      path: "/data/stix-bundle.json"
     key_columns: ["indicator"]
     refresh:
       interval_secs: 3600

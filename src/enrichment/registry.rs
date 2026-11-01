@@ -33,8 +33,6 @@ impl EnrichmentRegistry {
     /// Load all enrichment tables from config. Fails fast on any error.
     ///
     /// Dispatches on `resolved_source()` to call the appropriate loader.
-    /// STIX HTTP sources are not supported here (require async context).
-    /// STIX file sources and all other types are loaded synchronously.
     ///
     /// # Errors
     ///
@@ -135,40 +133,8 @@ fn load_table_from_source(
                 ))
             }
         }
-        EnrichmentSourceConfig::Stix {
-            path,
-            url: _,
-            collection: _,
-            auth: _,
-        } => {
-            // File-based STIX: load synchronously
-            if let Some(file_path) = path {
-                let loaded = crate::enrichment::stix::load_stix(
-                    Some(file_path.as_str()),
-                    None,
-                    None,
-                    &config.name,
-                    &config.key_columns,
-                )?;
-                Ok(EnrichmentTable::new_hashmap(
-                    &config.name,
-                    loaded.rows,
-                    config.key_columns.clone(),
-                    Some(source.clone()),
-                    config.refresh.clone(),
-                    schema,
-                    Arc::from(loaded.columns),
-                ))
-            } else {
-                // URL-based STIX requires async — cannot load here
-                Err(crate::Error::Enrichment(format!(
-                    "table '{}': STIX HTTP sources require async loading (wire via refresh task or provide a file path)",
-                    config.name
-                )))
-            }
-        }
         _ => {
-            // File, SQLite — all dispatched through load_from_source
+            // File, STIX, SQLite -- all dispatched through load_from_source
             let loaded =
                 loader::load_from_source(source, &config.name, &config.key_columns, &schema)?;
             Ok(EnrichmentTable::new_hashmap(
@@ -357,10 +323,7 @@ mod tests {
             path: String::new(),
             key_columns: vec!["indicator".into()],
             source: Some(EnrichmentSourceConfig::Stix {
-                path: Some(dir.path().join("stix.json").to_string_lossy().to_string()),
-                url: None,
-                collection: None,
-                auth: None,
+                path: dir.path().join("stix.json").to_string_lossy().to_string(),
             }),
             ..Default::default()
         }];

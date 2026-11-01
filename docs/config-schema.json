@@ -153,7 +153,7 @@
           "default": "dfe-transform-vrl"
         },
         "max_buffer_bytes": {
-          "description": "Maximum consumer buffer size in bytes.",
+          "description": "Bytes of fetched records librdkafka holds ahead of the pipeline, set\nas `queued.max.messages.kbytes`. One fetch can overshoot it by up to\n`max.partition.fetch.bytes`.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0,
@@ -467,7 +467,7 @@
           "default": null
         },
         "max_bytes": {
-          "description": "Maximum materialised table size in bytes. Fail-fast at load if exceeded.\nWhen set, the loaded table's memory is also registered with `MemoryGuard`\nso enrichment memory counts against the pod memory budget.",
+          "description": "Maximum materialised table size in bytes. A load over it fails startup,\nand a refresh over it is refused and the table keeps the rows it has.",
           "type": [
             "integer",
             "null"
@@ -479,7 +479,7 @@
       }
     },
     "EnrichmentSourceConfig": {
-      "description": "Source definition for an enrichment table.",
+      "description": "Source definition for an enrichment table. A key the source type does not\nhave fails the load.",
       "oneOf": [
         {
           "type": "object",
@@ -503,6 +503,7 @@
               "default": null
             }
           },
+          "additionalProperties": false,
           "required": [
             "type",
             "path"
@@ -519,12 +520,14 @@
               "type": "string"
             }
           },
+          "additionalProperties": false,
           "required": [
             "type",
             "path"
           ]
         },
         {
+          "description": "A STIX 2.1 bundle on disk.",
           "type": "object",
           "properties": {
             "type": {
@@ -532,40 +535,13 @@
               "const": "stix"
             },
             "path": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "collection": {
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "auth": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/StixAuthConfig"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
+              "type": "string"
             }
           },
+          "additionalProperties": false,
           "required": [
-            "type"
+            "type",
+            "path"
           ]
         },
         {
@@ -582,6 +558,7 @@
               "type": "string"
             }
           },
+          "additionalProperties": false,
           "required": [
             "type",
             "path",
@@ -598,40 +575,6 @@
         "json",
         "yaml",
         "auto"
-      ]
-    },
-    "StixAuthConfig": {
-      "description": "Authentication for STIX/TAXII sources.",
-      "type": "object",
-      "properties": {
-        "type": {
-          "description": "Auth type: `bearer`, `basic`, or `api_key`.",
-          "type": "string"
-        },
-        "token_env": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "username_env": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "password_env": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "type"
       ]
     },
     "RefreshConfig": {

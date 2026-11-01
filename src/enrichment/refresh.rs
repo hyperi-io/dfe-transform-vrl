@@ -99,30 +99,6 @@ fn reload_table(
     let start = std::time::Instant::now();
 
     let result = match source {
-        EnrichmentSourceConfig::Stix {
-            path,
-            url: _,
-            collection: _,
-            auth: _,
-        } => {
-            // File-based STIX only for sync refresh (HTTP needs async wiring)
-            path.as_ref().map_or_else(
-                || {
-                    Err(crate::Error::Enrichment(format!(
-                        "table '{table_name}': STIX HTTP refresh not yet supported"
-                    )))
-                },
-                |file_path| {
-                    crate::enrichment::stix::load_stix(
-                        Some(file_path.as_str()),
-                        None,
-                        None,
-                        table_name,
-                        key_columns,
-                    )
-                },
-            )
-        }
         EnrichmentSourceConfig::Mmdb { .. } => {
             // MMDB refresh would need to swap the Reader, not the HashMap
             Err(crate::Error::Enrichment(format!(
@@ -265,37 +241,6 @@ mod tests {
 
         // Table is still there with its original CSV data
         let table = reg_arc.get_table("trap").unwrap();
-        assert_eq!(table.len(), 1);
-    }
-
-    #[test]
-    fn reload_table_stix_http_without_path_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let csv = write_csv(dir.path(), "t.csv", "k,v\na,1\n");
-        let table_cfg = EnrichmentTableConfig {
-            name: "stix".to_string(),
-            source: Some(EnrichmentSourceConfig::File {
-                path: csv.to_string_lossy().to_string(),
-                format: None,
-            }),
-            key_columns: vec!["k".to_string()],
-            ..Default::default()
-        };
-        let registry = crate::enrichment::EnrichmentRegistry::load(&[table_cfg]).unwrap();
-        let reg_arc = registry.into_arc();
-        let metrics = make_metrics();
-
-        // STIX with no path, no URL — should hit the unsupported branch
-        let stix_no_path = EnrichmentSourceConfig::Stix {
-            path: None,
-            url: Some("https://example.invalid/taxii".to_string()),
-            collection: None,
-            auth: None,
-        };
-        reload_table(&reg_arc, "stix", &stix_no_path, &[], &NO_SCHEMA, &metrics);
-
-        // Existing CSV data preserved
-        let table = reg_arc.get_table("stix").unwrap();
         assert_eq!(table.len(), 1);
     }
 

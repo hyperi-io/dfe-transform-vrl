@@ -252,11 +252,8 @@ fn capabilities() -> Vec<scalo::deployment::Capability> {
                     .description("MaxMind DB (e.g. GeoIP) lookups.")
                     .field(FieldSpec::string("path").required().description("Path to the .mmdb file.")),
                 Capability::service("stix")
-                    .description("STIX/TAXII threat-intel indicators (file or TAXII URL).")
-                    .field(FieldSpec::string("path").description("Local STIX bundle path."))
-                    .field(FieldSpec::string("url").description("TAXII collection URL."))
-                    .field(FieldSpec::string("collection").description("TAXII collection id."))
-                    .field(FieldSpec::string("auth").description("Auth spec (type + env-var refs for bearer/basic/api_key).")),
+                    .description("STIX 2.1 threat-intel indicators from a bundle file.")
+                    .field(FieldSpec::string("path").required().description("Path to the STIX bundle.")),
                 Capability::service("sqlite")
                     .description("SQLite query result materialised as a lookup table.")
                     .field(FieldSpec::string("path").required().description("Path to the SQLite database."))

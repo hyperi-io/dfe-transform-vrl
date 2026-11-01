@@ -6,19 +6,18 @@
 //! License:   BUSL-1.1
 //! Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Parse STIX 2.1 bundles (file or HTTP) and materialise indicators into
+//! Parse STIX 2.1 bundles from a file and materialise indicators into
 //! `FxHashMap<CompactKey, Arc<ObjectMap>>` for O(1) enrichment lookups.
 //!
-//! Supports both file-based STIX bundles (mounted as `ConfigMap`) and
-//! HTTP-fetched TAXII feeds. No dedicated STIX crate — STIX 2.1 is JSON
-//! with a known schema, parsed via `serde_json`.
+//! The bundle is a mounted file. Nothing here fetches a TAXII feed. No
+//! dedicated STIX crate -- STIX 2.1 is JSON with a known schema, parsed via
+//! `serde_json`.
 
 use std::sync::Arc;
 
 use serde::Deserialize;
 use vrl::value::{KeyString, ObjectMap, Value};
 
-use crate::config::StixAuthConfig;
 use crate::enrichment::loader::LoadedTable;
 use crate::enrichment::table::{CompactKey, RowMap};
 
@@ -64,40 +63,20 @@ struct StixObject {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Load a STIX 2.1 bundle from file or HTTP and materialise indicators.
-///
-/// - If `path` is set, reads from local file (sync).
-/// - If `url` is set, fetches via HTTP (requires tokio runtime).
-/// - `path` takes precedence if both are set.
-///
-/// Returns `FxHashMap` keyed by indicator value (IP, domain, hash, etc.).
+/// Load a STIX 2.1 bundle file and materialise its indicators, keyed by
+/// indicator value (IP, domain, hash, etc.).
 ///
 /// # Errors
 ///
-/// Returns an error when the file or URL cannot be read, or the bundle is not valid STIX 2.1 JSON.
+/// Returns an error when the file cannot be read, or the bundle is not valid STIX 2.1 JSON.
 pub fn load_stix(
-    path: Option<&str>,
-    url: Option<&str>,
-    _auth: Option<&StixAuthConfig>,
+    path: &str,
     table_name: &str,
     key_columns: &[String],
 ) -> crate::Result<LoadedTable> {
-    let json_bytes = if let Some(path) = path {
-        std::fs::read(path).map_err(|e| {
-            crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
-        })?
-    } else if let Some(_url) = url {
-        // HTTP fetch will be wired via scalo HttpClient in the async refresh path.
-        // For now, return a clear error if only URL is provided without async context.
-        return Err(crate::Error::Enrichment(format!(
-            "table '{table_name}': STIX HTTP fetch requires async context (use refresh task or load from file)"
-        )));
-    } else {
-        return Err(crate::Error::Enrichment(format!(
-            "table '{table_name}': STIX source needs 'path' or 'url'"
-        )));
-    };
-
+    let json_bytes = std::fs::read(path).map_err(|e| {
+        crate::Error::Enrichment(format!("table '{table_name}': read STIX file {path}: {e}"))
+    })?;
     materialise_stix(&json_bytes, table_name, key_columns)
 }
 
@@ -606,34 +585,14 @@ mod tests {
         let path = dir.path().join("stix.json");
         std::fs::write(&path, sample_stix_bundle()).unwrap();
 
-        let rows = load_stix(
-            Some(path.to_str().unwrap()),
-            None,
-            None,
-            "threats",
-            &["indicator".into()],
-        )
-        .unwrap()
-        .rows;
+        let rows = load_stix(path.to_str().unwrap(), "threats", &["indicator".into()])
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn load_stix_no_source_errors() {
-        assert!(load_stix(None, None, None, "t", &["indicator".into()]).is_err());
-    }
-
-    #[test]
     fn load_stix_missing_file_errors() {
-        assert!(
-            load_stix(
-                Some("/nonexistent/stix.json"),
-                None,
-                None,
-                "t",
-                &["indicator".into()]
-            )
-            .is_err()
-        );
+        assert!(load_stix("/nonexistent/stix.json", "t", &["indicator".into()]).is_err());
     }
 }

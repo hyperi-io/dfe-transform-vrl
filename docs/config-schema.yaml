@@ -150,7 +150,10 @@ $defs:
         type: string
         default: dfe-transform-vrl
       max_buffer_bytes:
-        description: Maximum consumer buffer size in bytes.
+        description: |-
+          Bytes of fetched records librdkafka holds ahead of the pipeline, set
+          as `queued.max.messages.kbytes`. One fetch can overshoot it by up to
+          `max.partition.fetch.bytes`.
         type: integer
         format: uint64
         minimum: 0
@@ -432,9 +435,8 @@ $defs:
         default: null
       max_bytes:
         description: |-
-          Maximum materialised table size in bytes. Fail-fast at load if exceeded.
-          When set, the loaded table's memory is also registered with `MemoryGuard`
-          so enrichment memory counts against the pod memory budget.
+          Maximum materialised table size in bytes. A load over it fails startup,
+          and a refresh over it is refused and the table keeps the rows it has.
         type:
         - integer
         - "null"
@@ -442,7 +444,9 @@ $defs:
         minimum: 0
         default: null
   EnrichmentSourceConfig:
-    description: Source definition for an enrichment table.
+    description: |-
+      Source definition for an enrichment table. A key the source type does not
+      have fails the load.
     oneOf:
     - type: object
       properties:
@@ -456,6 +460,7 @@ $defs:
           - $ref: "#/$defs/FileFormat"
           - type: "null"
           default: null
+      additionalProperties: false
       required:
       - type
       - path
@@ -466,36 +471,22 @@ $defs:
           const: mmdb
         path:
           type: string
+      additionalProperties: false
       required:
       - type
       - path
-    - type: object
+    - description: A STIX 2.1 bundle on disk.
+      type: object
       properties:
         type:
           type: string
           const: stix
         path:
-          type:
-          - string
-          - "null"
-          default: null
-        url:
-          type:
-          - string
-          - "null"
-          default: null
-        collection:
-          type:
-          - string
-          - "null"
-          default: null
-        auth:
-          anyOf:
-          - $ref: "#/$defs/StixAuthConfig"
-          - type: "null"
-          default: null
+          type: string
+      additionalProperties: false
       required:
       - type
+      - path
     - type: object
       properties:
         type:
@@ -505,6 +496,7 @@ $defs:
           type: string
         query:
           type: string
+      additionalProperties: false
       required:
       - type
       - path
@@ -517,30 +509,6 @@ $defs:
     - json
     - yaml
     - auto
-  StixAuthConfig:
-    description: Authentication for STIX/TAXII sources.
-    type: object
-    properties:
-      type:
-        description: "Auth type: `bearer`, `basic`, or `api_key`."
-        type: string
-      token_env:
-        type:
-        - string
-        - "null"
-        default: null
-      username_env:
-        type:
-        - string
-        - "null"
-        default: null
-      password_env:
-        type:
-        - string
-        - "null"
-        default: null
-    required:
-    - type
   RefreshConfig:
     description: Periodic refresh configuration.
     type: object
