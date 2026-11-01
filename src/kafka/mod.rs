@@ -285,7 +285,11 @@ mod tests {
     /// there, and fetch sizing is left to scalo's sizing surface.
     #[test]
     fn max_buffer_bytes_caps_the_consumer_prefetch_queue() {
-        for (bytes, kib) in [(67_108_864_u64, "65536"), (16_777_216, "16384"), (1023, "1")] {
+        for (bytes, kib) in [
+            (67_108_864_u64, "65536"),
+            (16_777_216, "16384"),
+            (1023, "1"),
+        ] {
             let mut source = default_source();
             source.max_buffer_bytes = bytes;
             let config = build_consumer_config(&source);

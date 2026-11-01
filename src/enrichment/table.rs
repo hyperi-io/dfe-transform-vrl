@@ -181,13 +181,33 @@ pub enum TableData {
     Mmdb(Arc<maxminddb::Reader<Vec<u8>>>),
 }
 
+/// One lookup's matching rules, applied to the rows of a hash-map table.
+struct Lookup<'a> {
+    conditions: &'a [Condition],
+    case_sensitive: bool,
+    wildcard: Option<&'a Value>,
+    select: Option<&'a [String]>,
+    limit: usize,
+}
+
+impl Lookup<'_> {
+    /// The selected fields of up to `limit` rows that satisfy every condition.
+    fn collect<'r>(&self, rows: impl Iterator<Item = &'r Arc<ObjectMap>>) -> Vec<ObjectMap> {
+        rows.filter(|row| row_matches(row, self.conditions, self.case_sensitive, self.wildcard))
+            .take(self.limit)
+            .map(|row| select_fields(row, self.select))
+            .collect()
+    }
+}
+
 impl TableData {
-    /// Return every row matching *all* `conditions`.
+    /// Return the rows matching *all* `conditions`, at most `limit` of them.
     ///
     /// `case_sensitive` applies to string comparison only. `wildcard`, when
     /// set, additionally matches a row whose cell equals the wildcard value.
     /// `select` restricts the returned fields; a selected field the row does
-    /// not carry is silently omitted, matching Vector.
+    /// not carry is silently omitted, matching Vector. Only the selected
+    /// fields of a match are cloned.
     ///
     /// The `HashMap` backend uses the `CompactKey` index when the conditions
     /// pin every key column by equality and the comparison is case sensitive,
@@ -204,7 +224,15 @@ impl TableData {
         wildcard: Option<&Value>,
         select: Option<&[String]>,
         key_columns: &[String],
+        limit: Option<usize>,
     ) -> Result<Vec<ObjectMap>, String> {
+        let lookup = Lookup {
+            conditions,
+            case_sensitive,
+            wildcard,
+            select,
+            limit: limit.unwrap_or(usize::MAX),
+        };
         match self {
             Self::HashMap(swap) => {
                 let guard = swap.load();
@@ -218,46 +246,19 @@ impl TableData {
                 // The index narrows to one bucket; the bucket's rows still go
                 // through the full condition test, because a condition outside
                 // the key columns is not encoded in the key.
-                let matched: Vec<ObjectMap> = indexed.map_or_else(
-                    || {
-                        Self::collect_matches(
-                            guard.values().flatten(),
-                            conditions,
-                            case_sensitive,
-                            wildcard,
-                        )
-                    },
+                Ok(indexed.map_or_else(
+                    || lookup.collect(guard.values().flatten()),
                     |key| {
-                        guard.get(&key).map_or_else(Vec::new, |rows| {
-                            Self::collect_matches(rows.iter(), conditions, case_sensitive, wildcard)
-                        })
+                        guard
+                            .get(&key)
+                            .map_or_else(Vec::new, |rows| lookup.collect(rows.iter()))
                     },
-                );
-
-                Ok(matched
-                    .into_iter()
-                    .map(|row| apply_select(row, select))
-                    .collect())
+                ))
             }
 
             #[cfg(feature = "enrichment-mmdb")]
             Self::Mmdb(reader) => mmdb_find_rows(reader, conditions, select),
         }
-    }
-
-    /// Clone out every row in `rows` that satisfies all `conditions`.
-    fn collect_matches<'a, I>(
-        rows: I,
-        conditions: &[Condition],
-        case_sensitive: bool,
-        wildcard: Option<&Value>,
-    ) -> Vec<ObjectMap>
-    where
-        I: Iterator<Item = &'a Arc<ObjectMap>>,
-    {
-        rows.filter(|row| row_matches(row, conditions, case_sensitive, wildcard))
-            .map(|row| (**row).clone())
-            .collect()
     }
 
     /// Number of records in the table (approximate for MMDB).
@@ -378,7 +379,9 @@ impl EnrichmentTable {
 
     /// Return every row matching *all* `conditions`.
     ///
-    /// See [`TableData::find_rows`] for the matching rules.
+    /// See [`TableData::find_rows`] for the matching rules. `limit` stops the
+    /// search at that many matches: a single-record lookup needs two to tell
+    /// one match from an ambiguous one.
     ///
     /// # Errors
     ///
@@ -389,10 +392,11 @@ impl EnrichmentTable {
         case_sensitive: bool,
         wildcard: Option<&Value>,
         select: Option<&[String]>,
+        limit: Option<usize>,
     ) -> Result<Vec<ObjectMap>, String> {
         let cols = self.key_columns.as_deref().unwrap_or(&[]);
         self.data
-            .find_rows(conditions, case_sensitive, wildcard, select, cols)
+            .find_rows(conditions, case_sensitive, wildcard, select, cols, limit)
     }
 
     /// Column names the source declared, empty when not knowable.
@@ -573,10 +577,22 @@ fn values_equal(cell: &Value, expected: &Value, case_sensitive: bool) -> bool {
     }
 }
 
-/// Keep only the selected fields of a row.
+/// A copy of the selected fields of a table row, or of the whole row.
 ///
 /// A selected field the row does not carry is dropped rather than raised as an
 /// error, matching Vector's `add_columns`.
+fn select_fields(row: &ObjectMap, select: Option<&[String]>) -> ObjectMap {
+    let Some(select) = select else {
+        return row.clone();
+    };
+    row.iter()
+        .filter(|(key, _)| select.iter().any(|s| s.as_str() == key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Keep only the selected fields of an owned row, as [`select_fields`] does.
+#[cfg(feature = "enrichment-mmdb")]
 fn apply_select(row: ObjectMap, select: Option<&[String]>) -> ObjectMap {
     let Some(select) = select else {
         return row;
@@ -691,7 +707,7 @@ mod tests {
 
     /// All rows matching `conditions`, case sensitive, no wildcard, no select.
     fn find(table: &EnrichmentTable, conditions: &[Condition]) -> Vec<ObjectMap> {
-        table.find_rows(conditions, true, None, None).unwrap()
+        table.find_rows(conditions, true, None, None, None).unwrap()
     }
 
     fn field(row: &ObjectMap, key: &str) -> Option<Value> {
@@ -1099,6 +1115,34 @@ mod tests {
         );
     }
 
+    /// A limit stops the search, so a single-record lookup copies at most two
+    /// rows however many share the key, and the scan path honours it too.
+    #[test]
+    fn find_rows_stops_at_the_limit() {
+        let rows = (0..5)
+            .map(|i| make_row(&[("abbr", bytes_value("CST")), ("n", Value::Integer(i))]))
+            .collect();
+        let table = make_hashmap_table("tz", vec!["abbr".to_string()], rows);
+        let cst = eq(&[("abbr", bytes_value("CST"))]);
+
+        for case_sensitive in [true, false] {
+            let found = table
+                .find_rows(&cst, case_sensitive, None, None, Some(2))
+                .unwrap();
+            assert_eq!(found.len(), 2, "case_sensitive {case_sensitive}");
+        }
+        assert_eq!(
+            table.find_rows(&cst, true, None, None, None).unwrap().len(),
+            5
+        );
+        assert!(
+            table
+                .find_rows(&cst, true, None, None, Some(0))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn find_rows_returns_every_row_sharing_a_key() {
         let r1 = make_row(&[
@@ -1132,7 +1176,13 @@ mod tests {
         let table = make_hashmap_table("t", vec!["name".to_string()], vec![row]);
 
         let rows = table
-            .find_rows(&eq(&[("name", bytes_value("bob"))]), false, None, None)
+            .find_rows(
+                &eq(&[("name", bytes_value("bob"))]),
+                false,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(field(&rows[0], "id"), Some(bytes_value("1")));
@@ -1150,6 +1200,7 @@ mod tests {
                 &eq(&[("status", bytes_value("nope"))]),
                 true,
                 Some(&wildcard),
+                None,
                 None,
             )
             .unwrap();
@@ -1172,6 +1223,7 @@ mod tests {
                 true,
                 Some(&wildcard),
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -1189,7 +1241,13 @@ mod tests {
 
         let select = vec!["name".to_string()];
         let rows = table
-            .find_rows(&eq(&[("id", bytes_value("1"))]), true, None, Some(&select))
+            .find_rows(
+                &eq(&[("id", bytes_value("1"))]),
+                true,
+                None,
+                Some(&select),
+                None,
+            )
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(field(&rows[0], "name"), Some(bytes_value("Bob")));
@@ -1204,7 +1262,13 @@ mod tests {
 
         let select = vec!["name".to_string(), "nosuchcol".to_string()];
         let rows = table
-            .find_rows(&eq(&[("id", bytes_value("1"))]), true, None, Some(&select))
+            .find_rows(
+                &eq(&[("id", bytes_value("1"))]),
+                true,
+                None,
+                Some(&select),
+                None,
+            )
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].len(), 1);

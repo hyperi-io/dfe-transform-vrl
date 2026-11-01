@@ -416,7 +416,11 @@ mod tests {
         );
 
         let table = reg_arc.get_table("bounded").unwrap();
-        assert_eq!(table.len(), 1, "an oversized reload must not replace the table");
+        assert_eq!(
+            table.len(),
+            1,
+            "an oversized reload must not replace the table"
+        );
     }
 
     #[test]

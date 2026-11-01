@@ -206,7 +206,7 @@ mod tests {
 
     /// The single row matching `conditions`.
     fn one_row(table: &EnrichmentTable, conditions: &[Condition]) -> vrl::value::ObjectMap {
-        let mut rows = table.find_rows(conditions, true, None, None).unwrap();
+        let mut rows = table.find_rows(conditions, true, None, None, None).unwrap();
         assert_eq!(rows.len(), 1);
         rows.pop().unwrap()
     }
@@ -487,7 +487,7 @@ mod tests {
         let table = registry.get_table("cities").unwrap();
 
         let matches = table
-            .find_rows(&eq(&[("country", "AU")]), true, None, None)
+            .find_rows(&eq(&[("country", "AU")]), true, None, None, None)
             .unwrap();
         assert_eq!(matches.len(), 2);
     }
