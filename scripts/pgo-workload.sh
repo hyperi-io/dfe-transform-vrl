@@ -60,8 +60,8 @@ fi
 DURATION="${PGO_WORKLOAD_DURATION_SECS:-300}"
 # Digest-pinned to dfe-infra versions.yaml services.redpanda-version, tag and digest on separate lines for the Renovate regex.
 # renovate: datasource=docker depName=redpandadata/redpanda
-KAFKA_TAG="v26.2.3"
-KAFKA_DIGEST="sha256:9e83cfa99278f30d0133271c26bf670cd69c94ffa6ba0b42830dd0c3bd9dcfd9"
+KAFKA_TAG="v26.2.6"
+KAFKA_DIGEST="sha256:8b1076e0d61bfceb66594dc01536427ce0b529f8ead35fdab9763ab6085891ce"
 KAFKA_IMAGE="${PGO_WORKLOAD_KAFKA_IMAGE:-docker.redpanda.com/redpandadata/redpanda:${KAFKA_TAG}@${KAFKA_DIGEST}}"
 KAFKA_PORT="${PGO_WORKLOAD_KAFKA_PORT:-19092}"
 METRICS_PORT="${PGO_WORKLOAD_METRICS_PORT:-9090}"
