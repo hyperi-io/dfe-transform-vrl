@@ -12,6 +12,7 @@
 //! Unlike dfe-transform-vector, this service does NOT need the Vector binary
 //! in its container image. The container is just the Rust binary.
 
+use crate::config::ENV_PREFIX;
 use scalo::deployment::{
     DeploymentContract, HealthContract, ImageProfile, KafkaLagTrigger, KedaConfig, KedaContract,
     NativeDepsContract, PortContract, ResourceList, ResourcesContract, SecretEnvContract,
@@ -41,7 +42,7 @@ pub fn contract() -> DeploymentContract {
             startup_budget_seconds: 120,
             ..HealthContract::default()
         },
-        env_prefix: "DFE_TRANSFORM".into(),
+        env_prefix: ENV_PREFIX.into(),
         metric_prefix: "transform_vrl".into(),
         config_mount_path: "/etc/dfe-transform-vrl/config.yaml".into(),
         image_registry: "ghcr.io/hyperi-io".into(),
@@ -206,27 +207,27 @@ fn secrets() -> Vec<SecretGroupContract> {
         "kafka",
         vec![
             env(
-                "DFE_TRANSFORM_SOURCE_SASL_USERNAME",
+                "DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME",
                 "source-username",
                 "username",
             ),
             env(
-                "DFE_TRANSFORM_SOURCE_SASL_PASSWORD",
+                "DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD",
                 "source-password",
                 "password",
             ),
             env(
-                "DFE_TRANSFORM_SINK_SASL_USERNAME",
+                "DFE_TRANSFORM_VRL_SINK_SASL_USERNAME",
                 "sink-username",
                 "username",
             ),
             env(
-                "DFE_TRANSFORM_SINK_SASL_PASSWORD",
+                "DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD",
                 "sink-password",
                 "password",
             ),
             env(
-                "DFE_TRANSFORM_KAFKA_SASL_MECHANISM",
+                "DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM",
                 "mechanism",
                 "sasl.mechanism",
             ),
@@ -280,7 +281,7 @@ mod tests {
         let c = contract();
         assert_eq!(c.app_name, "dfe-transform-vrl");
         assert_eq!(c.binary_name, "dfe-transform-vrl");
-        assert_eq!(c.env_prefix, "DFE_TRANSFORM");
+        assert_eq!(c.env_prefix, "DFE_TRANSFORM_VRL");
         assert_eq!(c.metric_prefix, "transform_vrl");
     }
 
@@ -508,7 +509,7 @@ mod tests {
         let mechanism = c.secrets[0]
             .env_vars
             .iter()
-            .find(|env| env.env_var == "DFE_TRANSFORM_KAFKA_SASL_MECHANISM")
+            .find(|env| env.env_var == "DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM")
             .expect("the kafka group mounts the mechanism");
         assert_eq!(mechanism.secret_key, "sasl.mechanism");
     }
@@ -516,7 +517,7 @@ mod tests {
     /// The chart mounts a Secret under every declared name, so a name the
     /// config never reads leaves the credential silently unused.
     ///
-    /// Each name spells the field it fills -- `DFE_TRANSFORM_SINK_SASL_PASSWORD`
+    /// Each name spells the field it fills -- `DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD`
     /// is `sink.sasl.password` -- so a name read into the other endpoint fails
     /// here too. A shared `KAFKA_SASL_*` name spells the field on both.
     #[test]
