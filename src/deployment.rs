@@ -61,7 +61,13 @@ pub fn contract() -> DeploymentContract {
         secrets: secrets(),
         default_config: default_config(),
         depends_on: vec!["kafka".into()],
-        native_deps: NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image),
+        native_deps: {
+            let mut deps =
+                NativeDepsContract::for_scalo_features(&["transport-kafka"], &base_image);
+            // The wait-for-engine init container probes /readyz with curl from this image.
+            deps.apt_packages.push("curl".into());
+            deps
+        },
         image_profile: ImageProfile::Production,
         keda: Some(
             KedaContract::from_config(&KedaConfig {
