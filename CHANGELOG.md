@@ -3,6 +3,14 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.42](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.41...v1.1.42) (2026-11-02)
+
+### Bug Fixes
+
+* **deps:** update pulldown-cmark to 0.13.6 ([e1a3a06](https://github.com/hyperi-io/dfe-transform-vrl/commit/e1a3a06e192ffb0fa95246ca38f05b2db0a8f704))
+* **deps:** update redpandadata/redpanda Docker tag to v26.2.6 ([#127](https://github.com/hyperi-io/dfe-transform-vrl/issues/127)) ([fc08cbf](https://github.com/hyperi-io/dfe-transform-vrl/commit/fc08cbf66cb8de741fba9d706e2b20480fc1570b))
+* **image:** restore curl for wait-for-engine ([7a92edc](https://github.com/hyperi-io/dfe-transform-vrl/commit/7a92edc637a6bda3132c77f2f128d409a01d6d22))
+
 ## [1.1.41](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.40...v1.1.41) (2026-11-02)
 
 ### Bug Fixes
