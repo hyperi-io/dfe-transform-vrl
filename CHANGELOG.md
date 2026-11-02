@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.41](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.40...v1.1.41) (2026-11-02)
+
+### Bug Fixes
+
+* take vrl 0.35.0 so NaN float arithmetic fails the record ([#124](https://github.com/hyperi-io/dfe-transform-vrl/issues/124)) ([bbcb4d6](https://github.com/hyperi-io/dfe-transform-vrl/commit/bbcb4d6531260f612be3aa8d986f946c75564c60))
+* **vrl:** repair enrichment, update scalo and add a file DLQ ([#126](https://github.com/hyperi-io/dfe-transform-vrl/issues/126)) ([169c539](https://github.com/hyperi-io/dfe-transform-vrl/commit/169c539d1583b2bffca5d80d2e817eeec159771b))
+
 ## [1.1.40](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.39...v1.1.40) (2026-10-29)
 
 ### Bug Fixes
