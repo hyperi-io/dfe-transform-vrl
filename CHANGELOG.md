@@ -3,6 +3,12 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.43](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.42...v1.1.43) (2026-11-03)
+
+### Bug Fixes
+
+* read env under DFE_TRANSFORM_VRL_ only ([#131](https://github.com/hyperi-io/dfe-transform-vrl/issues/131)) ([8a42683](https://github.com/hyperi-io/dfe-transform-vrl/commit/8a42683cabb73ceb1aa4d4ee1003e926f60e8349))
+
 ## [1.1.42](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.41...v1.1.42) (2026-11-02)
 
 ### Bug Fixes
