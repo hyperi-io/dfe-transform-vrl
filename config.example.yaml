@@ -6,7 +6,7 @@
 #
 # Configuration cascade (highest to lowest priority):
 #   1. CLI args (--config, --log-level, etc.)
-#   2. Environment variables (DFE_TRANSFORM_*)
+#   2. Environment variables (DFE_TRANSFORM_VRL_*)
 #   3. .env file in the working directory (never a parent's)
 #   4. Config file (this file)
 #   5. Hard-coded defaults
@@ -46,14 +46,14 @@ pipeline:
 #   sasl:
 #     enabled: true
 #     mechanism: "scram_sha_512"       # plain, scram_sha_256, scram_sha_512, or PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
-#     # DFE_TRANSFORM_KAFKA_SASL_MECHANISM sets it for source and sink.
+#     # DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM sets it for source and sink.
 #     # This file is NOT interpolated -- a ${VAR} here reaches the broker as a
 #     # literal. Supply credentials by environment instead:
-#     #   DFE_TRANSFORM_KAFKA_SASL_USERNAME   (feeds source and sink)
-#     #   DFE_TRANSFORM_KAFKA_SASL_PASSWORD
+#     #   DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME   (feeds source and sink)
+#     #   DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD
 #     # Only when source and sink are different clusters:
-#     #   DFE_TRANSFORM_SOURCE_SASL_USERNAME
-#     #   DFE_TRANSFORM_SOURCE_SASL_PASSWORD
+#     #   DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME
+#     #   DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD
 #     # An enabled block whose username or password is still empty by the time
 #     # the env layer has run refuses to start, rather than authenticating
 #     # against nothing and reporting Ready.
@@ -61,7 +61,7 @@ pipeline:
 #     password: ""
 #   tls:
 #     enabled: true
-#     # DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
+#     # DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL containing SSL (SASL_SSL, SSL)
 #     # turns this on for source and sink. No value turns it off.
 #     # A private broker CA, as a path in the pod. The chart mounts no file, so
 #     # in Kubernetes put the PEM text in librdkafka_options ssl.ca.pem instead.
@@ -101,10 +101,10 @@ pipeline:
 #     enabled: true
 #     mechanism: "scram_sha_512"
 #     # Not interpolated -- see the source block above. The shared
-#     # DFE_TRANSFORM_KAFKA_SASL_* pair covers this too; override it only for a
+#     # DFE_TRANSFORM_VRL_KAFKA_SASL_* pair covers this too; override it only for a
 #     # separate sink cluster:
-#     #   DFE_TRANSFORM_SINK_SASL_USERNAME
-#     #   DFE_TRANSFORM_SINK_SASL_PASSWORD
+#     #   DFE_TRANSFORM_VRL_SINK_SASL_USERNAME
+#     #   DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD
 #     username: ""
 #     password: ""
 #   tls:
@@ -199,14 +199,14 @@ pipeline:
 # The env layer outranks this file. The section nests on a DOUBLE underscore,
 # and a single one produces a flat key that matches nothing:
 #
-#   METRICS_ADDR=0.0.0.0:9090            # or DFE_TRANSFORM_METRICS__ADDRESS
-#   LOG_LEVEL=debug                      # or DFE_TRANSFORM_LOGGER__LEVEL
-#   LOG_FORMAT=json                      # or DFE_TRANSFORM_LOGGER__FORMAT
-#   DFE_TRANSFORM_SCALING__ENABLED=true
-#   DFE_TRANSFORM_SCALING__MEMORY_GATE_THRESHOLD=0.8
-#   DFE_TRANSFORM_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
-#   DFE_TRANSFORM_OTEL_TRACING__ENABLED=false
-#   DFE_TRANSFORM_METRICS__OTEL__ENABLED=false
+#   METRICS_ADDR=0.0.0.0:9090            # or DFE_TRANSFORM_VRL_METRICS__ADDRESS
+#   LOG_LEVEL=debug                      # or DFE_TRANSFORM_VRL_LOGGER__LEVEL
+#   LOG_FORMAT=json                      # or DFE_TRANSFORM_VRL_LOGGER__FORMAT
+#   DFE_TRANSFORM_VRL_SCALING__ENABLED=true
+#   DFE_TRANSFORM_VRL_SCALING__MEMORY_GATE_THRESHOLD=0.8
+#   DFE_TRANSFORM_VRL_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+#   DFE_TRANSFORM_VRL_OTEL_TRACING__ENABLED=false
+#   DFE_TRANSFORM_VRL_METRICS__OTEL__ENABLED=false
 #
 # batch_processing.max_chunk_size is the events-per-chunk dial the batch engine
 # actually reads. pipeline.batch_size above is NOT it -- see the "accepted but

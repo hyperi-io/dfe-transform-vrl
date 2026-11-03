@@ -64,7 +64,7 @@ impl ServiceApp for App {
 
     #[allow(clippy::unnecessary_literal_bound)]
     fn env_prefix(&self) -> &str {
-        "DFE_TRANSFORM"
+        "DFE_TRANSFORM_VRL"
     }
 
     fn version_info(&self) -> VersionInfo {
@@ -561,7 +561,7 @@ mod tests {
     fn dfe_app_identity() {
         let app = parse(&["run"]);
         assert_eq!(app.name(), "dfe-transform-vrl");
-        assert_eq!(app.env_prefix(), "DFE_TRANSFORM");
+        assert_eq!(app.env_prefix(), "DFE_TRANSFORM_VRL");
         let version = app.version_info();
         assert_eq!(version.name, "dfe-transform-vrl");
         assert_ne!(version.version, "");
