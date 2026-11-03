@@ -284,7 +284,7 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
-    /// The chart renders `DFE_TRANSFORM_TRANSFORMS_DIR` empty until the
+    /// The chart renders `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` empty until the
     /// source's program is written, so a config naming no transforms is a
     /// transform waiting for its program, not a bad config.
     #[test]

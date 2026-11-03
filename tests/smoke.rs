@@ -133,9 +133,9 @@ fn scalo_cascade_env_reaches_the_runtime() {
         .arg("--config")
         .arg(fixture.to_str().expect("fixture path utf8"))
         .arg("config-check")
-        .env("DFE_TRANSFORM_LOGGER__LEVEL", "warn")
-        .env("DFE_TRANSFORM_LOGGER__FORMAT", "json")
-        .env("DFE_TRANSFORM_METRICS__ADDRESS", "127.0.0.1:19099")
+        .env("DFE_TRANSFORM_VRL_LOGGER__LEVEL", "warn")
+        .env("DFE_TRANSFORM_VRL_LOGGER__FORMAT", "json")
+        .env("DFE_TRANSFORM_VRL_METRICS__ADDRESS", "127.0.0.1:19099")
         // Cleared so the assertions cannot pass on a higher-priority source.
         .env_remove("LOG_LEVEL")
         .env_remove("LOG_FORMAT")
@@ -184,8 +184,8 @@ fn scalo_sections_in_the_config_file_reach_the_runtime() {
         // Cleared so the assertions cannot pass on a higher-priority source.
         .env_remove("LOG_LEVEL")
         .env_remove("METRICS_ADDR")
-        .env_remove("DFE_TRANSFORM_LOGGER__LEVEL")
-        .env_remove("DFE_TRANSFORM_METRICS__ADDRESS")
+        .env_remove("DFE_TRANSFORM_VRL_LOGGER__LEVEL")
+        .env_remove("DFE_TRANSFORM_VRL_METRICS__ADDRESS")
         .output()
         .expect("failed to execute binary");
 
@@ -430,7 +430,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
         .arg(&fixture)
         .arg("run")
         .env("METRICS_ADDR", "127.0.0.1:0")
-        .env("DFE_TRANSFORM_HEALTH__ADDRESS", "127.0.0.1:0")
+        .env("DFE_TRANSFORM_VRL_HEALTH__ADDRESS", "127.0.0.1:0")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

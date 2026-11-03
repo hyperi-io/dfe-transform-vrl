@@ -96,8 +96,8 @@ fn config_check_in(dir: &std::path::Path) -> String {
     let out = crate::offline::binary()
         .arg("config-check")
         .current_dir(dir)
-        .env_remove("DFE_TRANSFORM_PIPELINE_NAME")
-        .env_remove("DFE_TRANSFORM_SINK_TOPIC")
+        .env_remove("DFE_TRANSFORM_VRL_PIPELINE_NAME")
+        .env_remove("DFE_TRANSFORM_VRL_SINK_TOPIC")
         .output()
         .expect("the binary runs");
     let printed = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -121,7 +121,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     .expect("project config");
     std::fs::write(
         root.path().join(".env"),
-        "DFE_TRANSFORM_PIPELINE_NAME=from_parent_dotenv\n",
+        "DFE_TRANSFORM_VRL_PIPELINE_NAME=from_parent_dotenv\n",
     )
     .expect("parent .env");
 
@@ -134,7 +134,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     // The project's own .env still loads.
     std::fs::write(
         project.join(".env"),
-        "DFE_TRANSFORM_SINK_TOPIC=from_project_dotenv\n",
+        "DFE_TRANSFORM_VRL_SINK_TOPIC=from_project_dotenv\n",
     )
     .expect("project .env");
     let printed = config_check_in(&project);

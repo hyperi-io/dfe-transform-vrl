@@ -126,7 +126,7 @@ compile time -- which is why a table cannot appear after startup.
 
 ## Two config authorities, one config file
 
-The `--config` file plus `DFE_TRANSFORM_*` env vars resolve this crate's own
+The `--config` file plus `DFE_TRANSFORM_VRL_*` env vars resolve this crate's own
 `Config`: `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables`.
 
 scalo resolves its own sections -- `metrics`, `logger`, `scaling`,
