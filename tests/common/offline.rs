@@ -24,8 +24,8 @@ pub fn binary() -> Command {
     // still points at one when coverage redirects the build with --target-dir.
     let mut command = Command::new(env!("CARGO_BIN_EXE_dfe-transform-vrl"));
     command
-        .env("DFE_TRANSFORM_VERSION_CHECK__ENABLED", "false")
-        .env("DFE_TRANSFORM_OTEL_TRACING__ENABLED", "false")
-        .env("DFE_TRANSFORM_METRICS__OTEL__ENABLED", "false");
+        .env("DFE_TRANSFORM_VRL_VERSION_CHECK__ENABLED", "false")
+        .env("DFE_TRANSFORM_VRL_OTEL_TRACING__ENABLED", "false")
+        .env("DFE_TRANSFORM_VRL_METRICS__OTEL__ENABLED", "false");
     command
 }

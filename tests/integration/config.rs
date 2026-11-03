@@ -91,18 +91,80 @@ fn test_env_override_pipeline_name() {
     assert_eq!(config.pipeline.name, "test-pipeline");
 }
 
-/// `config-check` run by the binary from `dir`, returning what it printed.
-fn config_check_in(dir: &std::path::Path) -> String {
+/// `config-check` run by the binary from `dir` with `envs` set, returning what it printed.
+///
+/// Both spellings of the two settings the tests drive are cleared first, so the
+/// caller's own environment cannot reach the result.
+fn config_check_with(dir: &std::path::Path, envs: &[(&str, &str)]) -> String {
     let out = crate::offline::binary()
         .arg("config-check")
         .current_dir(dir)
         .env_remove("DFE_TRANSFORM_PIPELINE_NAME")
         .env_remove("DFE_TRANSFORM_SINK_TOPIC")
+        .env_remove("DFE_TRANSFORM_VRL_PIPELINE_NAME")
+        .env_remove("DFE_TRANSFORM_VRL_SINK_TOPIC")
+        .envs(envs.iter().copied())
         .output()
         .expect("the binary runs");
     let printed = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "config-check failed:\n{printed}");
     printed
+}
+
+/// `config-check` run by the binary from `dir`, returning what it printed.
+fn config_check_in(dir: &std::path::Path) -> String {
+    config_check_with(dir, &[])
+}
+
+/// A project directory whose config file names the sink topic `from_the_file`.
+fn project_with_config() -> tempfile::TempDir {
+    let root = tempfile::TempDir::new().expect("tempdir");
+    std::fs::write(
+        root.path().join("config.yaml"),
+        "sink:\n  topic: from_the_file\ntransforms:\n  dir: /etc/dfe-transform-vrl/transforms\n",
+    )
+    .expect("project config");
+    root
+}
+
+/// Only `DFE_TRANSFORM_VRL_` is read: the shared `DFE_TRANSFORM_` names, and the
+/// other transform apps' prefixes that begin with it, no longer reach this app.
+#[test]
+fn only_the_dfe_transform_vrl_prefix_is_read() {
+    let project = project_with_config();
+    let cases: [(&str, &[(&str, &str)], &str); 4] = [
+        (
+            "flat name",
+            &[("DFE_TRANSFORM_VRL_SINK_TOPIC", "from_new")],
+            "from_new",
+        ),
+        (
+            "nested name",
+            &[("DFE_TRANSFORM_VRL_SINK__TOPIC", "from_new_nested")],
+            "from_new_nested",
+        ),
+        (
+            "old flat name is ignored",
+            &[("DFE_TRANSFORM_SINK_TOPIC", "from_old")],
+            "from_the_file",
+        ),
+        (
+            "old nested name is ignored",
+            &[("DFE_TRANSFORM_SINK__TOPIC", "from_old_nested")],
+            "from_the_file",
+        ),
+    ];
+    for (label, envs, expected) in cases {
+        let printed = config_check_with(project.path(), envs);
+        assert!(
+            printed.contains(expected),
+            "{label}: {expected:?} not in:\n{printed}"
+        );
+        assert!(
+            !printed.contains("from_old"),
+            "{label}: an old name reached the config:\n{printed}"
+        );
+    }
 }
 
 /// The binary reads the `.env` in its working directory and no other.
@@ -121,7 +183,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     .expect("project config");
     std::fs::write(
         root.path().join(".env"),
-        "DFE_TRANSFORM_PIPELINE_NAME=from_parent_dotenv\n",
+        "DFE_TRANSFORM_VRL_PIPELINE_NAME=from_parent_dotenv\n",
     )
     .expect("parent .env");
 
@@ -134,7 +196,7 @@ fn a_dotenv_in_a_parent_directory_is_not_loaded() {
     // The project's own .env still loads.
     std::fs::write(
         project.join(".env"),
-        "DFE_TRANSFORM_SINK_TOPIC=from_project_dotenv\n",
+        "DFE_TRANSFORM_VRL_SINK_TOPIC=from_project_dotenv\n",
     )
     .expect("project .env");
     let printed = config_check_in(&project);

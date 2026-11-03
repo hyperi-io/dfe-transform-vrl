@@ -10,7 +10,7 @@
 //!
 //! Configuration cascade (highest to lowest priority):
 //!   1. CLI args (--config, --log-level, etc.)
-//!   2. Environment variables (`DFE_TRANSFORM_*`)
+//!   2. Environment variables (`DFE_TRANSFORM_VRL_*`)
 //!   3. `./.env` in the working directory, never a parent's
 //!   4. Config file specified by `--config`
 //!   5. Hard-coded defaults
@@ -26,7 +26,7 @@ pub mod validate;
 
 pub use hot::HotConfig;
 pub use loader::{
-    Config, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, INERT_SETTINGS,
+    Config, ENV_PREFIX, EnrichmentSourceConfig, EnrichmentTableConfig, FileFormat, INERT_SETTINGS,
     InertSetting, PipelineConfig, RefreshConfig, SCALO_CASCADE_SECTIONS, SaslConfig, SaslMechanism,
     SinkConfig, SourceConfig, TlsConfig, TransformConfig, Transport,
     warn_unreachable_scalo_settings, working_dir_config_file,
