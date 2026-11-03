@@ -450,17 +450,17 @@ pub struct TransformConfig {
 /// there by fixed base name (`defaults.yaml`, `settings.yaml`,
 /// `settings.{env}.yaml`), so a section listed here reaches nothing from it.
 pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
-    ("metrics", "METRICS_ADDR, or DFE_TRANSFORM_METRICS__*"),
+    ("metrics", "METRICS_ADDR, or DFE_TRANSFORM_VRL_METRICS__*"),
     (
         "logger",
-        "LOG_LEVEL / LOG_FORMAT, or DFE_TRANSFORM_LOGGER__*",
+        "LOG_LEVEL / LOG_FORMAT, or DFE_TRANSFORM_VRL_LOGGER__*",
     ),
-    ("scaling", "DFE_TRANSFORM_SCALING__*"),
-    ("worker_pool", "DFE_TRANSFORM_WORKER_POOL__*"),
-    ("batch_processing", "DFE_TRANSFORM_BATCH_PROCESSING__*"),
-    ("self_regulation", "DFE_TRANSFORM_SELF_REGULATION__*"),
-    ("version_check", "DFE_TRANSFORM_VERSION_CHECK__*"),
-    ("otel_tracing", "DFE_TRANSFORM_OTEL_TRACING__*"),
+    ("scaling", "DFE_TRANSFORM_VRL_SCALING__*"),
+    ("worker_pool", "DFE_TRANSFORM_VRL_WORKER_POOL__*"),
+    ("batch_processing", "DFE_TRANSFORM_VRL_BATCH_PROCESSING__*"),
+    ("self_regulation", "DFE_TRANSFORM_VRL_SELF_REGULATION__*"),
+    ("version_check", "DFE_TRANSFORM_VRL_VERSION_CHECK__*"),
+    ("otel_tracing", "DFE_TRANSFORM_VRL_OTEL_TRACING__*"),
 ];
 
 /// Warn for each [`SCALO_CASCADE_SECTIONS`] entry a deployment has aimed at
@@ -493,8 +493,8 @@ pub fn warn_unreachable_scalo_settings(config_path: Option<&str>) {
         }
     }
 
-    // `Env::prefixed("DFE_TRANSFORM_").split("__")` strips the prefix and then
-    // needs a DOUBLE underscore to nest, so DFE_TRANSFORM_METRICS_ADDRESS
+    // `Env::prefixed("DFE_TRANSFORM_VRL_").split("__")` strips the prefix and then
+    // needs a DOUBLE underscore to nest, so DFE_TRANSFORM_VRL_METRICS_ADDRESS
     // becomes the flat key `metrics_address` and matches no section.
     for (name, _) in std::env::vars() {
         for (section, instead) in SCALO_CASCADE_SECTIONS {
@@ -566,7 +566,8 @@ use scalo::config::flat_env::{
     ApplyFlatEnv, Normalize, flat_env_list, flat_env_string, flat_env_string_sensitive,
 };
 
-const ENV_PREFIX: &str = "DFE_TRANSFORM";
+/// The prefix of every env var this app reads, before the `_` that joins a setting.
+pub const ENV_PREFIX: &str = "DFE_TRANSFORM_VRL";
 
 /// The `config.yaml` or `config.yml` in the working directory, which the
 /// wrapper reads when no `--config` names a file.
@@ -711,8 +712,8 @@ impl Config {
     ///
     /// Priority (highest to lowest):
     ///   1. CLI args (handled by caller)
-    ///   2. Flat env overrides (`DFE_TRANSFORM_SOURCE_BROKERS`, etc.)
-    ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_SOURCE__BROKERS`)
+    ///   2. Flat env overrides (`DFE_TRANSFORM_VRL_SOURCE_BROKERS`, etc.)
+    ///   3. Figment env vars with `__` nesting (`DFE_TRANSFORM_VRL_SOURCE__BROKERS`)
     ///   4. `.env` file: the binary's `load_config` seeds scalo's cascade first,
     ///      which reads `./.env` and no parent directory's
     ///   5. Config YAML file
@@ -982,7 +983,7 @@ sink:
         // `load` reads the process environment, so it runs under temp_env's
         // lock -- otherwise a flat-env test's override window supplies the
         // name this asserts is a default.
-        let config = temp_env::with_var("DFE_TRANSFORM_PIPELINE_NAME", None::<&str>, || {
+        let config = temp_env::with_var("DFE_TRANSFORM_VRL_PIPELINE_NAME", None::<&str>, || {
             Config::load(None)
         });
         std::env::set_current_dir(prev_cwd).unwrap();
@@ -1235,19 +1236,19 @@ enrichment_tables:
     #[test]
     fn flat_env_applies_every_supported_name() {
         let vars: Vec<(&str, Option<&str>)> = vec![
-            ("DFE_TRANSFORM_PIPELINE_NAME", Some("edge")),
-            ("DFE_TRANSFORM_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
-            ("DFE_TRANSFORM_SOURCE_TOPICS", Some("t1,t2")),
-            ("DFE_TRANSFORM_SOURCE_GROUP_ID", Some("cg")),
-            ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
-            ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
-            ("DFE_TRANSFORM_SINK_BROKERS", Some("b3:9092")),
-            ("DFE_TRANSFORM_SINK_TOPIC", Some("out")),
-            ("DFE_TRANSFORM_SINK_KEY_FIELD", Some(".tenant_id")),
-            ("DFE_TRANSFORM_SINK_COMPRESSION", Some("lz4")),
-            ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
-            ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
-            ("DFE_TRANSFORM_TRANSFORMS_DIR", Some("/etc/vrl")),
+            ("DFE_TRANSFORM_VRL_PIPELINE_NAME", Some("edge")),
+            ("DFE_TRANSFORM_VRL_SOURCE_BROKERS", Some("b1:9092,b2:9092")),
+            ("DFE_TRANSFORM_VRL_SOURCE_TOPICS", Some("t1,t2")),
+            ("DFE_TRANSFORM_VRL_SOURCE_GROUP_ID", Some("cg")),
+            ("DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME", Some("src-user")),
+            ("DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD", Some("src-pass")),
+            ("DFE_TRANSFORM_VRL_SINK_BROKERS", Some("b3:9092")),
+            ("DFE_TRANSFORM_VRL_SINK_TOPIC", Some("out")),
+            ("DFE_TRANSFORM_VRL_SINK_KEY_FIELD", Some(".tenant_id")),
+            ("DFE_TRANSFORM_VRL_SINK_COMPRESSION", Some("lz4")),
+            ("DFE_TRANSFORM_VRL_SINK_SASL_USERNAME", Some("sink-user")),
+            ("DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD", Some("sink-pass")),
+            ("DFE_TRANSFORM_VRL_TRANSFORMS_DIR", Some("/etc/vrl")),
         ];
 
         let config = temp_env::with_vars(vars, || {
@@ -1272,9 +1273,9 @@ enrichment_tables:
 
         let shared = temp_env::with_vars(
             [
-                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
-                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
-                ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", Some("PLAIN")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM", Some("PLAIN")),
             ],
             || {
                 let mut config = Config::default();
@@ -1289,15 +1290,18 @@ enrichment_tables:
     }
 
     /// `config` after the flat env layer and normalise, with
-    /// `DFE_TRANSFORM_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`)
+    /// `DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM` set to `mechanism` (unset for `None`)
     /// beside a complete shared credential, as the chart renders a bus pod.
     fn with_secret_mechanism(mechanism: Option<&str>) -> Config {
         temp_env::with_vars(
             [
-                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("api-key")),
-                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("api-secret")),
-                ("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", Some("SASL_SSL")),
-                ("DFE_TRANSFORM_KAFKA_SASL_MECHANISM", mechanism),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME", Some("api-key")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD", Some("api-secret")),
+                (
+                    "DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL",
+                    Some("SASL_SSL"),
+                ),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM", mechanism),
             ],
             || {
                 let mut config = Config::default();
@@ -1380,8 +1384,8 @@ enrichment_tables:
     fn flat_env_kafka_sasl_fans_out_to_source_and_sink() {
         let config = temp_env::with_vars(
             [
-                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("scram-user")),
-                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("scram-pass")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME", Some("scram-user")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD", Some("scram-pass")),
             ],
             || {
                 let mut config = Config::default();
@@ -1404,10 +1408,10 @@ enrichment_tables:
     fn flat_env_endpoint_sasl_overrides_shared() {
         let sink_specific = temp_env::with_vars(
             [
-                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
-                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
-                ("DFE_TRANSFORM_SINK_SASL_USERNAME", Some("sink-user")),
-                ("DFE_TRANSFORM_SINK_SASL_PASSWORD", Some("sink-pass")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_VRL_SINK_SASL_USERNAME", Some("sink-user")),
+                ("DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD", Some("sink-pass")),
             ],
             || {
                 let mut config = Config::default();
@@ -1423,10 +1427,10 @@ enrichment_tables:
 
         let source_specific = temp_env::with_vars(
             [
-                ("DFE_TRANSFORM_KAFKA_SASL_USERNAME", Some("shared-user")),
-                ("DFE_TRANSFORM_KAFKA_SASL_PASSWORD", Some("shared-pass")),
-                ("DFE_TRANSFORM_SOURCE_SASL_USERNAME", Some("src-user")),
-                ("DFE_TRANSFORM_SOURCE_SASL_PASSWORD", Some("src-pass")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME", Some("shared-user")),
+                ("DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD", Some("shared-pass")),
+                ("DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME", Some("src-user")),
+                ("DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD", Some("src-pass")),
             ],
             || {
                 let mut config = Config::default();
@@ -1441,14 +1445,18 @@ enrichment_tables:
         assert_eq!(source_specific.sink.sasl.password.expose(), "shared-pass");
     }
 
-    /// `config` with `DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
+    /// `config` with `DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL` set to `protocol`,
     /// or unset for `None`, through the flat env layer.
     fn with_security_protocol(config: Config, protocol: Option<&str>) -> Config {
-        temp_env::with_var("DFE_TRANSFORM_KAFKA_SECURITY_PROTOCOL", protocol, || {
-            let mut config = config;
-            config.apply_flat_env(ENV_PREFIX);
-            config
-        })
+        temp_env::with_var(
+            "DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL",
+            protocol,
+            || {
+                let mut config = config;
+                config.apply_flat_env(ENV_PREFIX);
+                config
+            },
+        )
     }
 
     /// The chart stamps the broker's protocol, and a TLS listener needs TLS on
@@ -1553,10 +1561,10 @@ source:
             // Only the file may set the transport here.
             temp_env::with_vars(
                 [
-                    ("DFE_TRANSFORM_SOURCE_TRANSPORT", None::<&str>),
-                    ("DFE_TRANSFORM_SINK_TRANSPORT", None),
-                    ("DFE_TRANSFORM_SOURCE__TRANSPORT", None),
-                    ("DFE_TRANSFORM_SINK__TRANSPORT", None),
+                    ("DFE_TRANSFORM_VRL_SOURCE_TRANSPORT", None::<&str>),
+                    ("DFE_TRANSFORM_VRL_SINK_TRANSPORT", None),
+                    ("DFE_TRANSFORM_VRL_SOURCE__TRANSPORT", None),
+                    ("DFE_TRANSFORM_VRL_SINK__TRANSPORT", None),
                 ],
                 || Config::load(Some(path.to_str().unwrap())),
             )
