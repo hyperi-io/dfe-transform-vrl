@@ -94,7 +94,7 @@ impl Condition {
 /// Compact binary key for enrichment table lookups.
 ///
 /// Column values are joined with a `\x00` null-byte separator so that
-/// multi-column keys remain unambiguous. A string value (`Value::Bytes` or `Value::String`) contributes its
+/// multi-column keys remain unambiguous. `Value::Bytes(b)` contributes its
 /// raw bytes; all other `Value` variants contribute `format!("{v}")`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompactKey(Box<[u8]>);

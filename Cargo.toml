@@ -101,7 +101,7 @@ schemars = { version = ">=1.2.3, <2", default-features = false, features = ["std
 # env and network functions, so no transform can read the host environment or
 # reach the network. `enable_system_functions` stays for `parse_etld`, which the
 # filebeat program calls, and the compiler drops its `get_hostname`.
-vrl = { version = ">=0.37.0, <0.38", default-features = false, features = [
+vrl = { version = ">=0.35.0, <0.36", default-features = false, features = [
     "compiler",
     "stdlib-base",
     "enable_crypto_functions",
