@@ -429,11 +429,7 @@ pub fn load_sqlite(
         crate::Error::Enrichment(format!("table '{table_name}': prepare query: {e}"))
     })?;
 
-    let column_names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let column_names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
 
     validate_key_columns(&column_names, key_columns, table_name)?;
 
