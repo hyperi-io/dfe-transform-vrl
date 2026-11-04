@@ -123,13 +123,11 @@ impl ColumnSchema {
         if self.is_empty() {
             return Ok(value);
         }
-        match &value {
-            Value::Bytes(bytes) => {
-                let raw = String::from_utf8_lossy(bytes).into_owned();
-                self.coerce(table_name, column, &raw)
-            }
-            _ => Ok(value),
-        }
+        let Some(bytes) = value.as_bytes() else {
+            return Ok(value);
+        };
+        let raw = String::from_utf8_lossy(bytes).into_owned();
+        self.coerce(table_name, column, &raw)
     }
 }
 
@@ -429,11 +427,7 @@ pub fn load_sqlite(
         crate::Error::Enrichment(format!("table '{table_name}': prepare query: {e}"))
     })?;
 
-    let column_names: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let column_names: Vec<String> = stmt.column_names().map(str::to_owned).collect();
 
     validate_key_columns(&column_names, key_columns, table_name)?;
 

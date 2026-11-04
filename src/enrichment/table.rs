@@ -124,9 +124,9 @@ impl CompactKey {
             }
             first = false;
 
-            match value {
-                Value::Bytes(b) => buf.extend_from_slice(b),
-                other => buf.extend_from_slice(format!("{other}").as_bytes()),
+            match value.as_bytes() {
+                Some(b) => buf.extend_from_slice(b),
+                None => buf.extend_from_slice(format!("{value}").as_bytes()),
             }
         }
 
@@ -150,9 +150,9 @@ impl CompactKey {
             first = false;
 
             if let Some(value) = row.get(&key) {
-                match value {
-                    Value::Bytes(b) => buf.extend_from_slice(b),
-                    other => buf.extend_from_slice(format!("{other}").as_bytes()),
+                match value.as_bytes() {
+                    Some(b) => buf.extend_from_slice(b),
+                    None => buf.extend_from_slice(format!("{value}").as_bytes()),
                 }
             }
             // Missing column → contributes empty bytes (separator still written)
@@ -565,14 +565,12 @@ fn values_equal(cell: &Value, expected: &Value, case_sensitive: bool) -> bool {
     if case_sensitive {
         return cell == expected;
     }
-    match (cell, expected) {
-        (Value::Bytes(a), Value::Bytes(b)) => {
-            match (std::str::from_utf8(a), std::str::from_utf8(b)) {
-                (Ok(a), Ok(b)) => a.to_lowercase() == b.to_lowercase(),
-                (Err(_), Err(_)) => a == b,
-                _ => false,
-            }
-        }
+    match (cell.as_bytes(), expected.as_bytes()) {
+        (Some(a), Some(b)) => match (std::str::from_utf8(a), std::str::from_utf8(b)) {
+            (Ok(a), Ok(b)) => a.to_lowercase() == b.to_lowercase(),
+            (Err(_), Err(_)) => a == b,
+            _ => false,
+        },
         _ => cell == expected,
     }
 }
@@ -619,7 +617,7 @@ fn mmdb_find_rows(
         );
     };
 
-    let Value::Bytes(bytes) = value else {
+    let Some(bytes) = value.as_bytes() else {
         return Err(format!(
             "condition field {field:?} must be a string IP address"
         ));

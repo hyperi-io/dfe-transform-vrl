@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>hyperi-io/renovate-config"]
+  "extends": ["github>hyperi-io/renovate-config"],
+  "packageRules": [
+    {
+      "description": "vrl 0.37 and 0.38 compile the bundled filebeat program about 3x slower than 0.35 (release build, 9.6s vs 35.7s and 29.7s), which delays startup readiness and every reload.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["vrl"],
+      "allowedVersions": "<0.36"
+    }
+  ]
 }
