@@ -145,7 +145,7 @@ csv = ">=1.4.0, <2"
 
 # Optional enrichment sources
 maxminddb = { version = ">=0.32.0, <0.33", optional = true }
-rusqlite = { version = ">=0.41.0, <0.42", features = ["bundled"], optional = true }
+rusqlite = { version = ">=0.41.1, <0.42", features = ["bundled"], optional = true }
 
 # Optional allocator (jemalloc-only per 2026-04-17 DFE policy).
 # hyperi-ci enables `--features jemalloc` automatically at every channel
@@ -196,7 +196,7 @@ temp-env = { version = ">=0.3.6, <0.4", features = ["async_closure"] }
 dotenvy = ">=0.15.7, <0.16"
 # The Push tests read the gRPC status code a sender gets, which scalo's client
 # folds into `SendResult`. Same range as scalo so cargo unifies to one tonic.
-tonic = { version = ">=0.14.8, <0.15", default-features = false }
+tonic = { version = ">=0.14.9, <0.15", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
