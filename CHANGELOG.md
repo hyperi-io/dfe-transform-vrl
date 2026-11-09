@@ -3,6 +3,15 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.45](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.44...v1.1.45) (2026-11-09)
+
+### Bug Fixes
+
+* **deps:** update rust-dependencies ([87fc79f](https://github.com/hyperi-io/dfe-transform-vrl/commit/87fc79f6f9b5b366cd92ae3ecf1237cc8d3f2e73))
+* **deps:** update rust-dependencies ([#136](https://github.com/hyperi-io/dfe-transform-vrl/issues/136)) ([88991e5](https://github.com/hyperi-io/dfe-transform-vrl/commit/88991e520f7091bae85433f80172c27f1789370a))
+* **renovate:** keep the 7-day release age on the vrl hold ([8f02efe](https://github.com/hyperi-io/dfe-transform-vrl/commit/8f02efe40c0e17f120aeba1ae1c712f3d1345826))
+* **scalo:** rebuild on scalo 2.14.27 ([#138](https://github.com/hyperi-io/dfe-transform-vrl/issues/138)) ([5bca35e](https://github.com/hyperi-io/dfe-transform-vrl/commit/5bca35e1fc41182f46826534f57cfe1700725fc0))
+
 ## [1.1.44](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.43...v1.1.44) (2026-11-03)
 
 ### Bug Fixes
