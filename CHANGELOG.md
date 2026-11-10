@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.46](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.45...v1.1.46) (2026-11-10)
+
+### Bug Fixes
+
+* **ci:** drop Namespace runners, add test-tier ([5470a6e](https://github.com/hyperi-io/dfe-transform-vrl/commit/5470a6e0d3910145a9149e0c36643e4ec67619fa))
+* **transform-vrl:** rebuild on scalo 2.14.28 ([#140](https://github.com/hyperi-io/dfe-transform-vrl/issues/140)) ([10f7d33](https://github.com/hyperi-io/dfe-transform-vrl/commit/10f7d33fb6291fc03447574c530651452f025f7c))
+
 ## [1.1.45](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.44...v1.1.45) (2026-11-09)
 
 ### Bug Fixes
