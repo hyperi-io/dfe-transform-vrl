@@ -66,7 +66,7 @@ bytes = ">=1.12.1, <2"
 # (`scaling` / `self_regulation`), no CEL expression engine needed.
 # The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
 # renders only the contract version its scalo release writes.
-scalo = { version = ">=2.14.28, <3", features = [
+scalo = { version = ">=2.14.29, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -185,7 +185,7 @@ tar = ">=0.4.46, <0.5"
 # failing. Here they always build, and the shipped binary still does not carry
 # the transport. transport-kafka-test-support is the run's shared broker
 # container the Kafka tests use.
-scalo = { version = ">=2.14.28, <3", features = [
+scalo = { version = ">=2.14.29, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
