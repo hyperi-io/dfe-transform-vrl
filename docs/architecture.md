@@ -112,10 +112,11 @@ once. scalo's idle gate re-polls, so the program that lands later starts the
 service without a restart. Only reaching the loader with work still to do is a
 failure.
 
-**Metric names are emitted bare.** The `MetricsManager` prepends the app
-namespace (`dfe-transform-vrl` -> `dfe_transform_vrl_`) exactly once via the
-global recorder's prefix layer. App code passing a prefixed name doubles it.
-Apps are told apart by Prometheus label, never by metric name.
+**Metric names are emitted bare.** The `MetricsManager` namespace is empty
+unless `metrics.namespace` is set, and none is by default. A set namespace is
+prepended exactly once by the global recorder's prefix layer, so app code passing
+a prefixed name doubles it. Apps are told apart by Prometheus label, never by
+metric name.
 
 **Enrichment tables are materialised once and swapped atomically.** Tables load
 into `FxHashMap` for O(1) lookup and swap through `ArcSwap`. Background refresh
@@ -170,7 +171,9 @@ The `Dockerfile` is generated from `deployment.rs::contract()` by scalo's genera
 
 No chart is committed. At release, hyperi-ci emits the contract with `generate-artefacts` and assembles a thin chart from it on the scalo-service library chart at `release.helm.library`. The contract is schema version 4: a 120 s startup budget, `kubernetes.io/h2c` on the Push port, the Kafka Secret mounted into the per-endpoint SASL names, no writable path beyond the library's scratch `/tmp` under a read-only root, requests 100m/128Mi, limits 500m/512Mi and a 45 s grace period.
 
-The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. A deployment adds a trigger with the library's `keda.extraTriggers` value.
+The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The contract's ScaledObject scales on CPU alone (80%): consumer-group lag rises when a downstream stage breaks, so it is not a trigger. A deployment adds a trigger with the library's `keda.extraTriggers` value.
+
+In a DFE deployment, dfe-infra's values set the CPU target to 70% in every profile. The single, scale and mesh profiles add the scaling-pressure trigger (target 70, read through dfe-keda-shim), and slim runs on CPU alone. The engine's [KEDA scaling page](https://github.com/hyperi-io/dfe-engine/blob/main/docs/deployment/keda-scaling.md) covers the triggers for every app.
 
 ### How many instances run
 
@@ -193,4 +196,4 @@ that cannot recover takes the pod out of service once the client meets it. But a
 scalo transport registers healthy before it has reached a broker, so a pod whose
 broker it has never reached still reports Ready. And rotating the Kafka credential does not roll the
 pods, because the chart is generator output and the `checksum/secret` annotation
-has to come from scalo (hyperi-io/scalo-rs#110).
+has to come from scalo.

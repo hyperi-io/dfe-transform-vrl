@@ -51,16 +51,15 @@ Kafka partition message (raw bytes)
 
 ### Offset Commit Strategy (At-Least-Once)
 
-Consumer offsets are committed only after producer delivery confirmation:
+Release is batch-level. scalo's batch engine hands a block of records to the
+transform, sends the result, and releases the block's source offsets once the
+batch send returns Ok. Under that, scalo's Kafka transport holds each source
+offset it handed out and commits a partition only up to its lowest unreleased
+one, so the cumulative commit never passes a record not yet released.
 
-1. Consumer fetches batch of messages from partition P
-2. Each message is transformed and sent to producer
-3. Producer delivery callbacks confirm writes to sink topic
-4. Track highest contiguous confirmed offset per partition
-5. Commit confirmed offsets to consumer group
-
-If the process crashes before commit, messages are re-consumed and re-processed
-(at-least-once, not exactly-once). VRL transforms should be idempotent.
+If the process crashes between send and release, the whole block is re-consumed
+and re-processed (at-least-once, not exactly-once). VRL transforms must be
+idempotent.
 
 ### Payload Format
 
@@ -150,7 +149,7 @@ The wrapper controls all memory allocation:
 | Consumer prefetch | `source.max_buffer_bytes` | 64 MiB |
 | Transform chunk | `batch_processing.max_chunk_size` (env only) | 10 000 events |
 | Producer queue | `sink.max_buffer_bytes` | 64 MiB |
-| Total pod memory | K8s resource limit | 256 MiB |
+| Total pod memory | K8s resource limit | 512 MiB (128 MiB request) |
 
 The sum of consumer + producer buffers must fit within the pod memory limit
 minus overhead (binary, runtime, VRL compiled programs). The wrapper enforces
