@@ -56,7 +56,7 @@ Health and metrics answer on port 9090: `/livez`, `/readyz` (503 until the pipel
 
 [config.example.yaml](config.example.yaml) is the annotated reference, and [docs/config-schema.yaml](docs/config-schema.yaml) lists every key with its type and default. The big dials have flat environment overrides for Kubernetes, `DFE_TRANSFORM_VRL_SOURCE_BROKERS`, `DFE_TRANSFORM_VRL_SINK_TOPIC`, `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` and the SASL pair among them. The whole list, Kafka over TLS with a private CA and the scalo sections that share the file on a double underscore are under [Operating notes](docs/internals.md#operating-notes) in docs/internals.md, and the settings that parse but reach nothing under [Reload](docs/internals.md#reload).
 
-`pipelines/filebeat/` ships a pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki, IOS, Umbrella) with its `timezones.csv` table. Opt in by pointing `transforms.dir` and `enrichment_tables` at it. It is interim: dfe-transform-elastic replaces it.
+`pipelines/filebeat/` ships a pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki, IOS, Umbrella) with its `timezones.csv` table. Opt in by pointing `transforms.dir` and `enrichment_tables` at it. dfe-transform-elastic carries the same sources as compiled Rust.
 
 ## Documentation
 
@@ -65,7 +65,7 @@ Health and metrics answer on port 9090: `/livez`, `/readyz` (503 until the pipel
 - [pipelines/filebeat/README.md](pipelines/filebeat/README.md): wiring and limits of the filebeat bundle.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers.
 
-The suite's published docs are at https://dfe.docs.hyperi.io.
+The suite's published docs are at <https://dfe.docs.hyperi.io>.
 
 ## Help and contributing
 
