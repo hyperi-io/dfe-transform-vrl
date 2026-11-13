@@ -183,7 +183,7 @@ turn.
 ```bash
 make check                                        # hyperi-ci check -- quality + test, the pre-push gate
 cargo nextest run --features enrichment-mmdb,enrichment-sqlite  # what CI actually runs
-cargo nextest run --all-features --run-ignored    # adds the broker-dependent e2e tests
+cargo nextest run --all-features --run-ignored    # adds the ignored Kafka e2e tests
 cargo run -- config-check --config config.yaml    # validate a config without starting
 cargo run --bin dfe-transform-vrl -- emit-dockerfile > Dockerfile    # regenerate the Dockerfile
 ```
@@ -195,7 +195,7 @@ Green lies here in three ways, and all three are on by default.
 Kafka-dependent tests call `skip_if_no_kafka!()` and skip cleanly when no broker
 is reachable. They report as not-failed, which is not the same as proven.
 
-The e2e tests are `#[ignore]` and need `--run-ignored` plus a broker. Set
+The Kafka e2e tests are `#[ignore]` and need `--run-ignored` plus a broker, and the other e2e tests run by default and start their own containers. Set
 `TEST_MODE=docker` for the dfe-docker infra profile on `localhost:19092`, or
 `TEST_MODE=remote` for the cluster endpoints.
 
@@ -208,7 +208,7 @@ checked.
 
 | Don't | Do | Why |
 |---|---|---|
-| Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships. A chart once mounted the Kafka SASL Secret into env names nothing read, so credentials reached the pod and were ignored -- `test_every_contract_secret_env_var_reaches_the_config` now holds every declared name to the field it spells |
+| Hand-edit `Dockerfile`, or commit a chart | Fix `src/deployment.rs::contract()` and regenerate | The Dockerfile is generator output and the release assembles the chart from the contract, so a hand edit is reverted or never ships, and `test_every_contract_secret_env_var_reaches_the_config` now holds every declared name to the field it spells |
 | Bump scalo and leave `release.helm.library` behind | Move `release.helm.library` in `.hyperi-ci.yaml` to the same scalo version | A scalo-service release renders only the contract version its scalo release writes |
 | Turn the Kafka lag trigger back on in `contract()` | Leave `KafkaLagTrigger::disabled()` and scale on CPU plus scaling pressure | Lag rises when a downstream stage breaks, so a lag trigger adds pods that wait on the same broken stage. The lag trigger was also the one that kept reading a kafka block this app's values do not have, fixed three times (#37, #65, #70) |
 | Put a scalo section (`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check`, `otel_tracing`) in a `config.yaml` the binary finds in its working directory | Pass the file with `--config`, or set the section through the env layer on a **double** underscore | scalo reads the `--config` file as its settings layer but finds other files only by fixed base name (`settings.yaml`, `defaults.yaml`), so a working-directory `config.yaml` reaches the wrapper alone. Full list under [Environment variable overrides](docs/internals.md#environment-variable-overrides) |
