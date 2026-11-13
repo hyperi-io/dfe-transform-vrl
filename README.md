@@ -10,7 +10,7 @@ Runs your VRL transforms over a DFE deployment's event stream, in-process.
 - Sits between the land topic and dfe-loader, and runs the VRL (Vector Remap Language) files in a directory, in filename order, against each event. The VRL engine is compiled in, so a transform is a file you change, not a release.
 - Kafka in and out, or a direct gRPC push on a deployment with no broker. The transform you write is the same on both.
 - At-least-once by default: the source is acknowledged only once the sink has the transformed records. `source.acknowledgements.enabled: false` acknowledges at receipt instead.
-- Enrichment tables from CSV, JSON, YAML, MMDB, STIX and SQLite, read from VRL. A table with a `refresh` setting reloads while the service runs. MMDB loads once at start.
+- Enrichment tables from CSV, JSON, YAML and STIX, read from VRL, plus MMDB and SQLite with the `enrichment-mmdb` and `enrichment-sqlite` build features. A table with a `refresh` setting reloads while the service runs. MMDB loads once at start.
 - The host and network functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`) do not compile, so a transform cannot reach outside the process.
 
 JSON is the only payload format. A record that is not JSON is dropped, counted in `records_error_total{stage="deserialise"}`, and not redelivered. For Vector's own transforms beyond `remap`, use [dfe-transform-vector](https://github.com/hyperi-io/dfe-transform-vector).
@@ -19,11 +19,12 @@ JSON is the only payload format. A record that is not JSON is dropped, counted i
 
 ```bash
 cargo build --release
-./target/release/dfe-transform-vrl config-check --config config.example.yaml
-./target/release/dfe-transform-vrl --config config.example.yaml
+cp config.example.yaml config.yaml      # set the brokers, topics and transforms.dir
+./target/release/dfe-transform-vrl config-check --config config.yaml
+./target/release/dfe-transform-vrl --config config.yaml
 ```
 
-The smallest config names the source, the transform directory and the sink:
+The smallest config names the source, a directory holding at least one `.vrl` file, and the sink:
 
 ```yaml
 pipeline:
