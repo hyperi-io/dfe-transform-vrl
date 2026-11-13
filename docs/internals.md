@@ -1,4 +1,4 @@
-# dfe-transform-vrl — Design Document
+# dfe-transform-vrl -- Design Document
 
 ## Overview
 
@@ -81,7 +81,7 @@ let program = vrl::compiler::compile(source, &vrl::stdlib::all())
     .map_err(|diagnostics| /* format errors */)?;
 ```
 
-The compiled `Program` is reused for every event — zero per-event compilation cost.
+The compiled `Program` is reused for every event -- zero per-event compilation cost.
 
 ### Execution
 
@@ -130,7 +130,7 @@ filebeat templates (Cisco Meraki logs, Cisco IOS, Cisco Umbrella) as one
 pure-VRL file plus its `timezones.csv` enrichment table. It is convenience
 data, not engine capability: opting in means pointing the standard
 `transforms.dir` and `enrichment_tables` config at those files. The engine
-carries no filebeat-specific code; the integration tests
+carries no filebeat-specific code, and the integration tests
 (`tests/integration/filebeat_pipeline.rs`) drive the bundle with the real
 elastic/integrations pipeline test corpus, which doubles as a full-engine
 workload.
@@ -229,7 +229,7 @@ does size a chunk is `batch_processing.max_chunk_size`, set via the env layer.
 
 These fields are bound to connections, compiled programs, or server sockets
 established at startup. Changing them requires a pod restart (which is the
-standard K8s pattern — ConfigMap changes trigger rolling restart via the
+standard K8s pattern -- ConfigMap changes trigger rolling restart via the
 `checksum/config` annotation in the Deployment template).
 
 | Field | Why |
@@ -243,3 +243,101 @@ standard K8s pattern — ConfigMap changes trigger rolling restart via the
 | `sink.max_buffer_bytes` | rdkafka `queue.buffering.max.kbytes` |
 | `sink.librdkafka_options` | librdkafka `ClientConfig` |
 | `transforms.*` | VRL programs compiled at startup |
+
+## Operating notes
+
+### Environment variable overrides
+
+The big dials have flat env var overrides for K8s. This is the whole list --
+anything not here is not read:
+
+| Env Var | Config Field |
+|---------|-------------|
+| `DFE_TRANSFORM_VRL_PIPELINE_NAME` | `pipeline.name` |
+| `DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
+| `DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
+| `DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM` | `source.sasl.mechanism` + `sink.sasl.mechanism` |
+| `DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL` | `source.tls.enabled` + `sink.tls.enabled`, set true when the value contains `SSL`, never set false |
+| `DFE_TRANSFORM_VRL_SOURCE_BROKERS` | `source.brokers` |
+| `DFE_TRANSFORM_VRL_SOURCE_TOPICS` | `source.topics` |
+| `DFE_TRANSFORM_VRL_SOURCE_GROUP_ID` | `source.group_id` |
+| `DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME` | `source.sasl.username` |
+| `DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD` | `source.sasl.password` |
+| `DFE_TRANSFORM_VRL_SINK_BROKERS` | `sink.brokers` |
+| `DFE_TRANSFORM_VRL_SINK_TOPIC` | `sink.topic` |
+| `DFE_TRANSFORM_VRL_SINK_KEY_FIELD` | `sink.key_field` |
+| `DFE_TRANSFORM_VRL_SINK_COMPRESSION` | `sink.compression` |
+| `DFE_TRANSFORM_VRL_SINK_SASL_USERNAME` | `sink.sasl.username` |
+| `DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD` | `sink.sasl.password` |
+| `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` | `transforms.dir` |
+
+The chart mounts the Kafka Secret's `username` and `password` into both endpoint pairs, and its `sasl.mechanism` (`PLAIN`, `SCRAM-SHA-512`) into `KAFKA_SASL_MECHANISM`. Outside the chart the shared `KAFKA_SASL_*` names reach both endpoints, and the per-endpoint names override them.
+
+Either half turns SASL on, an enabled block still missing one once the env
+layer has run refuses to start, and the password is redacted on every output
+path (`x-scalo-secret` + `writeOnly` in the emitted schema).
+
+### Kafka over TLS with a private CA
+
+`tls.ca_cert_file` is a path, and the chart mounts no certificate file. Put the
+CA's PEM text in the rendered config instead:
+
+```yaml
+config:
+  source:
+    tls:
+      enabled: true
+    librdkafka_options:
+      ssl.ca.pem: |
+        -----BEGIN CERTIFICATE-----
+        ...
+        -----END CERTIFICATE-----
+```
+
+The same two keys go under `sink`. A CA is public, so a ConfigMap can hold it.
+Mutual TLS is not supported through the chart, which mounts no client key. KEDA
+scales on CPU and opens no Kafka connection, so it needs no CA.
+
+### scalo's own settings share the config file
+
+`metrics`, `logger`, `scaling`, `worker_pool`, `batch_processing`,
+`self_regulation`, `version_check` and `otel_tracing` are resolved by scalo, not
+by the wrapper.
+scalo reads the file passed with `--config` as its settings layer, once at
+startup, so those sections take effect from the mounted `config.yaml` beside the
+wrapper's own:
+
+```yaml
+scaling:
+  memory_gate_threshold: 0.8
+batch_processing:
+  max_chunk_size: 10000
+```
+
+A `config.yaml` picked up from the working directory with no `--config` is read
+by the wrapper alone, so a scalo section in it changes nothing and the wrapper
+warns at startup. Pass the file with `--config`.
+
+The env layer outranks the file, and there the section nests on a **double**
+underscore:
+
+```bash
+METRICS_ADDR=0.0.0.0:9090          # or DFE_TRANSFORM_VRL_METRICS__ADDRESS
+LOG_LEVEL=debug                    # or DFE_TRANSFORM_VRL_LOGGER__LEVEL
+LOG_FORMAT=json                    # or DFE_TRANSFORM_VRL_LOGGER__FORMAT
+DFE_TRANSFORM_VRL_SCALING__MEMORY_GATE_THRESHOLD=0.8
+DFE_TRANSFORM_VRL_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
+DFE_TRANSFORM_VRL_OTEL_TRACING__ENABLED=false    # OTLP span export, on by default
+DFE_TRANSFORM_VRL_METRICS__OTEL__ENABLED=false   # OTLP metric push, on by default
+```
+
+A single underscore (`DFE_TRANSFORM_VRL_METRICS_ADDRESS`) produces a flat key that
+matches no section and is ignored, and that spelling also warns.
+
+### Helm chart
+
+No chart is committed here. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. Keep that version at the scalo version in `Cargo.toml`: a library renders only the contract version its scalo release writes.
+
+To see the chart a release would ship, build the binary and run `hyperi-ci chart assemble --binary target/debug/dfe-transform-vrl --image ghcr.io/hyperi-io/dfe-transform-vrl:<tag>@sha256:<digest> --version <version>`. It prints the chart directory it wrote.
+
+The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. A deployment adds a trigger with the library's `keda.extraTriggers` value.
