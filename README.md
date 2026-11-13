@@ -50,7 +50,7 @@ A transform file is plain VRL:
 del(.message)
 ```
 
-Health and metrics answer on port 9090: `/livez`, `/readyz` (503 until the pipeline runs, while memory is under pressure, and while a transport reports itself unhealthy) and `/metrics`.
+Health and metrics answer on port 9090: `/livez`, `/readyz` (503 while memory is under pressure or a transport reports itself unhealthy, and 200 once the pipeline runs, an idle one included) and `/metrics`.
 
 ## Configuration
 
