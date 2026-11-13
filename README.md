@@ -66,7 +66,7 @@ Health and metrics answer on port 9090: `/livez`, `/readyz` (503 while memory is
 - [pipelines/filebeat/README.md](pipelines/filebeat/README.md): wiring and limits of the filebeat bundle.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers.
 
-The suite's published docs are at <https://dfe.docs.hyperi.io>.
+The suite's published docs are at <https://dfe.docs.hyperi.io>, and this repository's pages at <https://dfe.docs.hyperi.io/dfe-transform-vrl/>.
 
 ## Help and contributing
 
