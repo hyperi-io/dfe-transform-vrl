@@ -1,6 +1,6 @@
 # Architecture
 
-## The problem this shape solves
+## The problem the wrapper solves
 
 Reshaping events with Vector costs memory DFE cannot afford at volume.
 
@@ -9,7 +9,7 @@ throughput, so a Kubernetes memory limit has to be sized for the worst case
 Vector might ever reach rather than the work actually queued.
 
 That cost buys access to Vector's non-VRL transforms, which most pipelines never
-use. So the shape is: keep VRL, drop Vector. Compile the VRL crate into the
+use. So the answer is to keep VRL and drop Vector. Compile the VRL crate into the
 binary, and let the wrapper own the buffers and the wire format.
 
 ### What it is, and what it is not
@@ -177,7 +177,7 @@ In a DFE deployment, dfe-infra's values set the CPU target to 70% in every profi
 
 ### How many instances run
 
-The suite manifest, `dfe-infra/apps.yaml`, is the authority on this app's shape,
+The suite manifest, `dfe-infra/apps.yaml`, is the authority on how this app is deployed,
 not this repo. It declares `multiplicity: per_config` -- one deployment per
 source config, never a singleton -- with `scale_deployed: true`, both transports,
 and a source binding that derives `{source}_land` as the input topic,

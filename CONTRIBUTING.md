@@ -176,7 +176,7 @@ turn.
 | `Dockerfile` | Generator output, not hand-authored |
 | `pipelines/filebeat/` | Opt-in data bundle (212,218 bytes of VRL plus a lookup table), not engine capability |
 | `tests/` | `integration/` runs mostly without Kafka, `e2e/` needs a broker, `TESTING.md` explains the modes |
-| `docs/architecture.md` | Why the service is shaped this way, and the invariants |
+| `docs/architecture.md` | Why the service is built this way, and the invariants |
 
 ### Commands that prove a change
 
