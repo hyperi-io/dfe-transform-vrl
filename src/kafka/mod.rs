@@ -20,8 +20,7 @@ use crate::config;
 
 /// Build a `KafkaConfig` for the consumer from our source config.
 pub fn build_consumer_config(source: &config::SourceConfig) -> KafkaConfig {
-    // Consumer profile: group + topics set (subscribes). scalo 2.9 dropped the
-    // explicit KafkaRole -- a non-empty group + topics is the consumer shape.
+    // Consumer profile: a non-empty group + topics is the consumer shape.
     let mut kafka_config = KafkaConfig {
         profile: KafkaProfile::Production,
         brokers: source.brokers.clone(),

@@ -7,9 +7,9 @@ you do not. It also doubles as a real-data integration test workload for
 the engine (`tests/integration/filebeat_pipeline.rs`).
 
 > **INTERIM.** Elastic compatibility is being replaced by
-> `dfe-transform-elastic` (Rust-native, currently in beta). New
-> integrations should NOT build on this pipeline; existing DFE 2.1
-> filebeat feeds should plan to migrate when dfe-transform-elastic ships.
+> `dfe-transform-elastic` (Rust-native). New integrations should NOT
+> build on this pipeline, and existing DFE 2.1 filebeat feeds should
+> plan to migrate to dfe-transform-elastic.
 
 ## What it covers
 

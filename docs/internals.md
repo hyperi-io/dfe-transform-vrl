@@ -149,7 +149,7 @@ The wrapper controls all memory allocation:
 | Consumer prefetch | `source.max_buffer_bytes` | 64 MiB |
 | Transform chunk | `batch_processing.max_chunk_size` (env only) | 10 000 events |
 | Producer queue | `sink.max_buffer_bytes` | 64 MiB |
-| Total pod memory | K8s resource limit | 512 MiB (128 MiB request) |
+| Total pod memory | K8s resource limit | what `src/deployment.rs::contract()` sets |
 
 The sum of consumer + producer buffers must fit within the pod memory limit
 minus overhead (binary, runtime, VRL compiled programs). The wrapper enforces
@@ -193,7 +193,7 @@ outranks the file.
 | Kafka source/sink | rdkafka (wrapper-controlled) | Vector-managed |
 | Memory control | Full (bounded buffers) | None (Vector unbounded) |
 | Supported transforms | VRL only | All Vector transforms |
-| Container image size | ~20 MiB (Rust binary) | ~170 MiB (Rust + Vector) |
+| Container image size | Smaller (Rust binary) | Larger (Rust + Vector) |
 | Process model | Single process | Wrapper + subprocess |
 | Startup time | Fast (compile VRL) | Slower (spawn + healthcheck Vector) |
 | Crash recovery | Restart binary | Restart subprocess + binary |
@@ -220,8 +220,8 @@ swaps `SharedConfig<HotConfig>`, so a bad edit is caught without a restart.
 
 ### Accepted but not applied
 
-The pipeline holds the reloadable subset but reads none of it yet, so a reload
-changes no pipeline behaviour today. `config::INERT_SETTINGS` is the list, and
+The pipeline holds the reloadable subset but reads none of it, so a reload
+changes no pipeline behaviour. `config::INERT_SETTINGS` is the list, and
 the wrapper warns at startup for each one a deployment has set. The dial that
 does size a chunk is `batch_processing.max_chunk_size`, set via the env layer.
 

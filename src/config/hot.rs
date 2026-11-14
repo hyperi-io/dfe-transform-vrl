@@ -19,7 +19,7 @@
 //! - `key_field` — sink partition key path (e.g. `.org_id`, `.host.name`)
 //!
 //! All three are on [`crate::config::INERT_SETTINGS`]: the pipeline holds this
-//! struct but reads none of them yet, so a reload today re-validates the file
+//! struct but reads none of them, so a reload re-validates the file
 //! and changes no behaviour. The wrapper warns at startup for each one a
 //! deployment has set rather than implying otherwise.
 //!
