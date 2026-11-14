@@ -61,7 +61,7 @@ Health and metrics answer on port 9090: `/livez`, `/readyz` (503 while memory is
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md): the shape, who owns the loop, the delivery contract and the two config authorities.
+- [docs/architecture.md](docs/architecture.md): what the service is, who owns the loop, the delivery contract and the two config authorities.
 - [docs/internals.md](docs/internals.md): data flow, VRL integration, memory budget, configuration, reload, operating notes.
 - [pipelines/filebeat/README.md](pipelines/filebeat/README.md): wiring and limits of the filebeat bundle.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers.
