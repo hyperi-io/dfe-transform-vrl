@@ -44,7 +44,7 @@ bytes = ">=1.12.1, <2"
 
 # Enable only the scalo features src/ and tests/ use. The floor moves with
 # `release.helm.library` in .hyperi-ci.yaml.
-scalo = { version = ">=2.14.29, <3", features = [
+scalo = { version = ">=2.14.30, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -144,7 +144,7 @@ flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
 # A dev-dependency, not a crate feature, so CI's `features: default` still builds
 # the broker-free pipeline tests.
-scalo = { version = ">=2.14.29, <3", features = [
+scalo = { version = ">=2.14.30, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
