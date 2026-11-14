@@ -193,7 +193,7 @@ pub async fn run(
     // composite pressure to 0 (more pods cannot relieve an unreachable broker).
     let circuit_open = Arc::new(AtomicBool::new(false));
 
-    // Per-pod scaling-signal ticker (scalo 2.9 unified engine). The batch
+    // Per-pod scaling-signal ticker. The batch
     // engine owns the recv loop, so there is no app-side poll tick to piggy-back
     // on; a lightweight background task feeds the runtime's shared
     // `ScalingPressure` -- the engine served at `/scaling/pressure` to KEDA --

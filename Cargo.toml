@@ -26,46 +26,24 @@ path = "src/lib.rs"
 name = "dfe-transform-vrl"
 path = "src/main.rs"
 
-# PGO workload driver — only built with `--features pgo-driver`.
-# Used by scripts/pgo-workload.sh during release-channel Tier 2 builds
-# (PGO instrumentation phase). Default `cargo build` skips it entirely.
+# PGO workload driver (scripts/pgo-workload.sh), built only with `--features pgo-driver`.
 [[bin]]
 name = "pgo-driver"
 path = "src/bin/pgo_driver.rs"
 required-features = ["pgo-driver"]
 
 [dependencies]
-# Async runtime. `full` is acceptable; we use macros, rt-multi-thread,
-# signal, sync, time, task, test (test is dev-only but `full` covers it).
+# Async runtime
 tokio = { version = ">=1.54.1, <2", features = ["full"] }
 
-# CancellationToken (scalo's shutdown token type) -- used to drive the
-# governed engine driver to a clean stop.
+# CancellationToken, scalo's shutdown token type.
 tokio-util = ">=0.7.20, <0.8"
 
-# Zero-copy payload bytes -- the WorkBatch/Record currency. Cheap clone
-# (refcount bump), passed by value into the transport sender.
+# Zero-copy payload bytes, the WorkBatch/Record currency.
 bytes = ">=1.12.1, <2"
 
-# Shared library — use for everything it provides. NO bespoke code that
-# duplicates scalo functionality ("scalo first" policy).
-#
-# Feature list audited 2026-04-29: only includes features whose API surface
-# is referenced in src/ or tests/. NOT included (verified zero refs):
-#   - `http` — would pull reqwest + reqwest-middleware + reqwest-retry 0.7
-#     (the transitive wasm-timer / instant 0.1.13 chain). The wrapper does
-#     no outbound HTTP; scalo's HttpClient was speculatively enabled and
-#     never wired up.
-# When wiring HTTP/gRPC sinks (e.g. for enrichment refresh), re-enable the
-# specific feature at that point — don't pre-enable speculatively.
-#
-# `scaling` drives the unified `ScalingPressure` engine the runtime serves at
-# `/scaling/pressure` to KEDA. The 2.9 governor (`governor` feature, default-ON)
-# owns the inbound pause-partitions brake + AIMD byte budget over the shared
-# memory guard; scaling holds the weighted KEDA composite. Both are config-keyed
-# (`scaling` / `self_regulation`), no CEL expression engine needed.
-# The floor moves with `release.helm.library` in .hyperi-ci.yaml: the library
-# renders only the contract version its scalo release writes.
+# Enable only the scalo features src/ and tests/ use. The floor moves with
+# `release.helm.library` in .hyperi-ci.yaml.
 scalo = { version = ">=2.14.29, <3", features = [
     "cli-service",
     "config",
@@ -93,8 +71,7 @@ scalo = { version = ">=2.14.29, <3", features = [
     "worker-pool",
 ] }
 
-# JSON Schema derivation for the reflectable config-schema capability
-# (scalo-rs#6). Same version range as scalo so cargo unifies to one schemars.
+# Config-schema derivation. Same range as scalo so cargo unifies to one schemars.
 schemars = { version = ">=1.2.3, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
 # VRL — Vector Remap Language (embedded transform engine). Built without its
@@ -110,17 +87,13 @@ vrl = { version = ">=0.35.0, <0.36", default-features = false, features = [
 # Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
 # same version range as vrl so cargo unifies to one chrono-tz.
 chrono-tz = ">=0.10.4, <0.11"
-# `Value::Timestamp` is a `chrono::DateTime<Utc>`, so enrichment date-range
-# conditions and the `date` column schema need chrono named directly. Already
-# in the graph via vrl -- same version range so cargo unifies to one chrono.
+# `Value::Timestamp` is a `chrono::DateTime<Utc>`. Same range as vrl so cargo unifies to one chrono.
 chrono = ">=0.4.45, <0.5"
 
-# CLI (project-specific subcommands, not duplicating scalo CLI framework).
-# `derive` for #[derive(Parser)]; `env` not needed — we have no env-backed
-# args (scalo config cascade handles env-var binding for us).
+# CLI. No `env` feature: scalo's cascade binds env vars.
 clap = { version = ">=4.6.7, <5", features = ["derive"] }
 
-# Configuration (project-specific schema, not duplicating scalo config cascade)
+# Configuration
 figment = { version = ">=0.10.19, <0.11", features = ["env"] }
 
 # Metrics types (Counter, Gauge, Histogram) returned by scalo MetricsManager
@@ -147,15 +120,10 @@ csv = ">=1.4.0, <2"
 maxminddb = { version = ">=0.32.0, <0.33", optional = true }
 rusqlite = { version = ">=0.41.1, <0.42", features = ["bundled"], optional = true }
 
-# Optional allocator (jemalloc-only per 2026-04-17 DFE policy).
-# hyperi-ci enables `--features jemalloc` automatically at every channel
-# (alpha/beta/release). Default build keeps system allocator so
-# local dev `cargo build` stays fast.
+# Optional allocator. hyperi-ci builds every release with `--features jemalloc`.
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 
-# Direct rdkafka — ONLY used by the pgo-driver bin under `--features pgo-driver`.
-# Default builds (and `--features jemalloc`) skip this entirely. The main
-# wrapper uses Kafka via scalo transport-kafka, never directly.
+# Direct rdkafka for the pgo-driver bin only. The wrapper uses scalo's Kafka transport.
 rdkafka = { version = ">=0.39, <0.40", features = ["tokio", "cmake-build"], optional = true }
 # The pgo-driver bin reads the filebeat corpus archive in memory; same ranges as
 # the dev-dependencies so cargo unifies to one of each.
@@ -165,26 +133,17 @@ tar = { version = ">=0.4.46, <0.5", optional = true }
 [features]
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
-# pgo-driver: build the workload-driver bin used by scripts/pgo-workload.sh
-# during PGO instrumentation. NOT enabled in production builds.
 pgo-driver = ["dep:rdkafka", "dep:flate2", "dep:tar"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
-# Filebeat corpus fixtures: the committed tar.gz is read in-memory at test
-# time (tests/integration/filebeat_pipeline.rs); chrono compares pipeline
-# timestamps against the elastic golden outputs.
+# Reads the committed filebeat corpus tar.gz in memory.
 flate2 = ">=1.1.10, <2"
 tar = ">=0.4.46, <0.5"
-# MemoryTransport for the broker-free pipeline tests
-# (tests/integration/pipeline_memory.rs). A dev-dependency, NOT a crate
-# feature: an optional feature outside the default set gets compiled away by
-# hyperi-ci's `features: default`, which deletes those tests from CI instead of
-# failing. Here they always build, and the shipped binary still does not carry
-# the transport. transport-kafka-test-support is the run's shared broker
-# container the Kafka tests use.
+# A dev-dependency, not a crate feature, so CI's `features: default` still builds
+# the broker-free pipeline tests.
 scalo = { version = ">=2.14.29, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
@@ -200,11 +159,7 @@ tonic = { version = ">=0.14.9, <0.15", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
-# Documentation enforcement. Currently `allow` — there are ~90 undocumented-
-# but-public items (mostly struct fields in config/loader.rs and metrics.rs).
-# Once those land, promote to `warn`, then `deny`. Cannot run as `warn` while
-# hyperi-ci CI uses `-D warnings` (warn-level lints become hard errors and
-# block the push).
+# `allow` until the public items are documented. CI's `-D warnings` makes `warn` an error.
 missing_docs = "allow"
 
 [lints.rustdoc]

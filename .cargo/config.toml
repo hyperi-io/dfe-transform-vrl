@@ -5,12 +5,6 @@
 #
 # License:   BUSL-1.1
 # Copyright: (c) 2026 HYPERI PTY LIMITED
-#
-# Target platforms: Linux x86_64 and aarch64 only
-
-# =============================================================================
-# Per-target CPU optimisations
-# =============================================================================
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=mold"]
@@ -19,14 +13,7 @@ rustflags = ["-C", "target-cpu=x86-64-v3", "-C", "link-arg=-fuse-ld=mold"]
 linker = "aarch64-linux-gnu-gcc"
 rustflags = ["-C", "target-cpu=generic"]
 
-# =============================================================================
-# Network resilience for crate downloads
-# =============================================================================
-# CI crate fetches intermittently die with "[16] Error in the HTTP2 framing
-# layer" (a curl/HTTP2 interaction against the crates.io CDN, not a code or
-# dependency fault). Force HTTP/1.1 to sidestep the framing bug entirely, and
-# raise the retry budget so any remaining transient blip self-heals instead of
-# failing the build.
+# HTTP/1.1 and more retries: crates.io fetches over HTTP/2 hit curl framing errors.
 [http]
 multiplexing = false
 

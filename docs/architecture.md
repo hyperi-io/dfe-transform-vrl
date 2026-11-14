@@ -145,7 +145,7 @@ validates but does not act on, each with the reason and the replacement where on
 exists. `HotConfig` and `ConfigReloader` re-read and re-validate the file on
 change or SIGHUP, so a bad edit is caught without a restart, but every field the
 reloadable subset carries is on the inert list -- no pipeline behaviour changes
-on reload today.
+on reload.
 
 ## Components
 

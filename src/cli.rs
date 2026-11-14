@@ -437,14 +437,13 @@ async fn run_transform_service(
     let governor = runtime.governor.clone();
     let worker_pool = runtime.worker_pool.clone();
 
-    // Unified scaling-pressure engine (scalo 2.9). The runtime built ONE
+    // Unified scaling-pressure engine. The runtime built ONE
     // `ScalingPressure` from `ScalingPressureConfig::from_cascade()` + the
     // components this app registered via `scaling_components`, and already wired
     // it into the MetricsManager (served at `/scaling/pressure` to KEDA) and the
     // worker pool (which feeds `worker_pool_saturation`). The pipeline's per-pod
     // ticker feeds the `kafka_lag` component + the outbound circuit latch + the
-    // memory HARD gate. This collapses the old dual-engine model (the separate
-    // runtime `ScalingSignalsCell` is gone). With `scaling.enabled = false` the
+    // memory HARD gate. With `scaling.enabled = false` the
     // engine still exists and reports zero pressure.
     let scaling = runtime.scaling.clone();
 

@@ -157,8 +157,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
     );
 
     // 3. Drive pipeline::run() — exercises full Kafka init, the governed engine
-    //    driver, metrics. This is the path that's previously been untested
-    //    without Kafka. Governor is None (self-regulation off) -> whole-batch
+    //    driver, metrics. Governor is None (self-regulation off) -> whole-batch
     //    loop; engine carries no byte budget.
     let metrics = Arc::new(TransformMetrics::default());
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));

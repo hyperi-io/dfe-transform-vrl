@@ -6,7 +6,6 @@
 # Copyright: (c) 2026 HYPERI PTY LIMITED
 classification: product
 
-# Project language (auto-detected if not specified)
 language: rust
 
 # Quality checks
@@ -14,13 +13,7 @@ quality:
   enabled: true
   # Advisory ignores fed to cargo-audit and osv-scanner.
   ignore:
-    # GHSA-w9wp-h8wv-79jx / CVE-2026-48504: opentelemetry_sdk 0.31.0 reaches the
-    # lock only through scalo. The flaw is in BaggagePropagator's header parsing,
-    # and neither this repo nor scalo registers a Baggage or any other text map
-    # propagator, so it is never called. Accepted as unreachable in the DFE
-    # threat model (dfe-infra docs/THREAT-MODEL.md, accepted risks). scalo stays
-    # on the 0.31 line until metrics-exporter-opentelemetry, at 0.2.1 requiring
-    # opentelemetry ^0.31, moves: hyperi-io/scalo-rs#281.
+    # Unreachable, accepted in dfe-infra docs/THREAT-MODEL.md. scalo-rs#281 tracks the move.
     - tool: osv-scanner
       id: GHSA-w9wp-h8wv-79jx
       reason: "CVE-2026-48504, opentelemetry_sdk 0.31.0 via scalo: unreachable, no Baggage propagator registered in dfe-transform-vrl or scalo. Accepted risk per dfe-infra docs/THREAT-MODEL.md. Drop when hyperi-io/scalo-rs#281 moves scalo off opentelemetry 0.31, blocked on metrics-exporter-opentelemetry 0.2.1 requiring opentelemetry ^0.31."
@@ -38,8 +31,7 @@ test:
   rust:
     # Added to the default set, so the MMDB and SQLite enrichment tests are compiled in.
     features: enrichment-mmdb,enrichment-sqlite
-    # Require process-per-test isolation rather than taking whatever the
-    # runner has installed.
+    # Process-per-test isolation.
     nextest: true
   # A release runs the full tier, the ignored e2e tests included. tests/TESTING.md says which tests are which.
   full:
@@ -59,9 +51,7 @@ build:
       pgo:
         # Built before the workload clock starts: an uncached arm64 runner takes longer than the workload timeout to compile it.
         workload_setup_cmd: "cargo build --release --features pgo-driver --bin pgo-driver"
-    # The shipped binary needs these too, not just the test stage - the
-    # Dockerfile only COPYs the built binary, so a default build leaves the
-    # container rejecting `type: mmdb` and `type: sqlite` tables at startup.
+    # Without these the image refuses `type: mmdb` and `type: sqlite` tables.
     features: enrichment-mmdb,enrichment-sqlite
     targets:
       - x86_64-unknown-linux-gnu

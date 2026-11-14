@@ -66,7 +66,7 @@ hyperi-ci check --tier full
 
 ### Broker containers
 
-scalo's test support starts every broker, from `apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837` (`scalo::transport::kafka::test_support::KAFKA_IMAGE`). Locally and in CI the same way: the first test process that needs one starts it through Docker, and nothing has to be running beforehand.
+scalo's test support starts every broker, from the image `scalo::transport::kafka::test_support::KAFKA_IMAGE` pins. Locally and in CI the same way: the first test process that needs one starts it through Docker, and nothing has to be running beforehand.
 
 - One PLAINTEXT broker serves the whole run (`shared_kafka`). Every nextest process joins it, and a watcher removes it when the run ends.
 - `held_acks` holds a broker alone, because it pauses it, and removes it when the test ends.
