@@ -3,8 +3,8 @@
 A pre-canned, opt-in VRL pipeline that keeps DFE 2.1 filebeat feeds working
 on dfe-transform-vrl. It is pure VRL plus one CSV enrichment table - no
 binary capability, no config surface. Use it if you want it, ignore it if
-you do not. It also doubles as a real-data integration test workload for
-the engine (`tests/integration/filebeat_pipeline.rs`).
+you do not. It also doubles as an integration test workload for the engine
+(`tests/integration/filebeat_pipeline.rs`).
 
 > **INTERIM.** Elastic compatibility is being replaced by
 > `dfe-transform-elastic` (Rust-native). New integrations should NOT
@@ -89,7 +89,7 @@ still error the event out (dropped and counted), matching the 2.1
   port routes slash-bearing zone names through `parse_timestamp`'s
   `timezone:` argument (DST-aware via the tz database).
 
-## Known limitations (verified against the elastic golden corpus)
+## Known limitations
 
 - `user_agent` classification follows VRL's parser, which differs
   cosmetically from elastic's ("Mac OSX" vs "Mac OS X"). A
@@ -109,9 +109,8 @@ still error the event out (dropped and counted), matching the 2.1
 Generated from dfe-vector-templates `origin/main` @ `96eb306` by
 `scripts/filebeat/extract.py` (verifies the seven umbrella templates are
 identical before collapsing them, strips geoip, unescapes Vector `$$`,
-prepends `scripts/filebeat/prologue.vrl`). Validated line-by-line against
-the elastic/integrations pipeline test corpus @ `c7bc530` - see
-`tests/fixtures/filebeat/README.md`.
+prepends `scripts/filebeat/prologue.vrl`). The tests replay the synthetic
+lines in `tests/fixtures/filebeat/cases.yaml`.
 
 Treat `filebeat.vrl` as generated-then-patched: fixes belong here (it is
 the shipping artefact), but substantial rework should go back through the

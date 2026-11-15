@@ -125,23 +125,16 @@ tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 
 # Direct rdkafka for the pgo-driver bin only. The wrapper uses scalo's Kafka transport.
 rdkafka = { version = ">=0.39, <0.40", features = ["tokio", "cmake-build"], optional = true }
-# The pgo-driver bin reads the filebeat corpus archive in memory; same ranges as
-# the dev-dependencies so cargo unifies to one of each.
-flate2 = { version = ">=1.1.10, <2", optional = true }
-tar = { version = ">=0.4.46, <0.5", optional = true }
 
 [features]
 default = []
 jemalloc = ["dep:tikv-jemallocator"]
-pgo-driver = ["dep:rdkafka", "dep:flate2", "dep:tar"]
+pgo-driver = ["dep:rdkafka"]
 enrichment-mmdb = ["dep:maxminddb"]
 enrichment-sqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 tempfile = ">=3.27.0, <4"
-# Reads the committed filebeat corpus tar.gz in memory.
-flate2 = ">=1.1.10, <2"
-tar = ">=0.4.46, <0.5"
 # A dev-dependency, not a crate feature, so CI's `features: default` still builds
 # the broker-free pipeline tests.
 scalo = { version = ">=2.14.30, <3", features = [

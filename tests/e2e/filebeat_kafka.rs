@@ -1,15 +1,15 @@
 // Project:   dfe-transform-vrl
 // File:      tests/e2e/filebeat_kafka.rs
-// Purpose:   The filebeat corpus through the app and a broker
+// Purpose:   The filebeat cases through the app and a broker
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! The transform hop of the filebeat chain, proved on real data.
+//! The transform hop of the filebeat chain, proved on synthetic cases.
 //!
 //! ```text
-//! filebeat corpus -> filebeat_land -> dfe-transform-vrl -> filebeat_load
+//! filebeat cases -> filebeat_land -> dfe-transform-vrl -> filebeat_load
 //! ```
 //!
 //! What makes this an acceptance test rather than another unit test:
@@ -20,9 +20,9 @@
 //! - The topics are the real source-bound names. `filebeat_land` in and
 //!   `filebeat_load` out is what a `filebeat` Source compiles to, and the
 //!   app derives the source name back out of the input topic.
-//! - The data is the elastic/integrations corpus, and the output is graded
-//!   against its golden events by the same comparison the in-process suite
-//!   uses (`tests/common/filebeat.rs`).
+//! - The data is `tests/fixtures/filebeat/cases.yaml`, and each output is
+//!   graded against the fields its case names by the same comparison the
+//!   in-process suite uses (`tests/common/filebeat.rs`).
 //!
 //! The broker is a container this test starts and drops, never a live one:
 //! `filebeat_land` on a shared broker is somebody else's data.
@@ -37,7 +37,7 @@ use scalo::transport::kafka::{KafkaAdmin, KafkaConfig, KafkaProfile, KafkaTransp
 use scalo::transport::{TransportBase, TransportReceiver, TransportSender};
 
 use crate::common::{self, KafkaTestConfig};
-use crate::filebeat_corpus as fb;
+use crate::filebeat_cases as fb;
 
 /// The source this instance is bound to, and the topics that follow from it.
 const SOURCE: &str = "filebeat";
@@ -52,41 +52,26 @@ const UNMATCHED_PROBE: &str = "ws21 probe: a line no filebeat module claims";
 /// consumer group. Debug builds spend most of it in the VRL compiler.
 const READY_TIMEOUT: Duration = Duration::from_secs(240);
 
-/// How long the corpus gets to arrive on the sink topic once the app is ready.
+/// How long the cases get to arrive on the sink topic once the app is ready.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// One golden event, and the corpus line it grades.
-struct Golden {
-    log: &'static str,
-    idx: usize,
-    event: serde_json::Value,
-}
-
-/// Every corpus line as the app will read it off `filebeat_land`, paired with
-/// the goldens they must produce.
-fn corpus_workload() -> (Vec<serde_json::Value>, Vec<Golden>) {
-    let mut inputs = Vec::new();
-    let mut goldens = Vec::new();
-
-    for log in fb::all_logs() {
-        let lines = fb::corpus_lines(log);
-        let expected = fb::corpus_expected(&format!("{log}-expected.json"));
-        assert_eq!(
-            lines.len(),
-            expected.len(),
-            "{log}: {} input lines but {} golden events",
-            lines.len(),
-            expected.len()
-        );
-        let conf = fb::corpus_conf(log);
-        for (idx, (line, event)) in lines.iter().zip(expected).enumerate() {
-            inputs.push(fb::input_event(line, conf.as_ref()));
-            goldens.push(Golden { log, idx, event });
-        }
-    }
-
+/// Every case as the app will read it off `filebeat_land`, plus the shape-
+/// unmatched probe.
+///
+/// Each case event carries its name in a root `_case` field. The pipeline keeps
+/// root fields on every branch, so the name comes out the far side and pairs
+/// an output with its case whatever order the broker returns them in.
+fn workload() -> Vec<serde_json::Value> {
+    let mut inputs: Vec<serde_json::Value> = fb::cases()
+        .iter()
+        .map(|case| {
+            let mut event = fb::case_event(case);
+            event["_case"] = serde_json::json!(case.name);
+            event
+        })
+        .collect();
     inputs.push(fb::input_event(UNMATCHED_PROBE, None));
-    (inputs, goldens)
+    inputs
 }
 
 fn kafka_config(kf: &KafkaTestConfig, topics: &[&str], group: &str) -> KafkaConfig {
@@ -212,70 +197,43 @@ async fn drain(
     out
 }
 
-/// Match every golden to an output event, consuming each output once.
-///
-/// The sink topic has one partition, so the output usually arrives in the
-/// order it was produced; that position is tried first and the scan is the
-/// fallback. Returns the goldens that nothing produced, each with the
-/// closest candidate's problems.
-fn match_goldens(goldens: &[Golden], outputs: &[serde_json::Value]) -> Vec<String> {
-    let mut used = vec![false; outputs.len()];
-    let mut unmatched = Vec::new();
-
-    for (position, golden) in goldens.iter().enumerate() {
-        let mut order: Vec<usize> = Vec::with_capacity(outputs.len());
-        if position < outputs.len() {
-            order.push(position);
-        }
-        order.extend((0..outputs.len()).filter(|i| *i != position));
-
-        let mut closest: Option<Vec<String>> = None;
-        let mut matched = false;
-        for candidate in order {
-            if used[candidate] {
-                continue;
+/// Grade every case against the output event that carries its name.
+/// Returns one line per case that has no output or whose output disagrees.
+fn grade_cases(outputs: &[serde_json::Value]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for case in fb::cases() {
+        let found = outputs
+            .iter()
+            .find(|e| e.get("_case").and_then(serde_json::Value::as_str) == Some(&case.name));
+        match found {
+            None => failures.push(format!("{}: no output event carried its name", case.name)),
+            Some(event) if fb::is_unmatched(event) => {
+                failures.push(format!("{}: routed to filebeat_unmatched", case.name));
             }
-            let problems = fb::problems_against_golden(
-                golden.log,
-                golden.idx,
-                &golden.event,
-                &outputs[candidate],
-            );
-            if problems.is_empty() {
-                used[candidate] = true;
-                matched = true;
-                break;
+            Some(event) => {
+                let problems = fb::problems_for(case, event);
+                if !problems.is_empty() {
+                    failures.push(format!("{}: {}", case.name, problems.join("; ")));
+                }
             }
-            if closest.as_ref().is_none_or(|c| problems.len() < c.len()) {
-                closest = Some(problems);
-            }
-        }
-
-        if !matched {
-            let detail = closest.map_or_else(
-                || "no output event was left to compare against".to_string(),
-                |problems| problems.join("; "),
-            );
-            unmatched.push(format!("{}[{}]: {detail}", golden.log, golden.idx));
         }
     }
-    unmatched
+    failures
 }
 
 #[tokio::test]
-async fn filebeat_corpus_round_trips_through_kafka() {
-    let Some(env) = common::KafkaTestEnv::hermetic("filebeat-corpus-round-trip").await else {
+async fn filebeat_cases_round_trip_through_kafka() {
+    let Some(env) = common::KafkaTestEnv::hermetic("filebeat-cases-round-trip").await else {
         common::require_service_in_ci("Kafka", "no Docker to start a broker container");
         eprintln!("SKIP: no Docker, so this test cannot own a broker.");
         return;
     };
     let kf = env.config();
 
-    let (inputs, goldens) = corpus_workload();
+    let inputs = workload();
     eprintln!(
-        "replaying {} corpus lines from {} logs through {LAND_TOPIC} -> {LOAD_TOPIC}",
-        inputs.len(),
-        fb::all_logs().len()
+        "replaying {} events through {LAND_TOPIC} -> {LOAD_TOPIC}",
+        inputs.len()
     );
 
     let admin =
@@ -382,17 +340,14 @@ async fn filebeat_corpus_round_trips_through_kafka() {
         outputs[probe_at]
     );
 
-    // Assertion 3 -- every corpus line agrees with its elastic golden, after
-    // the port's documented divergences.
-    let mut corpus_outputs = outputs;
-    corpus_outputs.remove(probe_at);
-    let unmatched = match_goldens(&goldens, &corpus_outputs);
+    // Assertion 3 -- every case agrees with the fields it names.
+    let failures = grade_cases(&outputs);
     assert!(
-        unmatched.is_empty(),
-        "{} of {} corpus events did not match their golden:\n{}",
-        unmatched.len(),
-        goldens.len(),
-        unmatched.join("\n")
+        failures.is_empty(),
+        "{} of {} cases did not match:\n{}",
+        failures.len(),
+        fb::cases().len(),
+        failures.join("\n")
     );
 
     // Assertion 4 -- all three module branches actually ran. A pipeline that
@@ -400,7 +355,7 @@ async fn filebeat_corpus_round_trips_through_kafka() {
     // everything through unmatched.
     let branch_ran = |module: &str, probe: &dyn Fn(&serde_json::Value) -> bool| {
         assert!(
-            corpus_outputs.iter().any(probe),
+            outputs.iter().any(probe),
             "no output event came from the {module} branch"
         );
     };

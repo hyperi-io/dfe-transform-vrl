@@ -9,8 +9,7 @@
 useDefault = true
 
 [allowlist]
-description = "Bundled filebeat-compat pipeline data - ported public Vector templates and pinned elastic/integrations test fixtures, not credentials (e.g. the Meraki event subtype '8021x_eap_failure' pattern-matches a key rule)"
+description = "Bundled filebeat-compat pipeline data - ported public Vector templates, not credentials (e.g. the Meraki event subtype '8021x_eap_failure' pattern-matches a key rule)"
 paths = [
     '''pipelines/filebeat/filebeat\.vrl''',
-    '''tests/fixtures/filebeat/filebeat-testdata\.tar\.gz''',
 ]

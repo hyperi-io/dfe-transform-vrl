@@ -24,7 +24,7 @@ mod common;
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "common/filebeat.rs"]
-mod filebeat_corpus;
+mod filebeat_cases;
 
 #[allow(clippy::expect_used, clippy::panic)]
 #[path = "e2e/filebeat_kafka.rs"]

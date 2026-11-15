@@ -1,0 +1,715 @@
+# Synthetic filebeat cases, replayed by the integration and e2e suites and the PGO workload.
+# See README.md in this directory for the shape of a case.
+- name: umbrella-dns-allowed
+  module: umbrella
+  line: |-
+    "2026-03-04 09:15:22","alice.example","alice.example,Laptop 17","192.0.2.10","198.51.100.7","Allowed","1 (A)","NOERROR","www.example.net.","Business Services,Search Engines","Office Policy","AD Users, Roaming Computers",""
+  expect:
+    '@timestamp': '2026-03-04T09:15:22Z'
+    observer:
+      vendor: Cisco
+      product: Umbrella
+      type: dns
+    log:
+      file:
+        path: /filebeat/cisco_umbrella/dnslogs
+    event:
+      action: dns-request-Allowed
+      category: network
+      kind: event
+      type:
+      - allowed
+      - connection
+    dns:
+      type: query
+      response_code: NOERROR
+      question:
+        name: www.example.net
+        registered_domain: example.net
+        subdomain: www
+        top_level_domain: net
+        type: 1 (A)
+    source:
+      ip: 192.0.2.10
+      nat:
+        ip: 198.51.100.7
+    cisco:
+      umbrella:
+        identity: alice.example
+    tags:
+    - preserve_original_event
+
+- name: umbrella-dns-blocked-aaaa
+  module: umbrella
+  line: |-
+    "2026-03-04 09:16:02","alice.example","alice.example,Laptop 17","192.0.2.10","198.51.100.8","Blocked","28 (AAAA)","NOERROR","ads.tracker.example.org.","Advertisements,Block List","Office Policy","Roaming Computers","BlockedCategories"
+  expect:
+    '@timestamp': '2026-03-04T09:16:02Z'
+    event:
+      action: dns-request-Blocked
+      type:
+      - denied
+      - connection
+    dns:
+      question:
+        name: ads.tracker.example.org
+        registered_domain: example.org
+        subdomain: ads.tracker
+        top_level_domain: org
+        type: 28 (AAAA)
+    cisco:
+      umbrella:
+        categories:
+        - Advertisements
+        - Block List
+        blocked_categories:
+        - BlockedCategories
+
+- name: umbrella-dns-nxdomain-mx
+  module: umbrella
+  line: |-
+    "2026-03-04 09:17:40","Site Router","Site Router","192.0.2.1","203.0.113.53","Allowed","15 (MX)","NXDOMAIN","mail.corp.example.co.uk.","Email","Default Policy","Networks",""
+  expect:
+    '@timestamp': '2026-03-04T09:17:40Z'
+    dns:
+      response_code: NXDOMAIN
+      question:
+        name: mail.corp.example.co.uk
+        registered_domain: example.co.uk
+        subdomain: mail.corp
+        top_level_domain: co.uk
+        type: 15 (MX)
+    source:
+      ip: 192.0.2.1
+
+- name: umbrella-dns-txt
+  module: umbrella
+  line: |-
+    "2026-03-05 21:02:11","bob.example","bob.example,Desktop 4","192.0.2.44","198.51.100.9","Allowed","16 (TXT)","NOERROR","_dmarc.example.com.","Infrastructure","Office Policy","AD Users",""
+  expect:
+    '@timestamp': '2026-03-05T21:02:11Z'
+    dns:
+      question:
+        name: _dmarc.example.com
+        registered_domain: example.com
+        subdomain: _dmarc
+        type: 16 (TXT)
+
+- name: umbrella-proxy-allowed-chrome
+  module: umbrella
+  line: |-
+    "2026-03-04 10:01:15","Branch Network","192.0.2.77","198.51.100.31","203.0.113.80","","ALLOWED","https://files.example.net/reports/q1.pdf","https://portal.example.net/home","Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36","200","612","20480","","","","","","","","","","Networks"
+  expect:
+    '@timestamp': '2026-03-04T10:01:15Z'
+    observer:
+      type: proxy
+    event:
+      type:
+      - allowed
+      - connection
+    source:
+      ip: 192.0.2.77
+      nat:
+        ip: 198.51.100.31
+    destination:
+      ip: 203.0.113.80
+    http:
+      request:
+        bytes: 612
+        referrer: https://portal.example.net/home
+      response:
+        bytes: 20480
+        status_code: 200
+    url:
+      original: https://files.example.net/reports/q1.pdf
+      scheme: https
+      domain: files.example.net
+      port: 443
+      path: /reports/q1.pdf
+      extension: pdf
+    user_agent:
+      original: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36
+      name: Chrome
+      version: 122.0.0.0
+
+- name: umbrella-proxy-blocked-query
+  module: umbrella
+  line: |-
+    "2026-03-04 10:02:49","Branch Network","192.0.2.78","198.51.100.31","203.0.113.81","","BLOCKED","http://download.example.org/setup.exe?src=mail&id=42","","curl/8.5.0","403","310","0","","","","","","","","","","Networks"
+  expect:
+    '@timestamp': '2026-03-04T10:02:49Z'
+    event:
+      type:
+      - denied
+      - connection
+    http:
+      response:
+        status_code: 403
+    url:
+      scheme: http
+      domain: download.example.org
+      port: 80
+      path: /setup.exe
+      extension: exe
+      query: id=42&src=mail
+    user_agent:
+      original: curl/8.5.0
+
+- name: umbrella-ip-allowed
+  module: umbrella
+  line: |-
+    "2026-03-04 11:20:46","alice.example","192.0.2.10","51234","198.51.100.60","8443","Business Services"
+  expect:
+    '@timestamp': '2026-03-04T11:20:46Z'
+    observer:
+      type: firewall
+    event:
+      type:
+      - connection
+    source:
+      ip: 192.0.2.10
+      port: 51234
+    destination:
+      ip: 198.51.100.60
+      port: 8443
+
+- name: umbrella-ip-zero-ports
+  module: umbrella
+  line: |-
+    "2026-03-04 11:20:47","alice.example","192.0.2.10","0","198.51.100.61","0","Infrastructure"
+  expect:
+    source:
+      port: 0
+    destination:
+      ip: 198.51.100.61
+      port: 0
+
+- name: umbrella-audit-update
+  module: umbrella
+  line: |-
+    "7000000001","2026-02-11 14:30:05","admin@example.com","Admin User", "policies", "update","198.51.100.200","enabled: false","enabled: true"
+  expect:
+    '@timestamp': '2026-02-11T14:30:05Z'
+    event:
+      id: '7000000001'
+      action: update
+      category: configuration
+      type:
+      - change
+    user:
+      email: admin@example.com
+      name: Admin User
+    source:
+      ip: 198.51.100.200
+    cisco:
+      umbrella:
+        audit:
+          type: policies
+          before_values:
+            enabled: 'false'
+          after_values:
+            enabled: 'true'
+
+- name: umbrella-cloudfirewall-plain
+  module: umbrella
+  line: |-
+    2026-03-04 12:00:01,[900000001],Branch Tunnel,Office Tunnel Device,OUTBOUND,6,512,192.0.2.20,,198.51.100.90,,lhr1.edc,14,ALLOW
+  expect:
+    '@timestamp': '2026-03-04T12:00:01Z'
+    observer:
+      type: firewall
+    event:
+      action: fw-connection-ALLOW
+      type:
+      - allowed
+      - connection
+    network:
+      direction: outbound
+      transport: '6'
+    source:
+      ip: 192.0.2.20
+      bytes: 512
+    destination:
+      ip: 198.51.100.90
+    rule:
+      id: '14'
+    cisco:
+      umbrella:
+        datacenter: lhr1.edc
+
+- name: umbrella-cloudfirewall-quoted
+  module: umbrella
+  line: |-
+    "2026-03-04 12:00:09","[900000001]","Branch Tunnel", "Office Tunnel Device","INBOUND","17","96","192.0.2.21","","198.51.100.91", "","lhr1.edc","9","BLOCK","example.com,example.net","12,34"
+  expect:
+    '@timestamp': '2026-03-04T12:00:09Z'
+    event:
+      action: fw-connection-BLOCK
+      type:
+      - denied
+      - connection
+    network:
+      direction: inbound
+      transport: '17'
+    rule:
+      id: '9'
+    related:
+      hosts:
+      - example.com
+      - example.net
+    cisco:
+      umbrella:
+        fqdns:
+        - example.com
+        - example.net
+        destination_lists_id: 12,34
+
+- name: umbrella-intrusion
+  module: umbrella
+  line: |-
+    "2026-03-04 12:30:00","Branch Firewall","Network Tunnels","1","21000","EXAMPLE-SERVER overflow attempt against test service","4455","HIGH","Attempted Administrator Privilege Gain","cve-2020-0001","TCP","40000","198.51.100.5","41234","192.0.2.30","443","Would Block"
+  expect:
+    '@timestamp': '2026-03-04T12:30:00Z'
+    observer:
+      type: idps
+    event:
+      kind: alert
+      action: ips-Would-Block
+      category:
+      - network
+      - intrusion_detection
+    network:
+      protocol: TCP
+    source:
+      ip: 198.51.100.5
+      port: 41234
+    destination:
+      ip: 192.0.2.30
+      port: 443
+    cisco:
+      umbrella:
+        gid: '1'
+        sid: '21000'
+        severity: HIGH
+
+- name: umbrella-dlp
+  module: umbrella
+  line: |-
+    "2026-03-04 12:45:30","Real Time","aaaaaaaa-0000-4000-8000-000000000001_bbbbbbbb-0000-4000-8000-000000000002","CRITICAL","Network1","","budget.xlsx","ExampleDrive","https://drive.example.net/upload","BLOCK","rule-7","classification-9","classifier-9.1","text/html","512","0000000000000000000000000000000000000000000000000000000000000000", "Confidential"
+  expect:
+    '@timestamp': '2026-03-04T12:45:30Z'
+    observer:
+      type: dlp
+    event:
+      action: dlp-BLOCK
+      category:
+      - network
+      - file
+    file:
+      name: budget.xlsx
+      size: 512
+      mime_type: text/html
+    rule:
+      name: rule-7
+    network:
+      application: ExampleDrive
+    url:
+      domain: drive.example.net
+      path: /upload
+    cisco:
+      umbrella:
+        severity: CRITICAL
+
+- name: ios-acl-host-header-tcp
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    Mar  5 02:11:08 192.0.2.1 12345: Mar  5 02:11:07.512: %SEC-6-IPACCESSLOGP: list 120 denied tcp 198.51.100.20(40012) -> 203.0.113.9(443), 3 packets
+  expect:
+    observer:
+      vendor: Cisco
+      product: IOS
+      type: firewall
+    cisco:
+      ios:
+        access_list: '120'
+        facility: SEC
+        sequence: '12345'
+    event:
+      action: deny
+      code: IPACCESSLOGP
+      severity: 6
+      timezone: UTC
+      type:
+      - info
+      - denied
+    log:
+      level: informational
+    network:
+      transport: tcp
+      type: ipv4
+      packets: 3
+    source:
+      ip: 198.51.100.20
+      port: 40012
+      packets: 3
+    destination:
+      ip: 203.0.113.9
+      port: 443
+    message: list 120 denied tcp 198.51.100.20(40012) -> 203.0.113.9(443), 3 packets
+    tags:
+    - preserve_original_event
+
+- name: ios-acl-named-icmp
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    Mar  6 02:11:08 192.0.2.1 12346: Mar  6 02:11:07.512: %SEC-6-IPACCESSLOGDP: list EDGE-IN denied icmp 198.51.100.21 -> 192.0.2.1 (8/0), 2 packets
+  expect:
+    cisco:
+      ios:
+        access_list: EDGE-IN
+        facility: SEC
+    event:
+      action: deny
+      code: IPACCESSLOGDP
+    icmp:
+      type: '8'
+      code: '0'
+    network:
+      transport: icmp
+      packets: 2
+    source:
+      ip: 198.51.100.21
+    destination:
+      ip: 192.0.2.1
+
+- name: ios-acl-ipv6
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    Mar  7 08:00:00 192.0.2.1 12350: Mar  7 08:00:00.001: %IPV6-6-ACCESSLOGP: list ACL-V6-IN/10 permitted tcp 2001:db8:10::5(51000) -> 2001:db8:20::7(22), 4 packets
+  expect:
+    cisco:
+      ios:
+        access_list: ACL-V6-IN/10
+        facility: IPV6
+    event:
+      action: allow
+      code: ACCESSLOGP
+    network:
+      transport: tcp
+      type: ipv6
+    source:
+      ip: 2001:db8:10::5
+      port: 51000
+    destination:
+      ip: 2001:db8:20::7
+      port: 22
+
+- name: ios-config-change
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <189>4021: Mar  5 2026 10:22:09.113: %SYS-5-CONFIG_I: Configured from console by admin on vty1 (192.0.2.55)
+  expect:
+    '@timestamp': '2026-03-05T10:22:09.113Z'
+    cisco:
+      ios:
+        facility: SYS
+        message_count: 4021
+    event:
+      code: CONFIG_I
+      sequence: 4021
+      severity: 5
+    log:
+      level: notification
+      syslog:
+        priority: 189
+    message: Configured from console by admin on vty1 (192.0.2.55)
+
+- name: ios-link-down-hostname
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <190>: edge-sw02: Mar  5 2026 10:30:00.004: %LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down
+  expect:
+    '@timestamp': '2026-03-05T10:30:00.004Z'
+    cisco:
+      ios:
+        facility: LINK
+    event:
+      code: UPDOWN
+      severity: 3
+    log:
+      level: error
+      syslog:
+        hostname: edge-sw02
+        priority: 190
+    message: Interface GigabitEthernet0/1, changed state to down
+
+- name: ios-ntp-tz-abbreviation
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <191>7001: core-rt1: Mar  5 2026 10:31:12.000 CEST: NTP Core (NOTICE): Clock synchronization lost.
+  expect:
+    event:
+      sequence: 7001
+    log:
+      syslog:
+        hostname: core-rt1
+        priority: 191
+    message: 'NTP Core (NOTICE): Clock synchronization lost.'
+
+- name: ios-date-no-fraction-offset
+  module: ios
+  conf: {"tz_offset": "-0600"}
+  line: |-
+    <190>7002: sw01: Mar  8 2026 22:11:43: %FOO-6-BAR: Synthetic message for the date format.
+  expect:
+    '@timestamp': '2026-03-09T04:11:43Z'
+    event:
+      code: BAR
+      timezone: '-0600'
+    log:
+      syslog:
+        hostname: sw01
+    message: Synthetic message for the date format.
+
+- name: ios-md5-badauth
+  module: ios
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <190>9100: Mar  9 20:07:53.081: %TCP-6-BADAUTH: No MD5 digest from 192.0.2.50(60001) to 198.51.100.18(179) (RST) tableid - 0
+  expect:
+    cisco:
+      ios:
+        facility: TCP
+        tableid: '0'
+    event:
+      code: BADAUTH
+      sequence: 9100
+    source:
+      ip: 192.0.2.50
+      port: 60001
+    destination:
+      ip: 198.51.100.18
+      port: 179
+
+- name: meraki-flows-allow
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000000.100000001 MX_branch1 flows allow src=192.0.2.15 dst=198.51.100.44 mac=AA:BB:CC:00:11:22 protocol=udp sport=51000 dport=5060
+  expect:
+    '@timestamp': '2026-02-25T06:13:20.100000001Z'
+    cisco_meraki:
+      event_type: flows
+      event_subtype: flow_allowed
+    event:
+      action: layer3-firewall-allowed-flow
+      category:
+      - network
+    network:
+      protocol: udp
+    observer:
+      hostname: MX_branch1
+    source:
+      ip: 192.0.2.15
+      mac: AA-BB-CC-00-11-22
+      port: 51000
+    destination:
+      ip: 198.51.100.44
+      port: 5060
+    tags:
+    - preserve_original_event
+    - forwarded
+
+- name: meraki-flows-pattern
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000001.200000002 MX_branch1 flows src=192.0.2.16 dst=198.51.100.45 protocol=tcp sport=44000 dport=8080 pattern: 1 all
+  expect:
+    '@timestamp': '2026-02-25T06:13:21.200000002Z'
+    cisco_meraki:
+      event_subtype: ip_session_initiated
+      firewall:
+        pattern: 1 all
+    event:
+      action: ip-session-initiated
+    network:
+      protocol: tcp
+    source:
+      ip: 192.0.2.16
+      port: 44000
+    destination:
+      ip: 198.51.100.45
+      port: 8080
+
+- name: meraki-flows-icmp6
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000002.300000003 AP_lobby flows allow src=fe80::aaaa:bbbb:cccc:1 dst=ff02::1:ff00:2 mac=AA:BB:CC:00:11:33 protocol=icmp6 type=135
+  expect:
+    network:
+      protocol: icmp6
+    observer:
+      hostname: AP_lobby
+    source:
+      ip: fe80::aaaa:bbbb:cccc:1
+      mac: AA-BB-CC-00-11-33
+    destination:
+      ip: ff02::1:ff00:2
+
+- name: meraki-urls-agent
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000010.400000004 MX_branch1 urls src=192.0.2.15:52000 dst=198.51.100.46:443 mac=AA:BB:CC:00:11:22 agent='Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0' request: GET https://www.example.net/index.html
+  expect:
+    cisco_meraki:
+      event_type: urls
+      event_subtype: http_access
+    event:
+      action: http-access
+      category:
+      - network
+      - web
+    http:
+      request:
+        method: GET
+    url:
+      original: https://www.example.net/index.html
+      scheme: https
+      domain: www.example.net
+      port: 443
+      path: /index.html
+      extension: html
+      registered_domain: example.net
+      subdomain: www
+    user_agent:
+      name: Firefox
+      version: '123.0'
+
+- name: meraki-urls-no-agent
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000011.500000005 MX_branch1 urls src=192.0.2.15:52001 dst=198.51.100.47:80 mac=AA:BB:CC:00:11:22 request: GET http://www.example.org/robots.txt
+  expect:
+    source:
+      ip: 192.0.2.15
+      port: 52001
+    url:
+      original: http://www.example.org/robots.txt
+      scheme: http
+      port: 80
+      extension: txt
+    cisco_meraki:
+      urls:
+        mac: AA-BB-CC-00-11-22
+
+- name: meraki-events-wpa-auth
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000020.600000006 MR_floor2 events type=wpa_auth radio='1' vap='2' client_mac='AA:BB:CC:00:11:44' aid='1000000001'
+  expect:
+    cisco_meraki:
+      event_type: events
+      event_subtype: wpa_auth
+      wpa_auth:
+        client_mac: AA:BB:CC:00:11:44
+        aid: '1000000001'
+    event:
+      action: wifi-wpa-authentication
+      category:
+      - network
+      - authentication
+    log:
+      syslog:
+        priority: 134
+    observer:
+      hostname: MR_floor2
+
+- name: meraki-events-dfs
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000021.700000007 MR_floor2 events type=dfs_event channel='100' radio='1'
+  expect:
+    cisco_meraki:
+      event_subtype: dfs_event
+      dfs_event:
+        channel: '100'
+        radio: '1'
+    event:
+      action: dynamic-frequency-selection-detected
+
+- name: meraki-ip-flow-start
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000030.800000008 MX100 ip_flow_start src=192.0.2.15 dst=198.51.100.48 protocol=tcp sport=34000 dport=443 translated_src_ip=203.0.113.2 translated_port=34000
+  expect:
+    cisco_meraki:
+      event_type: ip_flow_start
+    network:
+      protocol: tcp
+    source:
+      port: 34000
+    destination:
+      ip: 198.51.100.48
+      port: 443
+
+- name: meraki-security-ids
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000040.900000009 MX84 security_event ids_alerted signature=1:99999:1 priority=2 timestamp=1772000040.890000 direction=ingress protocol=tcp/ip src=198.51.100.49:80 dst=192.0.2.15:56000 decision=allowed message: EXAMPLE-WEB synthetic signature for testing
+  expect:
+    cisco_meraki:
+      event_type: security_event
+      event_subtype: ids_alerted
+      security:
+        signature: 1:99999:1
+        decision: allowed
+    event:
+      action: ids-signature-matched
+      category:
+      - network
+      - intrusion_detection
+    network:
+      direction: ingress
+      protocol: tcp/ip
+    source:
+      ip: 198.51.100.49
+      port: 80
+    destination:
+      ip: 192.0.2.15
+      port: 56000
+    message: EXAMPLE-WEB synthetic signature for testing
+
+- name: meraki-airmarshal-rogue
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000050.000000010 MX84_5 airmarshal_events type=rogue_ssid_detected ssid='' bssid='AA:BB:CC:DD:EE:01' src='AA:BB:CC:DD:EE:01' dst='FF:FF:FF:FF:FF:FF' wired_mac='AA:BB:CC:DD:EE:02' vlan_id='0' channel='6' rssi='30' fc_type='0' fc_subtype='8'
+  expect:
+    cisco_meraki:
+      event_type: airmarshal_events
+      event_subtype: rogue_ssid_detected
+      bssid: AA:BB:CC:DD:EE:01
+      channel: '6'
+    event:
+      action: rogue-ssid-detected
+    source:
+      mac: AA-BB-CC-DD-EE-01
+    destination:
+      mac: FF-FF-FF-FF-FF-FF
+    network:
+      vlan:
+        id: '0'
