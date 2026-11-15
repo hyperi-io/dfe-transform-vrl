@@ -102,8 +102,9 @@ pub struct TlsConfig {
 ///
 /// It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
 /// `dlq`.
-/// scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
-/// `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
+/// scalo's own sections -- `metrics`, `logger`, `memory`, `scaling`,
+/// `worker_pool`, `batch_processing`, `self_regulation`, `version_check`,
+/// `otel_tracing` --
 /// may sit beside them: scalo's cascade reads the same file as its settings
 /// layer, and its env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists
 /// them, and [`warn_unreachable_scalo_settings`] warns for one in a
@@ -455,6 +456,11 @@ pub const SCALO_CASCADE_SECTIONS: &[(&str, &str)] = &[
         "logger",
         "LOG_LEVEL / LOG_FORMAT, or DFE_TRANSFORM_VRL_LOGGER__*",
     ),
+    (
+        "memory",
+        "DFE_TRANSFORM_VRL_MEMORY_LIMIT_BYTES / _PRESSURE_THRESHOLD / _CGROUP_HEADROOM, \
+         or DFE_TRANSFORM_VRL_MEMORY__*",
+    ),
     ("scaling", "DFE_TRANSFORM_VRL_SCALING__*"),
     ("worker_pool", "DFE_TRANSFORM_VRL_WORKER_POOL__*"),
     ("batch_processing", "DFE_TRANSFORM_VRL_BATCH_PROCESSING__*"),
@@ -493,23 +499,49 @@ pub fn warn_unreachable_scalo_settings(config_path: Option<&str>) {
         }
     }
 
-    // `Env::prefixed("DFE_TRANSFORM_VRL_").split("__")` strips the prefix and then
-    // needs a DOUBLE underscore to nest, so DFE_TRANSFORM_VRL_METRICS_ADDRESS
-    // becomes the flat key `metrics_address` and matches no section.
-    for (name, _) in std::env::vars() {
+    for (env_var, instead) in single_underscore_misses(std::env::vars().map(|(name, _)| name)) {
+        tracing::warn!(
+            env_var = env_var,
+            instead = instead,
+            "env var needs a double underscore after the section to \
+             nest into the scalo cascade -- as spelled it is not applied"
+        );
+    }
+}
+
+/// Flat single-underscore names scalo reads for a [`SCALO_CASCADE_SECTIONS`]
+/// section beside its double-underscore form, so they are not misspellings.
+const FLAT_CASCADE_ENV: &[&str] = &[
+    "MEMORY_LIMIT_BYTES",
+    "MEMORY_PRESSURE_THRESHOLD",
+    "MEMORY_CGROUP_HEADROOM",
+];
+
+/// The env names in `names` that aim at a [`SCALO_CASCADE_SECTIONS`] section
+/// with one underscore where the cascade splits on two, each with what to set
+/// instead.
+///
+/// `Env::prefixed("DFE_TRANSFORM_VRL_").split("__")` strips the prefix and then
+/// needs a DOUBLE underscore to nest, so `DFE_TRANSFORM_VRL_METRICS_ADDRESS`
+/// becomes the flat key `metrics_address` and matches no section.
+fn single_underscore_misses(names: impl Iterator<Item = String>) -> Vec<(String, &'static str)> {
+    let mut misses = Vec::new();
+    for name in names {
+        let flat = FLAT_CASCADE_ENV
+            .iter()
+            .any(|known| name == format!("{ENV_PREFIX}_{known}"));
+        if flat {
+            continue;
+        }
         for (section, instead) in SCALO_CASCADE_SECTIONS {
             let single = format!("{ENV_PREFIX}_{}_", section.to_uppercase());
             let double = format!("{single}_");
             if name.starts_with(&single) && !name.starts_with(&double) {
-                tracing::warn!(
-                    env_var = name,
-                    instead = instead,
-                    "env var needs a double underscore after the section to \
-                     nest into the scalo cascade -- as spelled it is not applied"
-                );
+                misses.push((name.clone(), *instead));
             }
         }
     }
+    misses
 }
 
 // =============================================================================
@@ -884,6 +916,33 @@ mod tests {
                 "`{section}` is both a Config field and a scalo cascade section"
             );
         }
+    }
+
+    #[test]
+    fn single_underscore_env_misses_name_the_section_to_use() {
+        let names = [
+            "DFE_TRANSFORM_VRL_MEMORY_LIMIT",
+            "DFE_TRANSFORM_VRL_SCALING_ENABLED",
+            "DFE_TRANSFORM_VRL_MEMORY__LIMIT_BYTES",
+            "DFE_TRANSFORM_VRL_PIPELINE_NAME",
+            "UNRELATED_MEMORY_X",
+        ];
+        let found = single_underscore_misses(names.into_iter().map(String::from));
+        let flagged: Vec<&str> = found.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            flagged,
+            [
+                "DFE_TRANSFORM_VRL_MEMORY_LIMIT",
+                "DFE_TRANSFORM_VRL_SCALING_ENABLED"
+            ]
+        );
+    }
+
+    /// scalo's memory guard reads these single-underscore names itself.
+    #[test]
+    fn the_flat_memory_env_names_are_not_misspellings() {
+        let names = FLAT_CASCADE_ENV.iter().map(|k| format!("{ENV_PREFIX}_{k}"));
+        assert_eq!(single_underscore_misses(names), Vec::new());
     }
 
     #[test]
