@@ -201,9 +201,9 @@ pub async fn run(
     //   - the `kafka_lag` component (the assigned-partition lag, the primary
     //     KEDA driver, registered via `ServiceApp::scaling_components`);
     //   - the outbound circuit latch (open -> pressure gated to 0: more pods
-    //     cannot relieve a dead broker);
-    //   - the memory ratio (the never-OOM HARD gate: usage past the
-    //     memory_gate_threshold forces pressure to 100 -> immediate scale-up).
+    //     cannot relieve a dead broker).
+    // The memory HARD gate (usage past memory_gate_threshold forces pressure
+    // to 100 -> immediate scale-up) is fed by `metrics::spawn_memory_feed_task`.
     // These replace the old per-pod `ScalingSignalsCell` push, which fed the
     // SAME source values into a now-removed second engine. Stops on shutdown.
     // The runtime builds the engine whenever scalo's `scaling` feature is
@@ -212,7 +212,6 @@ pub async fn run(
     let signal_task = scaling.map(|scaling| {
         let consumer = Arc::clone(&consumer);
         let circuit_open = Arc::clone(&circuit_open);
-        let memory_guard = Arc::clone(&memory_guard);
         let shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut tick =
@@ -230,11 +229,6 @@ pub async fn run(
                         #[allow(clippy::cast_precision_loss)]
                         scaling.set_component("kafka_lag", lag as f64);
                         scaling.set_circuit_open(circuit_open.load(Ordering::Acquire));
-                        // Feed the memory HARD gate from the shared cgroup-aware
-                        // guard (the SAME guard the governor's inbound brake
-                        // uses) so /scaling/pressure scales up before OOM.
-                        scaling
-                            .set_memory(memory_guard.current_bytes(), memory_guard.limit_bytes());
                     }
                 }
             }

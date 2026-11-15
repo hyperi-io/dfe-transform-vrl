@@ -345,6 +345,62 @@ fn otel_tracing_section_in_a_working_directory_config_warns() {
     );
 }
 
+/// The same warning for the `memory` section.
+fn warns_for_memory(line: &str) -> bool {
+    line.contains("belongs to the scalo cascade") && line.contains("memory")
+}
+
+/// `memory`, the guard's limit and thresholds, is a scalo section like
+/// `scaling`: in a working-directory `config.yaml` it is reported, not obeyed.
+#[test]
+fn memory_section_in_a_working_directory_config_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_scaling_probe(dir.path());
+    let mut body = std::fs::read_to_string(&config).unwrap();
+    body.push_str("memory:\n  limit_bytes: 268435456\n");
+    std::fs::write(&config, body).unwrap();
+
+    let (warned, seen) = run_until(dir.path(), &[], warns_for_memory);
+
+    assert!(
+        warned,
+        "a `memory:` section in a working-directory config.yaml must warn that \
+         it is not applied\nstderr: {seen}"
+    );
+}
+
+/// A `memory` section in the `--config` file reaches scalo's guard, so it draws
+/// no warning and the guard starts with the file's limit.
+#[test]
+fn memory_section_in_the_config_file_reaches_the_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_scaling_probe(dir.path());
+    let mut body = std::fs::read_to_string(&config).unwrap();
+    body.push_str("memory:\n  limit_bytes: 268435456\n");
+    std::fs::write(&config, body).unwrap();
+
+    let (reached, seen) = run_until(
+        dir.path(),
+        &["--config", config.to_str().unwrap()],
+        |line| line.contains("memory guard initialised"),
+    );
+
+    assert!(
+        reached,
+        "the run never initialised its guard\nstderr: {seen}"
+    );
+    assert!(
+        seen.lines()
+            .any(|line| line.contains("memory guard initialised") && line.contains("268435456")),
+        "the file's `memory.limit_bytes` did not reach the guard\nstderr: {seen}"
+    );
+    assert!(
+        !seen.lines().any(warns_for_memory),
+        "a `memory:` section in the --config file reaches scalo and must not \
+         warn\nstderr: {seen}"
+    );
+}
+
 /// A `config.yaml` found in the working directory is read by the wrapper
 /// alone, so a scalo section in it is reported, not obeyed.
 #[test]
