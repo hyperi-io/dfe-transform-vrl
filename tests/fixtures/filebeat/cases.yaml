@@ -665,6 +665,22 @@
       ip: 198.51.100.48
       port: 443
 
+- name: meraki-ip-flow-end
+  module: meraki
+  conf: {"tz_offset": "UTC"}
+  line: |-
+    <134>1 1772000031.900000010 MX100 ip_flow_end src=192.0.2.16 dst=198.51.100.52 protocol=udp sport=51000 dport=53 translated_src_ip=203.0.113.3 translated_port=51000
+  expect:
+    cisco_meraki:
+      event_type: ip_flow_end
+    network:
+      protocol: udp
+    source:
+      port: 51000
+    destination:
+      ip: 198.51.100.52
+      port: 53
+
 - name: meraki-security-ids
   module: meraki
   conf: {"tz_offset": "UTC"}
