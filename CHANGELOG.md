@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.48](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.47...v1.1.48) (2026-11-15)
+
+### Bug Fixes
+
+* **deps:** take rustix 1.1.6 and drop unused advisory ignores ([b63b3e4](https://github.com/hyperi-io/dfe-transform-vrl/commit/b63b3e4b6fd4a74e1710651001f4af78ccdd4748))
+* **scalo:** rebuild on 2.14.30 ([#150](https://github.com/hyperi-io/dfe-transform-vrl/issues/150)) ([c832a09](https://github.com/hyperi-io/dfe-transform-vrl/commit/c832a09cb410f1e18e2eb29b0d6bf93f657da919))
+
 ## [1.1.47](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.46...v1.1.47) (2026-11-11)
 
 ### Bug Fixes
