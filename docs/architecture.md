@@ -139,8 +139,7 @@ double underscore. Only `--config` names the file: `DFE_TRANSFORM_VRL_CONFIG`
 reaches neither cascade. A `config.yaml` read from the working directory with no
 `--config` reaches the wrapper only, so the wrapper warns at startup for each
 section `config::SCALO_CASCADE_SECTIONS` lists, rather than letting the
-deployment believe it took. That list has no `memory`, so a `memory` section
-there goes unapplied without a warning.
+deployment believe it took.
 
 A second list, `config::INERT_SETTINGS`, covers fields this crate accepts and
 validates but does not act on, each with the reason and the replacement where one

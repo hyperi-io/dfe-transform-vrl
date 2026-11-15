@@ -221,7 +221,7 @@ batch_processing:
 ```
 
 A `config.yaml` picked up from the working directory with no `--config` is read
-by the wrapper alone, so a scalo section in it changes nothing. The wrapper warns at startup for each section `config::SCALO_CASCADE_SECTIONS` lists, and that list has no `memory`. Pass the file with `--config`.
+by the wrapper alone, so a scalo section in it changes nothing. The wrapper warns at startup for each section `config::SCALO_CASCADE_SECTIONS` lists, `memory` included. Pass the file with `--config`.
 
 The env layer outranks the file, and there the section nests on a **double**
 underscore:

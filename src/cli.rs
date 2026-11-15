@@ -134,7 +134,8 @@ impl ServiceApp for App {
         // pipeline's per-pod ticker drives `kafka_lag`; the worker-pool scaler
         // drives `worker_pool_saturation` (set_component is a no-op for an
         // unregistered name, so both MUST be registered here to count).
-        // `memory` is the never-OOM HARD gate, fed via `set_memory`. The lag
+        // `memory` is the never-OOM HARD gate, fed via `set_memory` by
+        // `metrics::spawn_memory_feed_task` on both transports. The lag
         // term is the dominant KEDA driver (consumer-group lag); the pool
         // saturation term reflects CPU-bound transform pressure.
         vec![
@@ -441,16 +442,18 @@ async fn run_transform_service(
     // `ScalingPressure` from `ScalingPressureConfig::from_cascade()` + the
     // components this app registered via `scaling_components`, and already wired
     // it into the MetricsManager (served at `/scaling/pressure` to KEDA) and the
-    // worker pool (which feeds `worker_pool_saturation`). The pipeline's per-pod
-    // ticker feeds the `kafka_lag` component + the outbound circuit latch + the
-    // memory HARD gate. With `scaling.enabled = false` the
-    // engine still exists and reports zero pressure.
+    // worker pool (which feeds `worker_pool_saturation`). The bus pipeline's
+    // per-pod ticker feeds the `kafka_lag` component + the outbound circuit
+    // latch, and the memory task below feeds the memory HARD gate on both
+    // transports. With `scaling.enabled = false` the engine still exists and
+    // reports zero pressure.
     let scaling = runtime.scaling.clone();
 
     // Stops on `shutdown_token`; aborted below as well, for a pipeline that
     // fails without a shutdown.
-    let memory_gauge_task = metrics::spawn_memory_gauge_task(
+    let memory_feed_task = metrics::spawn_memory_feed_task(
         Arc::clone(&transform_metrics),
+        scaling.clone(),
         Arc::clone(&memory_guard),
         shutdown_token.clone(),
     );
@@ -473,7 +476,7 @@ async fn run_transform_service(
         memory_guard,
     )
     .await;
-    memory_gauge_task.abort();
+    memory_feed_task.abort();
     if let Err(e) = dlq.shutdown().await {
         error!(error = %e, "the DLQ drain did not stop cleanly");
     }

@@ -30,10 +30,12 @@ use scalo::metrics::groups::{
     AppMetrics, BackpressureMetrics, ConsumerMetrics, EnrichmentMetrics, SinkMetrics,
 };
 use scalo::metrics::{MetricsManager, ServiceMetrics};
+use scalo::scaling::ScalingPressure;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// How often the memory gauges are refreshed from the memory guard.
+/// How often the memory gauges and the scaling memory gate are refreshed from
+/// the memory guard.
 const MEMORY_GAUGE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Shortest gap between two security-log lines for one rejection reason.
@@ -278,13 +280,15 @@ impl TransformMetrics {
     }
 }
 
-/// Refresh the memory gauges from `guard` once a second until `shutdown` is
-/// cancelled.
+/// Refresh the memory gauges, and the scaling pressure's memory gate, from
+/// `guard` once a second until `shutdown` is cancelled.
 ///
 /// A task of its own because the pipeline's scaling ticker runs only on the
-/// bus transport with scaling enabled, and these gauges are wanted on both.
-pub fn spawn_memory_gauge_task(
+/// bus transport, and both are wanted on the direct transport too. `scaling` is
+/// `None` only in a build without scalo's `scaling` feature.
+pub fn spawn_memory_feed_task(
     transform_metrics: Arc<TransformMetrics>,
+    scaling: Option<Arc<ScalingPressure>>,
     guard: Arc<MemoryGuard>,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
@@ -294,7 +298,12 @@ pub fn spawn_memory_gauge_task(
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
-                _ = tick.tick() => transform_metrics.record_memory(&guard),
+                _ = tick.tick() => {
+                    transform_metrics.record_memory(&guard);
+                    if let Some(scaling) = &scaling {
+                        scaling.set_memory(guard.current_bytes(), guard.limit_bytes());
+                    }
+                }
             }
         }
     })
@@ -491,6 +500,7 @@ mod tests {
     use super::*;
 
     use scalo::memory::{MemoryGuardConfig, UsageSource};
+    use scalo::scaling::ScalingPressureConfig;
 
     const FIXTURE_USED_BYTES: u64 = 123_456_789;
     const FIXTURE_LIMIT_BYTES: u64 = 1 << 30;
@@ -542,11 +552,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_gauge_task_writes_the_gauges_and_stops_on_shutdown() {
+    async fn memory_feed_task_writes_the_gauges_and_stops_on_shutdown() {
         let capture = Capture::default();
         let (m, guard, _cgroup) = captured_metrics_and_guard(&capture, "test_memory_gauge_task");
         let shutdown = CancellationToken::new();
-        let task = spawn_memory_gauge_task(Arc::new(m), Arc::new(guard), shutdown.clone());
+        let task = spawn_memory_feed_task(Arc::new(m), None, Arc::new(guard), shutdown.clone());
 
         // The interval's first tick fires at once; allow a loaded host 5s.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -554,6 +564,56 @@ mod tests {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the task never wrote memory_used_bytes"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the task must stop once shutdown is cancelled")
+            .expect("the task must not panic");
+    }
+
+    /// Without a feed the memory gate reads 0 in use, so a pod near its limit
+    /// reports no pressure and KEDA never scales it up before the OOM kill.
+    #[tokio::test]
+    async fn memory_feed_task_feeds_the_scaling_memory_gate() {
+        let cgroup = tempfile::tempdir().expect("tempdir");
+        std::fs::write(cgroup.path().join("memory.current"), "900\n")
+            .expect("write memory.current");
+        let guard = MemoryGuard::with_usage_source(
+            MemoryGuardConfig {
+                limit_bytes: 1000,
+                ..MemoryGuardConfig::default()
+            },
+            UsageSource::CgroupV2(cgroup.path().to_path_buf()),
+        );
+        let scaling = Arc::new(ScalingPressure::new(
+            ScalingPressureConfig::default(),
+            Vec::new(),
+        ));
+        assert!(
+            scaling.calculate() < 100.0,
+            "the gate must start open, or the test proves nothing"
+        );
+        let shutdown = CancellationToken::new();
+        let task = spawn_memory_feed_task(
+            Arc::new(TransformMetrics::default()),
+            Some(Arc::clone(&scaling)),
+            Arc::new(guard),
+            shutdown.clone(),
+        );
+
+        // The interval's first tick fires at once; allow a loaded host 5s.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if scaling.calculate() >= 100.0 {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "90% of the limit in use never raised the scaling pressure to 100"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

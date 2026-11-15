@@ -7,8 +7,9 @@ description: |-
 
   It owns `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and
   `dlq`.
-  scalo's own sections -- `metrics`, `logger`, `scaling`, `worker_pool`,
-  `batch_processing`, `self_regulation`, `version_check`, `otel_tracing` --
+  scalo's own sections -- `metrics`, `logger`, `memory`, `scaling`,
+  `worker_pool`, `batch_processing`, `self_regulation`, `version_check`,
+  `otel_tracing` --
   may sit beside them: scalo's cascade reads the same file as its settings
   layer, and its env layer outranks the file. [`SCALO_CASCADE_SECTIONS`] lists
   them, and [`warn_unreachable_scalo_settings`] warns for one in a
