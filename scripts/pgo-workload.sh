@@ -10,8 +10,8 @@
 # Usage:
 #   scripts/pgo-workload.sh <path-to-dfe-transform-vrl-binary>
 #
-# Runs the shipped filebeat pipeline (pipelines/filebeat) over the committed
-# elastic/integrations corpus, so a PGO-instrumented binary profiles the hot
+# Runs the shipped filebeat pipeline (pipelines/filebeat) over the synthetic
+# cases in tests/fixtures/filebeat/cases.yaml, so a PGO-instrumented binary profiles the hot
 # path it ships with: Kafka consume -> JSON parse -> VRL (parse_groks,
 # parse_timestamp, the timezones lookup) -> JSON serialise -> Kafka produce.
 #
@@ -34,7 +34,7 @@
 #   - Writes an ephemeral wrapper config pointing at pipelines/filebeat
 #   - Starts the passed-in wrapper binary in background
 #   - Waits for the wrapper's /readyz to return 200
-#   - Runs pgo-driver, which produces the corpus for the configured duration
+#   - Runs pgo-driver, which produces the case events for the configured duration
 #     and exits non-zero unless the wrapper's /metrics shows delivered records
 #     and fewer errors than deliveries -- so a workload that transformed
 #     nothing fails here instead of profiling an idle binary
@@ -295,7 +295,7 @@ if ! PGO_DRIVER_DURATION_SECS="$DURATION" \
     PGO_DRIVER_RPS="${PGO_DRIVER_RPS:-5000}" \
     PGO_DRIVER_METRICS_ADDR="127.0.0.1:$METRICS_PORT" \
     "$PGO_DRIVER_PATH"; then
-    echo "error: the workload did not transform and deliver the corpus" >&2
+    echo "error: the workload did not transform and deliver the cases" >&2
     tail -100 "$WORK_DIR/wrapper.log" >&2
     exit 1
 fi

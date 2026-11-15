@@ -8,7 +8,7 @@
 
 //! PGO workload driver for `dfe-transform-vrl`.
 //!
-//! Replays the elastic/integrations filebeat corpus onto the source topic, as
+//! Replays the synthetic filebeat cases onto the source topic, as
 //! the input events the bundled filebeat pipeline reads, so a PGO-instrumented
 //! `dfe-transform-vrl` profiles the pipeline it ships with: Kafka consume ->
 //! JSON parse -> `parse_groks`, `parse_timestamp` and the timezones lookup ->
@@ -45,9 +45,9 @@
     clippy::cast_sign_loss
 )]
 
-// The same corpus reader and input-event shape the filebeat test suites use.
+// The same case loader and input-event shape the filebeat test suites use.
 #[path = "../../tests/common/filebeat.rs"]
-mod filebeat_corpus;
+mod filebeat_cases;
 
 use std::env;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ use rdkafka::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use tokio::time::{MissedTickBehavior, interval};
 
-use crate::filebeat_corpus as fb;
+use crate::filebeat_cases as fb;
 
 /// How often the producer tops the sent count up to the configured rate.
 const PRODUCE_TICK: Duration = Duration::from_millis(10);
@@ -68,11 +68,10 @@ async fn main() {
     let cfg = Config::from_env();
     println!("pgo-driver starting: {cfg:#?}");
 
-    let events = corpus_events();
+    let events = case_events();
     println!(
-        "pgo-driver: replaying {} filebeat corpus events from {} logs",
-        events.len(),
-        fb::all_logs().len()
+        "pgo-driver: replaying {} filebeat case events",
+        events.len()
     );
 
     let producer: FutureProducer = match ClientConfig::new()
@@ -178,20 +177,16 @@ fn env_parsed<T: std::str::FromStr>(key: &str, default: T) -> T {
 }
 
 // ===========================================================================
-// Corpus
+// Cases
 // ===========================================================================
 
-/// Every corpus line as the input event the bundled pipeline reads.
-fn corpus_events() -> Vec<Vec<u8>> {
-    let mut events = Vec::new();
-    for log in fb::all_logs() {
-        let conf = fb::corpus_conf(log);
-        for line in fb::corpus_lines(log) {
-            let event = fb::input_event(&line, conf.as_ref());
-            events.push(serde_json::to_vec(&event).expect("a corpus event serialises"));
-        }
-    }
-    assert!(!events.is_empty(), "the filebeat corpus has no events");
+/// Every case line as the input event the bundled pipeline reads.
+fn case_events() -> Vec<Vec<u8>> {
+    let events: Vec<Vec<u8>> = fb::cases()
+        .iter()
+        .map(|case| serde_json::to_vec(&fb::case_event(case)).expect("a case event serialises"))
+        .collect();
+    assert!(!events.is_empty(), "the filebeat cases file has no events");
     events
 }
 
@@ -228,7 +223,7 @@ impl Stats {
     }
 }
 
-/// Queue corpus events at `cfg.rps` until `deadline`, cycling the corpus.
+/// Queue case events at `cfg.rps` until `deadline`, cycling through them.
 async fn produce(
     producer: &FutureProducer,
     cfg: &Config,

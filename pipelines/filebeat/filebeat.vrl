@@ -63,8 +63,8 @@ if match(_msg, r'^<134>1 \d{9,10}\.\d+ ') {
 } else {
     # Cisco Umbrella exports are CSV; DFE 2.1 carried the log type in the
     # S3 object path. Honour an upstream-provided .log.file.path first,
-    # then fall back to column-shape detection (counts verified against
-    # the elastic/integrations pipeline test corpus).
+    # then fall back to column-shape detection (the umbrella cases in
+    # tests/fixtures/filebeat/cases.yaml cover each log type).
     _path = string(.log.file.path) ?? ""
     if contains(_path, "auditlogs") {
         _umbrella_type = "auditlogs"
