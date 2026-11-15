@@ -12,8 +12,6 @@ That cost buys access to Vector's non-VRL transforms, which most pipelines never
 use. So the answer is to keep VRL and drop Vector. Compile the VRL crate into the
 binary, and let the wrapper own the buffers and the wire format.
 
-### What it is, and what it is not
-
 One Rust binary. It reads records, runs a compiled VRL program over each one,
 and writes the results out. Kafka in and out on the `bus` transport, gRPC in and
 out on the `direct` transport (`0.0.0.0:6000` listener, default sink endpoint
@@ -46,12 +44,12 @@ flowchart TB
         SINK["produce sink"]
         COMP["VRL compiler + enrichment registry"]
     end
-    DRV -->|"WorkBatch of Record"| PROC
-    PROC -->|"out-batch"| SINK
+    DRV -->|WorkBatch of Record| PROC
+    PROC -->|out-batch| SINK
     SINK --> DRV
-    COMP -.->|"compiled Program, once at startup"| PROC
-    POOL -.->|"parallel VRL execution"| PROC
-    GOV -.->|"pauses intake under memory pressure"| DRV
+    COMP -.->|compiled Program, once at startup| PROC
+    POOL -.->|parallel VRL execution| PROC
+    GOV -.->|pauses intake under memory pressure| DRV
 ```
 
 Per block of records:
@@ -61,9 +59,9 @@ Per block of records:
    pauses under memory pressure by pausing partitions -- the member stays in
    the consumer group and no rebalance fires. On the direct transport it is the
    Push listener, which refuses pushes `UNAVAILABLE` under the same pressure.
-2. `process` deserialises each record into a VRL `Value` (format auto-sensed),
-   runs the compiled program on the worker pool in parallel, and reserialises
-   survivors back to the format they arrived in.
+2. `process` parses each record's JSON into a VRL `Value`, runs the compiled
+   program on the worker pool in parallel, and serialises the survivors back to
+   JSON.
 3. The loop sends the whole out-batch through `TransportSender::send_batch`.
 4. The loop releases the block's source only after the send returns `Ok`:
    Kafka commits the offsets, the Push listener answers its sender OK.
@@ -96,21 +94,22 @@ into a single program. Changing a transform means rolling the pod -- hence
 recompile path at runtime.
 
 **The compile memory floor is checked before the compiler runs.** Compilation is
-the one startup cost that scales with the deployment's own data, and the bundled
-filebeat pipeline is 212,218 bytes of VRL. Below a certain container limit the
-kernel kills the process mid-compile, which an operator sees as an exit-137
-restart loop with nothing in the log naming the cause. `engine::budget` reads the
-limit first and refuses with all three numbers -- program size, limit, required
-floor -- in one message. The constants come from measurement on the shipped
-image, not from theory: 96 resident bytes per source byte over a 24 MiB reserve.
+the one startup cost that scales with the deployment's own data. Below a certain
+container limit the kernel kills the process mid-compile, which an operator sees
+as an exit-137 restart loop with nothing in the log naming the cause.
+`engine::budget` reads the limit first and refuses with all three numbers --
+program size, limit, required floor -- in one message. Its two constants, a
+reserve and a cost per source byte, come from measurement on the shipped image,
+and their doc comments name the measured points.
 
 **Idle is a valid, Ready state.** A transform instance is deployed before its
 program exists -- whatever creates it writes the config naming its topics, and
-the VRL arrives afterwards. With no topics or no program the app starts, reports
-Ready, holds `pipeline_idle` at 1, joins no consumer group, and logs the reason
-once. scalo's idle gate re-polls, so the program that lands later starts the
-service without a restart. Only reaching the loader with work still to do is a
-failure.
+the VRL arrives afterwards. With no topics on the bus, or no program, the app
+starts, reports Ready, holds `pipeline_idle` at 1, joins no consumer group, and
+logs the reason once. scalo's idle gate re-reads the config when the config file
+changes or the process gets a SIGHUP, and a program written into
+`transforms.dir` alone does not wake it. In Kubernetes a new program is a change
+to the transforms file set, which rolls the pod.
 
 **Metric names are emitted bare.** The `MetricsManager` namespace is empty
 unless `metrics.namespace` is set, and none is by default. A set namespace is
@@ -128,52 +127,53 @@ compile time -- which is why a table cannot appear after startup.
 ## Two config authorities, one config file
 
 The `--config` file plus `DFE_TRANSFORM_VRL_*` env vars resolve this crate's own
-`Config`: `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables`.
+`Config`: `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables`, `dlq`.
 
-scalo resolves its own sections -- `metrics`, `logger`, `scaling`,
+scalo resolves its own sections -- `metrics`, `logger`, `memory`, `scaling`,
 `worker_pool`, `batch_processing`, `self_regulation`, `version_check`,
-`otel_tracing` -- from a separate cascade, which the wrapper seeds with the
-`--config` file as its settings layer. So the mounted config carries both, each
-authority taking the sections it owns. The env layer outranks the file for both,
-and there a scalo section nests on a double underscore. A `config.yaml` read
-from the working directory with no `--config` reaches the wrapper only, so the
-wrapper warns at startup for each scalo section in it, rather than letting the
-deployment believe it took.
+`otel_tracing` -- from a separate cascade, which scalo's `run_app` sets up with
+the `--config` file as its settings layer before the wrapper loads its own. So
+the mounted config carries both, each authority taking the sections it owns. The
+env layer outranks the file for both, and there a scalo section nests on a
+double underscore. Only `--config` names the file: `DFE_TRANSFORM_VRL_CONFIG`
+reaches neither cascade. A `config.yaml` read from the working directory with no
+`--config` reaches the wrapper only, so the wrapper warns at startup for each
+section `config::SCALO_CASCADE_SECTIONS` lists, rather than letting the
+deployment believe it took. That list has no `memory`, so a `memory` section
+there goes unapplied without a warning.
 
 A second list, `config::INERT_SETTINGS`, covers fields this crate accepts and
 validates but does not act on, each with the reason and the replacement where one
 exists. `HotConfig` and `ConfigReloader` re-read and re-validate the file on
-change or SIGHUP, so a bad edit is caught without a restart, but every field the
-reloadable subset carries is on the inert list -- no pipeline behaviour changes
-on reload.
+change or SIGHUP, so a bad edit logs `Config reload failed, keeping current
+config` without a restart, but every field the reloadable subset carries is on
+the inert list -- no pipeline behaviour changes on reload.
 
 ## Components
 
 | Path | Holds |
 |---|---|
-| `src/main.rs`, `src/cli.rs` | Process entry, subcommands, env seeding for scalo's cascade |
+| `src/main.rs`, `src/cli.rs` | Process entry, subcommands, the scalo `ServiceApp` wiring |
 | `src/pipeline.rs` | The `process` closure and sink handed to scalo's batch engine |
 | `src/engine/compiler.rs` | Loads and compiles transform files into one program |
 | `src/engine/runner.rs` | Runs a compiled program against one event `Value` |
 | `src/engine/budget.rs` | Compile memory floor, checked before compiling |
 | `src/config/` | `Config`, validation, `HotConfig`, the inert and cascade lists |
 | `src/enrichment/` | Table loading (CSV, JSON, YAML, MMDB, STIX, SQLite), refresh, the VRL functions |
-| `src/kafka/mod.rs` | Wraps scalo's `KafkaTransport` and `FormatDetector` |
+| `src/kafka/mod.rs` | The consumer and producer configs for scalo's `KafkaTransport`, and the DFE topic and group names |
 | `src/deployment.rs` | `contract()` -- the source the Dockerfile and the released chart are generated from |
 | `src/metrics.rs` | Three metric layers, bare names |
 | `pipelines/filebeat/` | Opt-in data bundle, not engine capability |
 
 ## Deployment
 
-### Generated artefacts
+The `Dockerfile` is generated from `deployment.rs::contract()` by scalo's generator, and carries a header naming the generator and the contract schema version. `emit-dockerfile` regenerates it, and `checked_in_dockerfile_matches_emit_dockerfile` fails on a hand edit, so a fix belongs in `contract()`.
 
-The `Dockerfile` is generated from `deployment.rs::contract()` by scalo's generator, and carries a header naming the generator and the regeneration command. A hand edit is reverted by the next regeneration, so a fix belongs in `contract()`.
+No chart is committed. At release, hyperi-ci emits the contract with `generate-artefacts` and assembles a thin chart from it on the scalo-service library chart at `release.helm.library`. `dfe-transform-vrl emit-contract` prints the contract: the startup budget, `kubernetes.io/h2c` on the Push port, the Kafka Secret mounted into the per-endpoint SASL names and the shared mechanism name, the DLQ's directory as the one writable path under a read-only root beside the library's scratch `/tmp`, the requests and limits, and the grace period.
 
-No chart is committed. At release, hyperi-ci emits the contract with `generate-artefacts` and assembles a thin chart from it on the scalo-service library chart at `release.helm.library`. The contract is schema version 4: a 120 s startup budget, `kubernetes.io/h2c` on the Push port, the Kafka Secret mounted into the per-endpoint SASL names, no writable path beyond the library's scratch `/tmp` under a read-only root, requests 100m/128Mi, limits 500m/512Mi and a 45 s grace period.
+The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The contract's ScaledObject scales on CPU alone: consumer-group lag rises when a downstream stage breaks, so it is not a trigger. A deployment adds a trigger with the library's `keda.extraTriggers` value.
 
-The Push port (6000) is gated on `config.source.transport` being `direct` or `grpc`, the two names of the only transport that binds the listener, so the bus default (`bus` or `kafka`) publishes no port nothing answers on. The contract's ScaledObject scales on CPU alone (80%): consumer-group lag rises when a downstream stage breaks, so it is not a trigger. A deployment adds a trigger with the library's `keda.extraTriggers` value.
-
-In a DFE deployment, dfe-infra's values set the CPU target to 70% in every profile. The single, scale and mesh profiles add the scaling-pressure trigger (target 70, read through dfe-keda-shim), and slim runs on CPU alone. The engine's [KEDA scaling page](https://github.com/hyperi-io/dfe-engine/blob/main/docs/deployment/keda-scaling.md) covers the triggers for every app.
+In a DFE deployment, dfe-infra's values set the CPU target in every profile. The single, scale and mesh profiles add the scaling-pressure trigger, read through dfe-keda-shim, and slim runs on CPU alone. The engine's [KEDA scaling page](https://github.com/hyperi-io/dfe-engine/blob/main/docs/deployment/keda-scaling.md) covers the triggers for every app.
 
 ### How many instances run
 
@@ -187,8 +187,8 @@ group. Adding a source is a manifest edit, not a change here.
 ## Not covered here
 
 `docs/internals.md` carries the deeper design detail: the vrl-versus-vector
-comparison in full, format detection behaviour, the memory budget table, and the
-field-by-field reload matrix.
+comparison in full, the per-record parse and serialise path, the memory budget
+table, and the field-by-field reload matrix.
 
 Two things are known gaps rather than omissions. Readiness reads scalo's health
 registry, so a broker refusing the credentials, a missing topic or a consumer

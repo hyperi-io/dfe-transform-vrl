@@ -25,12 +25,12 @@ the working tree):
 ## Provenance
 
 - Source repo: `github.com/elastic/integrations`
-- Commit: `c7bc53023288c7d34afd631c0c3e3552f6219419` (pinned -- the same
-  vintage the DFE 2.1 VRL templates were generated against, and the same
-  pin the dfe-transform-elastic testdata and elastic_to_vrl submodule use)
+- Commit: `c7bc53023288c7d34afd631c0c3e3552f6219419` (pinned in
+  `scripts/filebeat/fetch_testdata.py` -- the same vintage the DFE 2.1 VRL
+  templates were generated against)
 - Paths: `packages/cisco_{umbrella,ios,meraki}/data_stream/log/_dev/test/pipeline/`
 - Licence: Elastic License 2.0 (test data redistributed unmodified for
-  compatibility testing; see `LICENSE.txt` inside the archive)
+  compatibility testing, see `LICENSE.txt` inside the archive)
 
 ## Refreshing
 
@@ -46,19 +46,15 @@ tar --sort=name --owner=0 --group=0 --numeric-owner \
     cisco_umbrella cisco_ios cisco_meraki LICENSE.txt licenses
 ```
 
-The tar flags make the archive byte-reproducible; a refresh only churns
+Those tar flags make the archive byte-reproducible, so a refresh only churns
 the blob when content actually changed. Re-validate the
-`ACCEPTED_MISMATCHES` line indices in
-`tests/integration/filebeat_pipeline.rs` after any refresh - they are
-keyed by line position within each log file.
-
-Keep the pin aligned with the dfe-transform-elastic testdata unless the
-bundled VRL is regenerated against a newer template vintage.
+`ACCEPTED_MISMATCHES` line indices in `tests/common/filebeat.rs` after any
+refresh - they are keyed by line position within each log file.
 
 ## Golden-output caveats
 
 The `-expected.json` files are the outputs of the ELASTIC ingest pipelines
-at that pin. The bundled VRL is the DFE 2.1 port, which deliberately
+at that pin. This repo's VRL is the DFE 2.1 port, which deliberately
 differs: geoip enrichment is stripped (dfe-loader owns geoip), `related.*`
 / ECS versions may lag the newest integration revisions, and events carry
 DFE 2.1 conventions (`_conf.tz_offset`, tag seeding). Tests therefore
