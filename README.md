@@ -11,18 +11,23 @@ Runs your VRL transforms over a DFE deployment's event stream, in-process.
 - Kafka in and out, or a direct gRPC push on a deployment with no broker. The transform you write is the same on both.
 - At-least-once by default: the source is acknowledged only once the sink has the transformed records. `source.acknowledgements.enabled: false` acknowledges at receipt instead.
 - Enrichment tables from CSV, JSON, YAML and STIX, read from VRL, plus MMDB and SQLite with the `enrichment-mmdb` and `enrichment-sqlite` build features. A table with a `refresh` setting reloads while the service runs. MMDB loads once at start.
-- The host and network functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`) do not compile, so a transform cannot reach outside the process.
+- The host and network functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`) do not compile, so a transform cannot read the host's environment or reach the network.
 
 JSON is the only payload format. A record that is not JSON is dropped, counted in `records_error_total{stage="deserialise"}`, and not redelivered. For Vector's own transforms beyond `remap`, use [dfe-transform-vector](https://github.com/hyperi-io/dfe-transform-vector).
 
 ## Quick start
 
+On Linux the build needs `protoc`, a C toolchain, `pkg-config` and librdkafka. scalo compiles its gRPC `.proto` files, `aws-lc-sys` compiles C, and `rdkafka-sys` links librdkafka through pkg-config. It refuses a librdkafka older than the version after the `+` in its `Cargo.lock` entry, and a Debian or Ubuntu package can be older than that, so there [build librdkafka from source](https://github.com/confluentinc/librdkafka#build-from-source) first.
+
 ```bash
+sudo apt-get install -y protobuf-compiler build-essential pkg-config
 cargo build --release
-cp config.example.yaml config.yaml      # set the brokers, topics and transforms.dir
-./target/release/dfe-transform-vrl config-check --config config.yaml
+cp config.example.yaml config.yaml      # uncomment source, sink and transforms, then set the brokers, topics and transforms.dir
+./target/release/dfe-transform-vrl --config config.yaml config-check
 ./target/release/dfe-transform-vrl --config config.yaml
 ```
+
+`--config` goes before the subcommand, or `config-check` refuses it as an unexpected argument.
 
 The smallest config names the source, a directory holding at least one `.vrl` file, and the sink:
 
@@ -53,9 +58,11 @@ del(.message)
 
 Health and metrics answer on port 9090: `/livez`, `/readyz` (503 while memory is under pressure or a transport reports itself unhealthy, and 200 once the pipeline runs, an idle one included) and `/metrics`.
 
+Outside the image, set `dlq.file.path` to a writable directory. The default, `/var/spool/scalo/dlq`, is one the image creates, and without a writable one the service logs that the DLQ has no backend and holds any dead letter unacknowledged at its source.
+
 ## Configuration
 
-[config.example.yaml](config.example.yaml) is the annotated reference, and [docs/config-schema.yaml](docs/config-schema.yaml) lists every key with its type and default. The big dials have flat environment overrides for Kubernetes, `DFE_TRANSFORM_VRL_SOURCE_BROKERS`, `DFE_TRANSFORM_VRL_SINK_TOPIC`, `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` and the SASL pair among them. The whole list, Kafka over TLS with a private CA and the scalo sections that share the file on a double underscore are under [Operating notes](docs/internals.md#operating-notes) in docs/internals.md, and the settings that parse but reach nothing under [Reload](docs/internals.md#reload).
+[config.example.yaml](config.example.yaml) is the annotated reference, and [docs/config-schema.yaml](docs/config-schema.yaml) lists every key of the transform's own sections with its type and default. The big dials have flat environment overrides for Kubernetes, `DFE_TRANSFORM_VRL_SOURCE_BROKERS`, `DFE_TRANSFORM_VRL_SINK_TOPIC`, `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` and the SASL pair among them. The whole list, Kafka over TLS with a private CA and the scalo sections that share the file on a double underscore are under [Operating notes](docs/internals.md#operating-notes) in docs/internals.md, and the settings that parse but reach nothing under [Reload](docs/internals.md#reload).
 
 `pipelines/filebeat/` ships a pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki, IOS, Umbrella) with its `timezones.csv` table. Opt in by pointing `transforms.dir` and `enrichment_tables` at it. dfe-transform-elastic carries the same sources as compiled Rust.
 
