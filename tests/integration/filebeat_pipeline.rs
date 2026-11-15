@@ -10,14 +10,13 @@
 //! (`pipelines/filebeat/filebeat.vrl`), ported from the DFE 2.1 Vector
 //! templates (dfe-vector-templates 14x family).
 //!
-//! The corpus tests drive the pipeline with REAL filebeat test data from
-//! elastic/integrations (pinned SHA, see
-//! `tests/fixtures/filebeat/README.md`), read in memory from the committed
-//! tar.gz at test time.
+//! The case tests drive the pipeline with the synthetic lines in
+//! `tests/fixtures/filebeat/cases.yaml` and check each output against the
+//! subset of fields its case names.
 //!
 //! This runs the pipeline IN PROCESS. `tests/e2e/filebeat_kafka.rs` runs the
-//! same corpus through the app binary and a real broker; both grade against
-//! the shared comparison in `tests/common/filebeat.rs`.
+//! same cases through the app binary and a real broker; both grade with the
+//! shared comparison in `tests/common/filebeat.rs`.
 
 use std::sync::OnceLock;
 
@@ -28,7 +27,7 @@ use dfe_transform_vrl::enrichment::EnrichmentRegistry;
 use vrl::compiler::Program;
 use vrl::value::Value;
 
-use crate::filebeat_corpus as fb;
+use crate::filebeat_cases as fb;
 
 /// Compile the bundled pipeline with the bundled timezones table.
 ///
@@ -91,23 +90,27 @@ fn bundled_filebeat_pipeline_compiles() {
 }
 
 // =========================================================================
-// Module detection smoke tests (single real lines per module)
+// Module detection smoke tests (one line per module)
 // =========================================================================
 
-const MERAKI_LINE: &str = "<134>1 1647478988.289402144 MX84_4 flows allow src=10.0.2.170 \
-     dst=10.0.0.34 mac=00:7C:2D:BD:76:F2 protocol=udp sport=54841 dport=15600";
+fn meraki_line() -> &'static str {
+    &fb::case("meraki-flows-allow").line
+}
 
-const IOS_LINE: &str = "Feb  8 04:00:48 192.168.100.2 585917: Feb  8 04:00:47.272: \
-     %SEC-6-IPACCESSLOGRP: list 177 denied igmp 192.168.100.197 -> 224.0.0.22, 1 packet";
+fn ios_line() -> &'static str {
+    &fb::case("ios-acl-host-header-tcp").line
+}
 
-const UMBRELLA_LINE: &str = r#""2020-07-23 23:49:54","elasticuser","elasticuser,Elastic Machine","192.168.1.1","81.2.69.144","Allowed","1 (A)","NOERROR","www.elastic.co.","Software/Technology,Business Services,Application","Test Policy Name","AD Users, Roaming Computers","""#;
+fn umbrella_line() -> &'static str {
+    &fb::case("umbrella-dns-allowed").line
+}
 
 const UNMATCHED_LINE: &str = "completely unrecognisable payload";
 
 #[test]
 fn detects_and_parses_meraki_flows_line() {
     let program = compile_filebeat();
-    let mut value = event(MERAKI_LINE, Some("UTC"));
+    let mut value = event(meraki_line(), Some("UTC"));
     run_vrl(program, &mut value).expect("meraki flows line must transform");
     assert_eq!(
         str_field(&value, "cisco_meraki.event_type").as_deref(),
@@ -124,7 +127,7 @@ fn detects_and_parses_meraki_flows_line() {
 #[test]
 fn detects_and_parses_cisco_ios_line() {
     let program = compile_filebeat();
-    let mut value = event(IOS_LINE, Some("UTC"));
+    let mut value = event(ios_line(), Some("UTC"));
     run_vrl(program, &mut value).expect("cisco ios line must transform");
     assert_eq!(
         str_field(&value, "observer.product").as_deref(),
@@ -136,7 +139,7 @@ fn detects_and_parses_cisco_ios_line() {
 #[test]
 fn detects_and_parses_umbrella_dns_line() {
     let program = compile_filebeat();
-    let mut value = event(UMBRELLA_LINE, None);
+    let mut value = event(umbrella_line(), None);
     run_vrl(program, &mut value).expect("umbrella dns line must transform");
     assert_eq!(
         str_field(&value, "observer.product").as_deref(),
@@ -172,23 +175,25 @@ fn unmatched_event_is_tagged_and_passed_through() {
 // Event carriage
 // =========================================================================
 
-/// One real line per branch, for tests that care which branch ran rather than
+/// One line per branch, for tests that care which branch ran rather than
 /// what it produced.
-const BRANCH_LINES: &[(&str, &str)] = &[
-    ("meraki", MERAKI_LINE),
-    ("ios", IOS_LINE),
-    ("umbrella", UMBRELLA_LINE),
-    ("unmatched", UNMATCHED_LINE),
-];
+fn branch_lines() -> [(&'static str, &'static str); 4] {
+    [
+        ("meraki", meraki_line()),
+        ("ios", ios_line()),
+        ("umbrella", umbrella_line()),
+        ("unmatched", UNMATCHED_LINE),
+    ]
+}
 
 #[test]
 fn a_root_field_survives_every_branch_but_a_tag_does_not() {
-    // A corpus replay marks its own events so a shared cluster's older rows
+    // A case replay marks its own events so a shared cluster's older rows
     // are not counted as this run's. `tags` cannot carry that marker: every
     // module branch assigns `.tags` outright before it does anything else, so
     // a root field is the only carriage that comes out the far side.
     let program = compile_filebeat();
-    for (branch, line) in BRANCH_LINES {
+    for (branch, line) in branch_lines() {
         let mut input = fb::input_event(line, Some(&serde_json::json!({ "tz_offset": "UTC" })));
         input["_e2e"] = serde_json::json!({ "run": "ws21" });
         input["tags"] = serde_json::json!(["ws21"]);
@@ -200,7 +205,7 @@ fn a_root_field_survives_every_branch_but_a_tag_does_not() {
             Some("ws21"),
             "the {branch} branch dropped the root marker: {value:?}"
         );
-        if *branch != "unmatched" {
+        if branch != "unmatched" {
             let kept_the_tag = field(&value, "tags")
                 .and_then(Value::as_array)
                 .is_some_and(|tags| tags.contains(&Value::from("ws21")));
@@ -213,101 +218,70 @@ fn a_root_field_survives_every_branch_but_a_tag_does_not() {
 }
 
 // =========================================================================
-// Real-data corpus (elastic/integrations pipeline test data, pinned; see
-// tests/fixtures/filebeat/README.md)
+// Synthetic cases (tests/fixtures/filebeat/cases.yaml)
 // =========================================================================
 
-/// Run every line of a corpus log through the pipeline and compare against
-/// the goldens. Returns human-readable problem strings (empty = pass).
-fn run_corpus_file(log_name: &str) -> Vec<String> {
+/// Run every case of one module through the pipeline and compare against
+/// what each names. Returns human-readable problem strings (empty = pass).
+fn run_cases(module: fb::Module) -> Vec<String> {
     let program = compile_filebeat();
-    let lines = fb::corpus_lines(log_name);
-    let expected = fb::corpus_expected(&format!("{log_name}-expected.json"));
-    let conf = fb::corpus_conf(log_name);
     let mut problems = Vec::new();
 
-    if lines.len() != expected.len() {
-        problems.push(format!(
-            "{log_name}: {} input lines but {} golden events",
-            lines.len(),
-            expected.len()
-        ));
-    }
-
-    for (idx, (line, exp)) in lines.iter().zip(&expected).enumerate() {
-        let mut value = event_with_conf(line, conf.as_ref());
+    for case in fb::cases_for(module) {
+        let mut value = Value::from(fb::case_event(case));
         if let Err(e) = run_vrl(program, &mut value) {
-            problems.push(format!("{log_name}[{idx}]: pipeline failed: {e}"));
+            problems.push(format!("{}: pipeline failed: {e}", case.name));
             continue;
         }
         let ours = serde_json::to_value(&value).expect("event serialises");
         if fb::is_unmatched(&ours) {
-            problems.push(format!("{log_name}[{idx}]: routed to filebeat_unmatched"));
+            problems.push(format!("{}: routed to filebeat_unmatched", case.name));
             continue;
         }
         problems.extend(
-            fb::problems_against_golden(log_name, idx, exp, &ours)
+            fb::problems_for(case, &ours)
                 .into_iter()
-                .map(|p| format!("{log_name}[{idx}]: {p}")),
+                .map(|p| format!("{}: {p}", case.name)),
         );
     }
     problems
 }
 
-fn assert_corpus_clean(log_names: &[&str]) {
-    let mut problems = Vec::new();
-    for name in log_names {
-        problems.extend(run_corpus_file(name));
+#[test]
+fn cases_cover_each_module_and_say_what_they_expect() {
+    for module in [fb::Module::Meraki, fb::Module::Ios, fb::Module::Umbrella] {
+        assert!(!fb::cases_for(module).is_empty(), "no cases for {module:?}");
     }
+    for case in fb::cases() {
+        assert!(
+            case.expect.as_object().is_some_and(|o| !o.is_empty()),
+            "case {} expects nothing, so it can never fail",
+            case.name
+        );
+    }
+}
+
+fn assert_cases_clean(module: fb::Module) {
+    let problems = run_cases(module);
     assert!(
         problems.is_empty(),
-        "corpus mismatches ({}):\n{}",
+        "case mismatches ({}):\n{}",
         problems.len(),
         problems.join("\n")
     );
 }
 
 #[test]
-fn corpus_umbrella_dnslogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-dnslogs.log"]);
+fn cases_umbrella() {
+    assert_cases_clean(fb::Module::Umbrella);
 }
 
 #[test]
-fn corpus_umbrella_proxylogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-proxylogs.log"]);
+fn cases_cisco_ios() {
+    assert_cases_clean(fb::Module::Ios);
 }
 
 #[test]
-fn corpus_umbrella_auditlogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-auditlogs.log"]);
-}
-
-#[test]
-fn corpus_umbrella_iplogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-iplogs.log"]);
-}
-
-#[test]
-fn corpus_umbrella_dlplogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-dlplogs.log"]);
-}
-
-#[test]
-fn corpus_umbrella_intrusionlogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-intrusionlogs.log"]);
-}
-
-#[test]
-fn corpus_umbrella_cloudfirewalllogs() {
-    assert_corpus_clean(&["cisco_umbrella/log/test-umbrella-cloudfirewalllogs.log"]);
-}
-
-#[test]
-fn corpus_cisco_ios() {
-    assert_corpus_clean(fb::IOS_LOGS);
-}
-
-#[test]
-fn corpus_cisco_meraki() {
-    assert_corpus_clean(fb::MERAKI_LOGS);
+fn cases_cisco_meraki() {
+    assert_cases_clean(fb::Module::Meraki);
 }

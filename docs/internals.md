@@ -70,8 +70,8 @@ pure-VRL file plus its `timezones.csv` enrichment table. It is convenience
 data, not engine capability: opting in means pointing the standard
 `transforms.dir` and `enrichment_tables` config at those files. The engine
 carries no filebeat-specific code, and the integration tests
-(`tests/integration/filebeat_pipeline.rs`) drive the bundle with the real
-elastic/integrations pipeline test corpus, which doubles as a full-engine
+(`tests/integration/filebeat_pipeline.rs`) drive the bundle with the synthetic
+cases in `tests/fixtures/filebeat/cases.yaml`, which double as a full-engine
 workload.
 
 INTERIM: elastic compatibility is being replaced by `dfe-transform-elastic`

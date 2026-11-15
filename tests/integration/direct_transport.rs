@@ -37,7 +37,7 @@ use scalo::worker::{AdaptiveWorkerPool, BatchEngine, WorkerPoolConfig};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::filebeat_corpus as fb;
+use crate::filebeat_cases as fb;
 use crate::offline::binary;
 use crate::ports;
 

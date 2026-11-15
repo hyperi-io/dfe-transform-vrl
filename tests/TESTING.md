@@ -8,7 +8,7 @@ Unit tests run without any external infrastructure, embedded in the source files
 cargo nextest run --lib
 ```
 
-The integration tests in `tests/` run without a broker: VRL compilation, transforms, config, enrichment, the filebeat corpus, the direct transport on local ports, and the pipeline over scalo's in-memory transport.
+The integration tests in `tests/` run without a broker: VRL compilation, transforms, config, enrichment, the filebeat cases, the direct transport on local ports, and the pipeline over scalo's in-memory transport.
 
 The core tier is every test that is not `#[ignore]`: unit, integration, smoke, and the e2e tests that use a broker container scalo starts (`filebeat_kafka`, `held_acks`, `kafka_tls`). PR and push runs use it, and so does `hyperi-ci check`.
 
