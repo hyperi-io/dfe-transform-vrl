@@ -1,5 +1,5 @@
 # =============================================================================
-# dfe-transform-vrl — example configuration
+# dfe-transform-vrl -- example configuration
 # =============================================================================
 #
 # Copy to config.yaml and modify as needed.
@@ -7,7 +7,8 @@
 # Configuration cascade (highest to lowest priority):
 #   1. CLI args (--config, --log-level, etc.)
 #   2. Environment variables (DFE_TRANSFORM_VRL_*)
-#   3. .env file in the working directory (never a parent's)
+#   3. .env file in the working directory (never a parent's), read only when
+#      no --config is given
 #   4. Config file (this file)
 #   5. Hard-coded defaults
 
@@ -18,8 +19,8 @@ pipeline:
   name: "my-pipeline"
   # NOT APPLIED. Parsed and validated, then read by nothing -- the batch engine
   # takes its chunk size from batch_processing.max_chunk_size (see the bottom of
-  # this file), and the governed driver has no partial-batch timer. Setting
-  # either logs a warning at startup.
+  # this file), and the governed driver has no partial-batch timer. Changing
+  # either from its default logs a warning at startup.
   batch_size: 1000
   batch_timeout_ms: 100
 
@@ -94,7 +95,7 @@ pipeline:
 #   compression: "zstd"                # none, gzip, lz4, snappy, zstd
 #   max_buffer_bytes: 67108864         # 64 MiB producer buffer
 #   # Producer delivery timeout. Capped at 15000 while a direct source holds
-#   # its acknowledgements, so the report lands inside the 18 s hold; set
+#   # its acknowledgements, so the report lands inside the 18 s hold. Set
 #   # librdkafka_options message.timeout.ms to override the cap.
 #   message_timeout_ms: 300000
 #   sasl:
@@ -126,7 +127,7 @@ pipeline:
 
 # --- OPTIONAL: bundled DFE 2.1 filebeat-compat pipeline (INTERIM) ------------
 # Pre-canned pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki /
-# IOS / Umbrella). Being replaced by dfe-transform-elastic (beta) - see
+# IOS / Umbrella). Being replaced by dfe-transform-elastic - see
 # pipelines/filebeat/README.md before adopting. The stock image ships no
 # pipelines/ directory - copy or mount the two files from the repo's
 # pipelines/filebeat/ first, then point the generic knobs at them:
@@ -146,7 +147,7 @@ pipeline:
 # one match errors, and the table name must be a literal naming a table listed
 # here or the program fails to compile.
 #
-# key_columns index the lookup; a condition on any other column still filters,
+# key_columns index the lookup. A condition on any other column still filters,
 # it just does not use the index.
 #
 # schema coerces text columns, which is what makes a numeric comparison or a
@@ -175,12 +176,13 @@ pipeline:
 # -----------------------------------------------------------------------------
 # scalo's own settings -- /livez and /readyz are served by the metrics listener
 # -----------------------------------------------------------------------------
-# metrics, logger, scaling, worker_pool, batch_processing, self_regulation,
-# version_check and otel_tracing belong to scalo's config cascade, which reads
-# the file passed with --config as its settings layer, once at startup. They
-# take effect from this file when it is passed that way. A config.yaml found in
-# the working directory without --config reaches the wrapper only, and the
-# wrapper warns at startup for each scalo section in it.
+# metrics, logger, memory, scaling, worker_pool, batch_processing,
+# self_regulation, version_check and otel_tracing belong to scalo's config
+# cascade, which reads the file passed with --config as its settings layer, once
+# at startup. They take effect from this file when it is passed that way. A
+# config.yaml found in the working directory without --config reaches the
+# wrapper only, and the wrapper warns at startup for each of those sections in
+# it but memory.
 #
 # scaling:
 #   memory_gate_threshold: 0.8
@@ -209,5 +211,5 @@ pipeline:
 #   DFE_TRANSFORM_VRL_METRICS__OTEL__ENABLED=false
 #
 # batch_processing.max_chunk_size is the events-per-chunk dial the batch engine
-# actually reads. pipeline.batch_size above is NOT it -- see the "accepted but
-# not applied" list in the README.
+# actually reads. pipeline.batch_size above is NOT it -- see Reload in
+# docs/internals.md.
