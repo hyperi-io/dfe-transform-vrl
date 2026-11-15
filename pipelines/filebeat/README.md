@@ -1,15 +1,12 @@
-# Bundled pipeline: filebeat-compat (INTERIM)
+# Bundled pipeline: filebeat-compat (LEGACY)
 
-A pre-canned, opt-in VRL pipeline that keeps DFE 2.1 filebeat feeds working
+A pre-canned, opt-in VRL pipeline that keeps DFE/XDR 2.0 and 2.1 filebeat feeds working
 on dfe-transform-vrl. It is pure VRL plus one CSV enrichment table - no
 binary capability, no config surface. Use it if you want it, ignore it if
 you do not. It also doubles as an integration test workload for the engine
 (`tests/integration/filebeat_pipeline.rs`).
 
-> **INTERIM.** Elastic compatibility is being replaced by
-> `dfe-transform-elastic` (Rust-native). New integrations should NOT
-> build on this pipeline, and existing DFE 2.1 filebeat feeds should
-> plan to migrate to dfe-transform-elastic.
+> **LEGACY.** Backwards compatibility for DFE/XDR 2.0 and 2.1 filebeat feeds, frozen at the three Cisco modules below. It takes no new modules, fetches nothing from Elastic at build, test or run time, and is regenerated only from our own DFE 2.1 templates. New feeds use `dfe-transform-elastic`, and 2.0 and 2.1 feeds should plan to move there.
 
 ## What it covers
 

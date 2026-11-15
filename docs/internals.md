@@ -74,8 +74,7 @@ carries no filebeat-specific code, and the integration tests
 cases in `tests/fixtures/filebeat/cases.yaml`, which double as a full-engine
 workload.
 
-INTERIM: elastic compatibility is being replaced by `dfe-transform-elastic`
-(Rust-native). Wiring, routing behaviour, known limitations, and
+LEGACY: it keeps DFE/XDR 2.0 and 2.1 filebeat feeds working, takes no new modules, and new feeds use `dfe-transform-elastic`. Wiring, routing behaviour, known limitations, and
 regeneration tooling (`scripts/filebeat/`) are documented in
 [pipelines/filebeat/README.md](../pipelines/filebeat/README.md).
 
