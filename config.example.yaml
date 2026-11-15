@@ -125,7 +125,7 @@ pipeline:
 #   #   - "/etc/dfe-transform-vrl/transforms/02_enrich.vrl"
 #   #   - "/etc/dfe-transform-vrl/transforms/03_filter.vrl"
 
-# --- OPTIONAL: bundled DFE 2.1 filebeat-compat pipeline (INTERIM) ------------
+# --- OPTIONAL: bundled filebeat-compat pipeline (LEGACY, DFE/XDR 2.0 and 2.1) -
 # Pre-canned pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki /
 # IOS / Umbrella). Being replaced by dfe-transform-elastic - see
 # pipelines/filebeat/README.md before adopting. The stock image ships no
