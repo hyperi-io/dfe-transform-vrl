@@ -18,7 +18,7 @@ It is not a general transform host: a pipeline needing a Vector-native transform
 
 scalo's `BatchEngine::pipeline` drives `recv -> process -> send -> release`, including the held source acknowledgement and self-regulation. This crate supplies the `process` closure and the produce sink, plus the config, the VRL compiler and the enrichment registry.
 
-This diagram shows the parts inside dfe-transform-vrl that a block of records passes through.
+The batch engine hands each block to the process closure, which runs the compiled VRL program on the worker pool and passes the out-batch to the produce sink.
 
 ```mermaid
 flowchart LR

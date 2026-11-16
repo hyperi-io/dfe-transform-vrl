@@ -4,7 +4,7 @@ How a record moves through dfe-transform-vrl, and the settings behind each step.
 
 ## Data flow
 
-This diagram shows what the process closure does to each block scalo's batch engine hands it.
+The process closure parses each record from JSON, runs the compiled VRL program on it and serialises the result back to JSON, on the worker pool's threads.
 
 ```mermaid
 flowchart LR
