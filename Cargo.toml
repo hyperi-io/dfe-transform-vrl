@@ -33,7 +33,6 @@ path = "src/bin/pgo_driver.rs"
 required-features = ["pgo-driver"]
 
 [dependencies]
-# Async runtime
 tokio = { version = ">=1.54.1, <2", features = ["full"] }
 
 # CancellationToken, scalo's shutdown token type.
@@ -74,18 +73,15 @@ scalo = { version = ">=2.14.30, <3", features = [
 # Config-schema derivation. Same range as scalo so cargo unifies to one schemars.
 schemars = { version = ">=1.2.3, <2", default-features = false, features = ["std", "derive", "preserve_order"] }
 
-# VRL — Vector Remap Language (embedded transform engine). Built without its
-# env and network functions, so no transform can read the host environment or
-# reach the network. `enable_system_functions` stays for `parse_etld`, which the
-# filebeat program calls, and the compiler drops its `get_hostname`.
+# No env or network functions (docs/internals.md, VRL integration). `enable_system_functions`
+# stays for `parse_etld`, and the compiler drops its `get_hostname`.
 vrl = { version = ">=0.35.0, <0.36", default-features = false, features = [
     "compiler",
     "stdlib-base",
     "enable_crypto_functions",
     "enable_system_functions",
 ] }
-# Only for the `TimeZone::Named(Tz::UTC)` constant in the VRL runner —
-# same version range as vrl so cargo unifies to one chrono-tz.
+# For the `TimeZone::Named(Tz::UTC)` constant in the VRL runner. Same range as vrl so cargo unifies to one chrono-tz.
 chrono-tz = ">=0.10.4, <0.11"
 # `Value::Timestamp` is a `chrono::DateTime<Utc>`. Same range as vrl so cargo unifies to one chrono.
 chrono = ">=0.4.45, <0.5"
@@ -93,30 +89,24 @@ chrono = ">=0.4.45, <0.5"
 # CLI. No `env` feature: scalo's cascade binds env vars.
 clap = { version = ">=4.6.7, <5", features = ["derive"] }
 
-# Configuration
 figment = { version = ">=0.10.19, <0.11", features = ["env"] }
 
 # Metrics types (Counter, Gauge, Histogram) returned by scalo MetricsManager
 metrics = ">=0.24.6, <0.25"
 
-# Serialisation
 serde = { version = ">=1.0.229, <2", features = ["derive"] }
 serde_json = ">=1.0.154, <2"
 sonic-rs = ">=0.5.10, <0.6"
 
-# Error handling
 thiserror = ">=2.0.21, <3"
 anyhow = ">=1.0.104, <2"
 
-# Logging and tracing
 tracing = ">=0.1.44, <0.2"
 
-# Enrichment engine — high-performance lookups
 rustc-hash = ">=2.1.3, <3"
 arc-swap = ">=1.9.3, <2"
 csv = ">=1.4.0, <2"
 
-# Optional enrichment sources
 maxminddb = { version = ">=0.32.0, <0.33", optional = true }
 rusqlite = { version = ">=0.41.1, <0.42", features = ["bundled"], optional = true }
 

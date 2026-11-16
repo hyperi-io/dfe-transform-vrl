@@ -1,17 +1,10 @@
 # Bundled pipeline: filebeat-compat (LEGACY)
 
-A pre-canned, opt-in VRL pipeline that keeps DFE/XDR 2.0 and 2.1 filebeat feeds working
-on dfe-transform-vrl. It is pure VRL plus one CSV enrichment table - no
-binary capability, no config surface. Use it if you want it, ignore it if
-you do not. It also doubles as an integration test workload for the engine
-(`tests/integration/filebeat_pipeline.rs`).
+A pre-canned, opt-in VRL pipeline that keeps DFE/XDR 2.0 and 2.1 filebeat feeds working on dfe-transform-vrl. It is pure VRL plus one CSV enrichment table -- no binary capability, no config surface. It doubles as an integration test workload for the engine (`tests/integration/filebeat_pipeline.rs`).
 
-> **LEGACY.** Backwards compatibility for DFE/XDR 2.0 and 2.1 filebeat feeds, frozen at the three Cisco modules below. It takes no new modules, fetches nothing from Elastic at build, test or run time, and is regenerated only from our own DFE 2.1 templates. New feeds use `dfe-transform-elastic`, and 2.0 and 2.1 feeds should plan to move there.
+> **LEGACY.** Backwards compatibility for DFE/XDR 2.0 and 2.1 filebeat feeds, frozen at the three Cisco modules below. It takes no further modules, fetches nothing from Elastic at build, test or run time, and is regenerated from the DFE 2.1 templates and nothing else. Any other feed uses `dfe-transform-elastic`, and 2.0 and 2.1 feeds should plan to move there.
 
-## What it covers
-
-Single-file port of the DFE 2.1 Vector templates (dfe-vector-templates
-`src/core_templates`, the `14*-transform-filebeat-*` family):
+It is a single-file port of the DFE 2.1 Vector templates (dfe-vector-templates `src/core_templates`, the `14*-transform-filebeat-*` family):
 
 | DFE 2.1 template | Module |
 |---|---|
@@ -19,11 +12,11 @@ Single-file port of the DFE 2.1 Vector templates (dfe-vector-templates
 | 141-transform-filebeat-cisco-ios-logs | Cisco IOS syslog |
 | 143..149-transform-filebeat-cisco-umbrella-*-logs | Cisco Umbrella exports (audit, cloud firewall, dlp, dns, intrusion, ip, proxy) |
 
-The seven umbrella templates were one body split across files (Vector
-large-VRL workarounds) differing only in a hardcoded `.log.file.path` seed.
-They collapse here into one body behind log-type detection.
+The seven umbrella templates were one body split across files (Vector large-VRL workarounds), differing in their pipeline identifier and a hardcoded `.log.file.path` seed. They collapse here into one body behind log-type detection.
 
-## Opting in
+`scripts/filebeat/extract.py` generated it from dfe-vector-templates `origin/main` @ `96eb306`: it checks the seven umbrella bodies match once those two are normalised, before collapsing them, strips geoip, unescapes Vector `$$` and prepends `scripts/filebeat/prologue.vrl`. The tests replay the synthetic lines in `tests/fixtures/filebeat/cases.yaml`. Treat `filebeat.vrl` as generated-then-patched: fixes belong here (it is the shipping artefact), but substantial rework should go back through the template extraction so the umbrella dedupe stays verifiable.
+
+To opt in, point the standard config at the bundle:
 
 ```yaml
 # config.yaml
@@ -36,17 +29,15 @@ enrichment_tables:
     key_columns: ["abbreviation"]
 ```
 
-Both files are in this directory. Mount or copy them wherever the pod can
-read them. Nothing else is needed - the engine treats this like any other
-`transforms.dir`.
+Both files are in this directory. Mount or copy them wherever the pod can read them. Nothing else is needed -- the engine treats this like any other `transforms.dir`.
 
-Events carry the DFE 2.1 Kafka fields: `{message, tags, timestamp}`. Two
+Events have the DFE 2.1 Kafka fields: `{message, tags, timestamp}`. Two
 optional event fields drive ios/meraki timezone handling: `._conf.tz_offset`
 (an offset like `-0600` or an abbreviation from `timezones.csv`) and
 `._conf.tz_map` (a list of `{tz_short, tz_long}` mappings from log
 abbreviations to IANA zone names). Without them, meraki still derives
 `@timestamp` from the log line's epoch, and ios interprets zone-less
-timestamps as UTC - the knobs override the zone interpretation, they do
+timestamps as UTC -- the knobs override the zone interpretation, they do
 not gate timestamping.
 
 ## How routing works
@@ -64,29 +55,31 @@ per event, so this port detects the module first:
    count: 7 cols = ip, 9 with the timestamp in column 1 = audit, 13 (or
    10-12 with the `<n> (TYPE)` query-type marker in column 6) = dns, 14/16 =
    cloud firewall, 17 = intrusion when columns 3-4 are numeric gid/sid else
-   dlp, >=20 = proxy. Every rule but audit also requires a timestamp in
+   dlp, >=20 = proxy. Every rule but audit needs a timestamp in
    column 0
 5. anything else: tagged `filebeat_unmatched` and passed through unchanged
    (the 2.1 fan-out silently dropped these)
 
 Detection picks the branch, and parsing failures INSIDE the chosen branch
 still error the event out (dropped and counted), matching the 2.1
-`drop_on_abort` behaviour. Only events no rule matches pass through.
+`drop_on_abort` behaviour. Events no rule matches are the ones that pass through.
 
-## Deliberate departures from DFE 2.1
+## Where it differs
+
+It departs from DFE 2.1 on purpose in four places:
 
 - No geoip enrichment. dfe-loader owns geoip in the current pipeline
   layout, so the `geoip_city`/`geoip_asn` lookups are stripped.
 - Unmatched events pass through tagged, never silently dropped.
 - `.log.file.path` is rewritten to `/filebeat/cisco_umbrella/<type>`
-  in the umbrella branch (2.1 also overwrote it, with `/test/path/<type>`).
+  in the umbrella branch (2.1 overwrote it as well, with `/test/path/<type>`).
 - IANA zone names resolve correctly in the ios branch. The 2.1
   templates pushed a `tz_map`-mapped name like `Australia/Sydney` into the
   abbreviation CSV lookup, which always failed and dropped the event. The
   port routes slash-bearing zone names through `parse_timestamp`'s
   `timezone:` argument (DST-aware via the tz database).
 
-## Known limitations
+Its output differs from elastic's in these places:
 
 - `user_agent` classification follows VRL's parser, which differs
   cosmetically from elastic's ("Mac OSX" vs "Mac OS X"). A
@@ -95,20 +88,8 @@ still error the event out (dropped and counted), matching the 2.1
   ordered), and elastic preserves raw order. Same parameters, different order.
 - `url.path` of a URL with no path is `/`, where elastic keeps it empty.
 - `dns.question.registered_domain` uses the full public-suffix list
-  including the private section, and elastic uses the ICANN section only.
-- Ambiguous timezone abbreviations (the CSV carries duplicates such as
-  ADT, AMT, AST, CST, IST) never resolve - the 2.1 "ambiguous timezone
+  including the private section, and elastic uses the ICANN section alone.
+- Ambiguous timezone abbreviations (the CSV has duplicates such as
+  ADT, AMT, AST, CST, IST) never resolve -- the 2.1 "ambiguous timezone
   abbreviation" path is preserved.
 - A Cisco IOS timestamp with no year takes the current year.
-
-## Provenance and regeneration
-
-Generated from dfe-vector-templates `origin/main` @ `96eb306` by
-`scripts/filebeat/extract.py` (verifies the seven umbrella templates are
-identical before collapsing them, strips geoip, unescapes Vector `$$`,
-prepends `scripts/filebeat/prologue.vrl`). The tests replay the synthetic
-lines in `tests/fixtures/filebeat/cases.yaml`.
-
-Treat `filebeat.vrl` as generated-then-patched: fixes belong here (it is
-the shipping artefact), but substantial rework should go back through the
-template extraction so the umbrella dedupe stays verifiable.
