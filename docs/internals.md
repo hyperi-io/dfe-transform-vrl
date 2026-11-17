@@ -123,22 +123,9 @@ keeps for `parse_etld`. A program calling `get_env_var`, `get_hostname`,
 `http_request`, `dns_lookup` or `reverse_dns` fails to compile as a call to an
 undefined function.
 
-### Bundled Pipeline: filebeat-compat (INTERIM)
+### Bundled pipeline: filebeat-compat
 
-`pipelines/filebeat/` ships a pre-canned, opt-in port of the DFE 2.1 Vector
-filebeat templates (Cisco Meraki logs, Cisco IOS, Cisco Umbrella) as one
-pure-VRL file plus its `timezones.csv` enrichment table. It is convenience
-data, not engine capability: opting in means pointing the standard
-`transforms.dir` and `enrichment_tables` config at those files. The engine
-carries no filebeat-specific code; the integration tests
-(`tests/integration/filebeat_pipeline.rs`) drive the bundle with the real
-elastic/integrations pipeline test corpus, which doubles as a full-engine
-workload.
-
-INTERIM: elastic compatibility is being replaced by `dfe-transform-elastic`
-(Rust-native, in beta). Wiring, routing behaviour, known limitations, and
-regeneration tooling (`scripts/filebeat/`) are documented in
-[pipelines/filebeat/README.md](../pipelines/filebeat/README.md).
+`pipelines/filebeat/` is a legacy, opt-in bundle that keeps DFE 2.0 and 2.1 filebeat feeds (Cisco Meraki, IOS, Umbrella) working. It is one VRL file plus `timezones.csv`, and the engine has no code for it. Opting in means pointing the standard `transforms.dir` and `enrichment_tables` config at those files. Any other feed uses dfe-transform-elastic. [pipelines/filebeat/README.md](../pipelines/filebeat/README.md) has the wiring.
 
 ## Memory Budget
 
