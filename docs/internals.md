@@ -1,10 +1,16 @@
-# Internals
+# Process closure
 
-How a record moves through dfe-transform-vrl, and the settings behind each step. [architecture.md](architecture.md) covers why the service is built this way and the invariants it keeps.
+The process closure is the part of [dfe-transform-vrl](architecture.md) that turns each block of records into an out-batch: parse, run the VRL program, serialise.
 
-## Data flow
+| | |
+|---|---|
+| Repo | [hyperi-io/dfe-transform-vrl](https://github.com/hyperi-io/dfe-transform-vrl), `src/pipeline.rs`, `src/engine/` and `src/enrichment/` |
+| Image and chart | `ghcr.io/hyperi-io/dfe-transform-vrl`, and the thin chart each release assembles from `src/deployment.rs` |
+| Config reference | `transforms`, `enrichment_tables` and `batch_processing` in [config.example.yaml](../config.example.yaml), and [reference/configuration.md](reference/configuration.md) |
+| Endpoints | Push listener on 6000 on the direct transport. Metrics and health on 9090 |
+| Metrics | `records_received_total`, `records_delivered_total`, `records_error_total{stage}`, `abort_total` on `:9090/metrics` |
 
-The process closure parses each record from JSON, runs the compiled VRL program on it and serialises the result back to JSON, on the worker pool's threads.
+It runs on the worker pool's threads, so a block's records run in parallel. The batch engine around it decides when a block arrives and when it is released.
 
 ```mermaid
 ---
@@ -52,25 +58,38 @@ config:
     .ui .label-icon{color:#D9480F}
     .ext .label-icon{color:#64748B}
 ---
-flowchart LR
+flowchart TB
     accTitle: L4 Detail -- Process closure
     accDescr: The batch engine hands a block of records to the process closure, the VRL compiler gives it the compiled program and the worker pool gives it threads. Inside, each record is parsed from JSON, run through the VRL program and serialised back to JSON. The out-batch goes to the produce sink.
 
-    engine["<b>scalo batch engine</b>"]
-    compiler["<b>VRL compiler</b>"]
-    pool["<b>scalo worker pool</b>"]
-
-    subgraph process["Process closure"]
+    subgraph REC["Records in"]
         direction LR
-        parse["<b>Parse JSON</b>"] --> run["<b>Run VRL program</b>"] --> serialise["<b>Serialise JSON</b>"]
+        engine("<b>Batch engine</b><br/><span>a block of records</span>")
     end
 
-    produce["<b>Produce sink</b>"]
+    subgraph RUN["Runs with"]
+        direction LR
+        compiler("<b>VRL compiler</b><br/><span>the program</span>")
+        pool("<b>Worker pool</b><br/><span>threads</span>")
+    end
 
-    engine -->|block| process
-    compiler -.->|program| process
-    pool -.->|threads| process
-    process -->|out-batch| produce
+    subgraph PC["Process closure"]
+        direction LR
+        parse("<b>Parse JSON</b><br/><span>sonic-rs</span>")
+        run("<b>Run VRL program</b><br/><span>per record</span>")
+        serialise("<b>Serialise JSON</b><br/><span>survivors only</span>")
+        parse --> run --> serialise
+    end
+
+    subgraph OUTB["Records out"]
+        direction LR
+        produce("<b>Produce sink</b><br/><span>the out-batch</span>")
+    end
+
+    REC -->|block| PC
+    RUN -.->|program, threads| PC
+    PC -->|out-batch| OUTB
+  class engine,compiler,pool,parse,run,serialise,produce part
   classDef ext fill:#F4F6F8,stroke:#94A3B8,stroke-width:1.5px,stroke-dasharray:5 4,color:#0F172A
   classDef ingest fill:#FFFFFF,stroke:#0E8A7D,stroke-width:3px,color:#0F172A
   classDef xform fill:#FFFFFF,stroke:#7B4FB0,stroke-width:3px,color:#0F172A
@@ -82,41 +101,35 @@ flowchart LR
   classDef error fill:#FFFFFF,stroke:#C2410C,stroke-width:3px,color:#0F172A
   classDef control fill:#FFFFFF,stroke:#334155,stroke-width:3px,color:#0F172A
   classDef part fill:#FFFFFF,stroke:#94A3B8,stroke-width:1.5px,color:#0F172A
-  class engine,compiler,pool,parse,run,serialise,produce part
-  style process fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style REC fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style RUN fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style PC fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
+  style OUTB fill:none,stroke:#0072B2,stroke-width:1.5px,stroke-dasharray:6 4
 ```
 
-*Figure 2. L4 Detail -- Process closure. Dotted arrows bring what the closure runs with, not records.* Up: [L3 Components -- dfe-transform-vrl](architecture.md#who-owns-the-loop).
+*Figure 1. L4 Detail -- Process closure. The dotted arrow brings what the closure runs with, not records.* Up: [L3 Components -- dfe-transform-vrl](architecture.md).
 
-`source.transport` and `sink.transport` are chosen apart, so Kafka in and gRPC out, or the reverse, is valid. The closure is the same for every pair:
+## How it works
+
+1. `sonic_rs::from_slice` parses each payload straight into a VRL `Value`. A record that isn't JSON, or nests deeper than sonic-rs accepts, is dropped.
+2. The compiled program runs on the value in place.
+3. `sonic_rs::to_vec` serialises each survivor, keyed by the sink topic.
+4. The batch engine sends the out-batch with `TransportSender::send_batch` and releases the block once the send returns `Ok`.
+
+A record that doesn't parse is counted in `records_error_total{stage="deserialise"}`, logged at debug (sampled) and reported to the security log by reason, with nothing from the record. Its block releases as dropped, so it is not redelivered.
+
+The compiler runs once at startup, against VRL's stdlib less `get_hostname`, plus the two enrichment functions. The `.vrl` files in `transforms.dir` load in filename order, then `transforms.files` in the order given, and concatenate into one program, as Vector's `remap` does. A compile error quotes the failing line and stops startup.
+
+`abort` drops a record and counts it in `abort_total`. Any other runtime error drops it and counts it in `records_error_total{stage="transform"}`. A panic inside VRL, which grok and arithmetic functions can raise on record data, fails that record, not the process, because the release profile unwinds. A zone-less `parse_timestamp` reads UTC on every node.
+
+## Interfaces
 
 | Transport | As the source | As the sink |
 |---|---|---|
 | `bus` (or `kafka`) | A Kafka consumer | A Kafka producer |
-| `direct` (or `grpc`) | A Push listener | A gRPC client, to the next stage's listener |
+| `direct` (or `grpc`) | A Push listener on 6000 | A gRPC client to the next stage's listener |
 
-Per record:
-
-1. `sonic_rs::from_slice` parses the payload straight into a VRL `Value`, which is serde-compatible. A record that is not JSON, or nests deeper than sonic-rs accepts, is dropped.
-2. The compiled program runs on the value in place, in parallel on scalo's worker pool.
-3. `sonic_rs::to_vec` serialises each survivor back to JSON, keyed by the sink topic.
-4. The loop sends the whole out-batch with `TransportSender::send_batch`.
-
-Release is batch-level. scalo's batch engine hands a block of records to the transform, sends the result, and releases the block's source offsets once the batch send returns Ok. Under that, scalo's Kafka transport holds each source offset it handed out and commits a partition up to its lowest unreleased one, so the cumulative commit never passes a record not yet released.
-
-If the process crashes between send and release, the whole block is re-consumed and re-processed (at-least-once, not exactly-once). VRL transforms must be idempotent.
-
-JSON is the one payload format. MessagePack, supported in DFE/XDR 2.0 and 2.1, is deprecated in DFE 2.2 and no longer accepted. JSON parses with SIMD in sonic-rs, and the Kafka sink compresses with `sink.compression`, zstd by default. A record that does not parse as JSON is removed from its block, counted in `records_error_total{stage="deserialise"}`, logged at debug level with the parse error (sampled), and reported to the security log by reason, with nothing from the record. The block's source is then released `Dropped`, so the record is not redelivered.
-
-## VRL integration
-
-`compile_vrl` compiles the source once, at startup, against VRL's stdlib less `get_hostname`, plus the two enrichment functions, with the enrichment registry in the compile config. A compile error quotes the line that failed and stops startup. The compiled `Program` is reused for every event, with no per-event compilation.
-
-`run_vrl` wraps each event in a `TargetValueRef` with an empty metadata object, and resolves it with UTC as the default timezone, so a zone-less `parse_timestamp` reads the same on every node. `abort` drops the event and counts it as filtered. Any other runtime error drops it and counts it in `records_error_total{stage="transform"}`. A panic inside VRL, which its grok and arithmetic functions can raise on record data, fails that record rather than the process, because the release profile unwinds.
-
-vrl is built without its `enable_env_functions` and `enable_network_functions` features, and `compile_vrl` drops `get_hostname` from the system functions it keeps for `parse_etld`. A program calling `get_env_var`, `get_hostname`, `http_request`, `dns_lookup` or `reverse_dns` fails to compile as a call to an undefined function. `parse_proto` and `encode_proto` stay, and read the descriptor file their literal path names at compile time. `validate_json_schema` stays as well, and reads its schema file when the first event reaches the call, keeping it once it compiles. A missing or invalid schema passes compilation and then fails each such event as a transform error.
-
-Transform files contain raw VRL source code (not Vector YAML):
+Transform files hold raw VRL, not Vector YAML:
 
 ```vrl
 # transforms/01_parse.vrl
@@ -128,148 +141,41 @@ del(.message)
 .processed_at = now()
 ```
 
-The `.vrl` files in `transforms.dir` load in sorted filename order, then the paths in `transforms.files` in the order given, and they concatenate into a single VRL program. This matches Vector's remap transform, where multiple VRL statements execute in sequence.
+`get_env_var`, `get_hostname`, `http_request`, `dns_lookup` and `reverse_dns` fail to compile as undefined functions. `parse_proto` and `encode_proto` read their descriptor file at compile time. `validate_json_schema` reads its schema when the first record reaches the call, and a bad schema then fails each such record as a transform error.
 
-`pipelines/filebeat/` ships a legacy, opt-in port of the DFE 2.1 Vector filebeat templates (Cisco Meraki logs, Cisco IOS, Cisco Umbrella) as one pure-VRL file plus its `timezones.csv` enrichment table. It keeps DFE/XDR 2.0 and 2.1 filebeat feeds working, takes no further modules, and any other feed uses dfe-transform-elastic. To use it, point the standard `transforms.dir` and `enrichment_tables` config at those files. The engine has no filebeat-specific code, and the integration tests (`tests/integration/filebeat_pipeline.rs`) drive the bundle with the synthetic cases in `tests/fixtures/filebeat/cases.yaml`, which double as a full-engine workload. Wiring, routing, limitations and the regeneration tooling (`scripts/filebeat/`) are in [pipelines/filebeat/README.md](../pipelines/filebeat/README.md).
+Enrichment tables are read with `get_enrichment_table_record` and `find_enrichment_table_records`. File, STIX and SQLite tables load into a hash map on their key columns and swap atomically, so a case-sensitive equality lookup on the key reads one bucket and any other lookup scans the rows. MMDB tables use their reader. A table with a `refresh` block reloads in the background, no more than once every 60 s. A table can't appear after startup, because the program checks its lookups against the tables when it compiles.
 
-## Memory budget
+`pipelines/filebeat/` is a legacy, opt-in bundle that keeps DFE 2.0 and 2.1 filebeat feeds (Cisco Meraki, IOS, Umbrella) working. It is one VRL file plus `timezones.csv`, and the engine has no code for it. Any other feed uses dfe-transform-elastic. [pipelines/filebeat/README.md](../pipelines/filebeat/README.md) has the wiring.
 
-The wrapper bounds the buffers it holds. [config-schema.yaml](config-schema.yaml) has the defaults for the wrapper's keys, and scalo's `BatchProcessingConfig` the default chunk size.
+## Scaling and failure
 
-| Component | Configuration |
-|-----------|--------------|
-| Consumer prefetch | `source.max_buffer_bytes`, set as librdkafka's `queued.max.messages.kbytes` |
-| Transform chunk | `batch_processing.max_chunk_size`, a scalo section, from the `--config` file or the env layer |
-| Producer queue | `sink.max_buffer_bytes`, set as librdkafka's `queue.buffering.max.kbytes` |
-| Total pod memory | The container memory limit, with its chart default set in `src/deployment.rs::contract()` |
+The wrapper bounds the buffers it holds:
 
-The consumer and producer buffers have to fit within the pod memory limit beside the binary, the runtime, the compiled program and the enrichment tables. A full producer queue comes back from the send as backpressure, and the loop retries that block before it reads another, so intake waits on the sink. `source.max_buffer_bytes` sets librdkafka's prefetch threshold, clamped and overridable through `source.librdkafka_options`, and a single fetch can go past it. Under memory pressure scalo's governor pauses the assigned partitions, and on the direct transport the listener rejects pushes `UNAVAILABLE`.
+| Buffer | Setting |
+|---|---|
+| Consumer prefetch | `source.max_buffer_bytes`, librdkafka's `queued.max.messages.kbytes` |
+| Transform chunk | `batch_processing.max_chunk_size`, a scalo section |
+| Producer queue | `sink.max_buffer_bytes`, librdkafka's `queue.buffering.max.kbytes` |
+| Pod memory | The container limit, with the chart default in `src/deployment.rs` |
 
-## Comparison: dfe-transform-vrl vs dfe-transform-vector
+Those buffers, the compiled program and the enrichment tables share the pod's limit. A full producer queue comes back as backpressure, and the loop retries that block before reading another. A single fetch can go past the prefetch threshold. Under memory pressure scalo's governor pauses the assigned partitions without leaving the consumer group, and on the direct transport the listener answers `UNAVAILABLE`.
 
-| Aspect | dfe-transform-vrl | dfe-transform-vector |
-|--------|-------------------|---------------------|
-| Transform engine | VRL crate (in-process) | Vector subprocess |
-| Kafka source/sink | scalo's `KafkaTransport` over rdkafka (wrapper-controlled) | Vector-managed |
-| Memory control | Bounded consumer and producer buffers, scalo's memory guard | None (Vector unbounded) |
-| Supported transforms | VRL | All Vector transforms |
-| Container image size | Smaller (Rust binary) | Larger (Rust + Vector) |
-| Process model | Single process | Wrapper + subprocess |
-| Startup time | Fast (compile VRL) | Slower (spawn + healthcheck Vector) |
-| Crash recovery | Restart binary | Restart subprocess + binary |
+Compilation is the one startup cost that scales with the data. `engine::budget` reads the container limit before compiling and refuses a start below the floor, naming the program size, the limit and the floor. Without it the kernel kills the process mid-compile, an exit-137 loop with nothing in the log.
 
-Use dfe-transform-vrl for VRL-only transforms (the common case), memory-constrained pods and high-density deployments. Use dfe-transform-vector for pipelines needing Vector-native transforms (`lua`, `aggregate`, `dedupe`, `throttle`, `sample`), or complex multi-source/sink routing.
+A Push is answered once its records are delivered. A recoverable send failure is retried for at most 18 s, then answered `UNAVAILABLE`. The next hop gets at most 15 s of that. `source.acknowledgements.enabled: false` answers at receipt, and a crash then loses what was answered.
 
-## Reload
+## Key metrics
 
-`ConfigReloader` (file polling + SIGHUP) re-reads and re-validates the file and swaps `SharedConfig<HotConfig>`. A bad edit logs `Config reload failed, keeping current config` and counts in `config_reloads_total{result="error"}`, and the service keeps running. The reloadable subset has three fields, and the pipeline reads none of them:
+| Metric | Healthy when |
+|---|---|
+| `records_received_total` and `records_delivered_total` | Delivered tracks received, less what VRL drops |
+| `records_error_total{stage}` | Flat. `deserialise` is bad input, `transform` is a program error |
+| `abort_total` | Matches what the program means to filter |
+| `execute_duration_seconds` | Steady. A climb is a heavier program or bigger records |
+| `pipeline_idle` | 0 once a source binds the transform |
 
-| Field | What it would control | State |
-|-------|----------------------|-------|
-| `pipeline.batch_size` | Events per transform chunk | not applied -- the chunk size is `batch_processing.max_chunk_size`, a scalo section |
-| `pipeline.batch_timeout_ms` | Max wait before flushing partial batch | not applied -- no such timer |
-| `sink.key_field` | Kafka partition key path | not applied -- scalo-rs#37 |
+## Related
 
-`config::INERT_SETTINGS` lists those three and `source.commit_interval_ms`, which the production Kafka profile leaves unread because librdkafka auto-commit is off and the engine commits after each sink ack. The wrapper warns at startup for each one a deployment has moved off its default.
-
-The fields below are bound to connections, compiled programs, or server sockets set up at startup. Changing them needs a pod restart, and the chart rolls the pods: a config change alters the `checksum/config` annotation on the pod template.
-
-| Field | Why |
-|-------|-----|
-| `pipeline.name` | The producer's `client.id` and the log fields. The consumer group is `source.group_id` |
-| `source.*` | rdkafka consumer or Push listener: connection, subscription, auth, TLS, buffers |
-| `sink.transport`, `sink.endpoint` | The sink built at startup |
-| `sink.brokers` | rdkafka producer connection |
-| `sink.topic` | Output topic (changing mid-stream risks data loss) |
-| `sink.compression` | rdkafka `compression.type` |
-| `sink.sasl.*` / `sink.tls.*` | Security protocol |
-| `sink.max_buffer_bytes` | rdkafka `queue.buffering.max.kbytes` |
-| `sink.librdkafka_options` | librdkafka `ClientConfig` |
-| `transforms.*` | VRL programs compiled at startup |
-| `enrichment_tables` | Tables loaded at startup, and the compiled program checks its lookups against them |
-| `dlq.*` | The dead-letter queue spawned at startup |
-
-## Operating notes
-
-The transform's sections are `pipeline`, `source`, `sink`, `transforms`, `enrichment_tables` and `dlq`, and [config-schema.yaml](config-schema.yaml) lists every key in them. `--config` is the one way to name the file: `DFE_TRANSFORM_VRL_CONFIG` reaches neither the wrapper nor scalo, and with no `--config` the wrapper reads `config.yaml` or `config.yml` from the working directory.
-
-The big dials have flat env var overrides for K8s. These are every flat name `apply_flat_env` in `src/config/loader.rs` reads:
-
-| Env Var | Config Field |
-|---------|-------------|
-| `DFE_TRANSFORM_VRL_PIPELINE_NAME` | `pipeline.name` |
-| `DFE_TRANSFORM_VRL_KAFKA_SASL_USERNAME` | `source.sasl.username` + `sink.sasl.username` |
-| `DFE_TRANSFORM_VRL_KAFKA_SASL_PASSWORD` | `source.sasl.password` + `sink.sasl.password` |
-| `DFE_TRANSFORM_VRL_KAFKA_SASL_MECHANISM` | `source.sasl.mechanism` + `sink.sasl.mechanism` |
-| `DFE_TRANSFORM_VRL_KAFKA_SECURITY_PROTOCOL` | `source.tls.enabled` + `sink.tls.enabled`, set true when the value contains `SSL`, never set false |
-| `DFE_TRANSFORM_VRL_SOURCE_TRANSPORT` | `source.transport` (`bus`, `kafka`, `direct` or `grpc`) |
-| `DFE_TRANSFORM_VRL_SOURCE_LISTEN` | `source.listen` |
-| `DFE_TRANSFORM_VRL_SOURCE_BROKERS` | `source.brokers` |
-| `DFE_TRANSFORM_VRL_SOURCE_TOPICS` | `source.topics` |
-| `DFE_TRANSFORM_VRL_SOURCE_GROUP_ID` | `source.group_id` |
-| `DFE_TRANSFORM_VRL_SOURCE_SASL_USERNAME` | `source.sasl.username` |
-| `DFE_TRANSFORM_VRL_SOURCE_SASL_PASSWORD` | `source.sasl.password` |
-| `DFE_TRANSFORM_VRL_SINK_TRANSPORT` | `sink.transport` (`bus`, `kafka`, `direct` or `grpc`) |
-| `DFE_TRANSFORM_VRL_SINK_ENDPOINT` | `sink.endpoint` |
-| `DFE_TRANSFORM_VRL_SINK_BROKERS` | `sink.brokers` |
-| `DFE_TRANSFORM_VRL_SINK_TOPIC` | `sink.topic` |
-| `DFE_TRANSFORM_VRL_SINK_KEY_FIELD` | `sink.key_field` |
-| `DFE_TRANSFORM_VRL_SINK_COMPRESSION` | `sink.compression` |
-| `DFE_TRANSFORM_VRL_SINK_SASL_USERNAME` | `sink.sasl.username` |
-| `DFE_TRANSFORM_VRL_SINK_SASL_PASSWORD` | `sink.sasl.password` |
-| `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` | `transforms.dir` |
-
-An empty value reads as unset. Every other key of the same sections takes the double-underscore form, `DFE_TRANSFORM_VRL_SINK__TOPIC` for `sink.topic`, and a flat name outranks it.
-
-The chart mounts the Kafka Secret's `username` and `password` into both endpoint pairs, and its `sasl.mechanism` (`PLAIN`, `SCRAM-SHA-512`) into `KAFKA_SASL_MECHANISM`. Outside the chart the shared `KAFKA_SASL_*` names reach both endpoints, and the per-endpoint names override them.
-
-Either half turns SASL on, an enabled block still missing one once the env layer has run stops startup, and the password is redacted on every output path (`x-scalo-secret` + `writeOnly` in the emitted schema).
-
-For Kafka over TLS with a private CA: `tls.ca_cert_file` is a path, and the chart mounts no certificate file. Put the CA's PEM text in the rendered config instead:
-
-```yaml
-config:
-  source:
-    tls:
-      enabled: true
-    librdkafka_options:
-      ssl.ca.pem: |
-        -----BEGIN CERTIFICATE-----
-        ...
-        -----END CERTIFICATE-----
-```
-
-The same two keys go under `sink`. A CA is public, so a ConfigMap can hold it. Mutual TLS is not supported through the chart, which mounts no client key. KEDA scales on CPU and opens no Kafka connection, so it needs no CA.
-
-scalo's settings share the config file. `metrics`, `logger`, `memory`, `scaling`, `worker_pool`, `batch_processing`, `self_regulation`, `version_check` and `otel_tracing` are resolved by scalo, not by the wrapper. scalo reads the file given with `--config` as its settings layer, once at startup, so those sections take effect from the mounted `config.yaml` beside the wrapper's:
-
-```yaml
-scaling:
-  memory_gate_threshold: 0.8
-batch_processing:
-  max_chunk_size: 10000
-```
-
-A `config.yaml` picked up from the working directory with no `--config` is read by the wrapper alone, so a scalo section in it changes nothing. The wrapper warns at startup for each section `config::SCALO_CASCADE_SECTIONS` lists, `memory` included. Pass the file with `--config`.
-
-The env layer outranks the file, and there the section nests on a **double** underscore:
-
-```bash
-METRICS_ADDR=0.0.0.0:9090          # or DFE_TRANSFORM_VRL_METRICS__ADDRESS
-LOG_LEVEL=debug                    # or DFE_TRANSFORM_VRL_LOGGER__LEVEL
-LOG_FORMAT=json                    # or DFE_TRANSFORM_VRL_LOGGER__FORMAT
-DFE_TRANSFORM_VRL_SCALING__MEMORY_GATE_THRESHOLD=0.8
-DFE_TRANSFORM_VRL_BATCH_PROCESSING__MAX_CHUNK_SIZE=10000
-DFE_TRANSFORM_VRL_OTEL_TRACING__ENABLED=false    # OTLP span export, on by default
-DFE_TRANSFORM_VRL_METRICS__OTEL__ENABLED=false   # OTLP metric push, on by default
-```
-
-A single underscore (`DFE_TRANSFORM_VRL_METRICS_ADDRESS`) produces a flat key that matches no section and is ignored, and that spelling warns as well. The memory guard is the exception: scalo reads `DFE_TRANSFORM_VRL_MEMORY_LIMIT_BYTES`, `DFE_TRANSFORM_VRL_MEMORY_PRESSURE_THRESHOLD` and `DFE_TRANSFORM_VRL_MEMORY_CGROUP_HEADROOM` on a single underscore.
-
-## Helm chart
-
-No chart is committed here. At release, hyperi-ci runs the binary's `generate-artefacts` for the deployment contract and assembles a thin chart from it on the scalo-service library chart, at the version `release.helm.library` names in `.hyperi-ci.yaml`. Keep that version at the scalo version in `Cargo.toml`: a library renders the contract version its scalo release writes and no other.
-
-To see the chart a release would ship, build the binary and run `hyperi-ci chart assemble --binary target/debug/dfe-transform-vrl --image ghcr.io/hyperi-io/dfe-transform-vrl:<tag>@sha256:<digest> --version <version>`. It prints the chart directory it wrote.
-
-The ScaledObject scales on CPU alone, because `contract()` sets `KafkaLagTrigger::disabled()`. Consumer-group lag rises when a downstream stage breaks, and more replicas cannot fix that. A deployment adds a trigger with the library's `keda.extraTriggers` value.
+- [Configuration](reference/configuration.md), env overrides, Kafka TLS, what reloads and the chart
+- [dfe-transform-vector](https://github.com/hyperi-io/dfe-transform-vector), for Vector's transforms beyond `remap`
+- [tests/TESTING.md](../tests/TESTING.md), the test tiers
