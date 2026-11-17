@@ -63,14 +63,15 @@ Outside the image, set `dlq.file.path` to a writable directory. The default, `/v
 
 ## Configuration
 
-[config.example.yaml](config.example.yaml) is the annotated reference, and [docs/config-schema.yaml](docs/config-schema.yaml) lists every key of the transform's sections with its type and default. The big dials have flat environment overrides for Kubernetes, `DFE_TRANSFORM_VRL_SOURCE_BROKERS`, `DFE_TRANSFORM_VRL_SINK_TOPIC`, `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` and the SASL pair among them. The whole list, Kafka over TLS with a private CA and the scalo sections that share the file on a double underscore are under [Operating notes](docs/internals.md#operating-notes) in docs/internals.md, and the settings that parse but reach nothing under [Reload](docs/internals.md#reload).
+[config.example.yaml](config.example.yaml) is the annotated reference, and [docs/config-schema.yaml](docs/config-schema.yaml) lists every key of the transform's sections with its type and default. The big dials have flat environment overrides for Kubernetes, `DFE_TRANSFORM_VRL_SOURCE_BROKERS`, `DFE_TRANSFORM_VRL_SINK_TOPIC`, `DFE_TRANSFORM_VRL_TRANSFORMS_DIR` and the SASL pair among them. The whole list, Kafka over TLS with a private CA and the scalo sections that share the file on a double underscore are under [Operating notes](docs/reference/configuration.md#operating-notes) in docs/reference/configuration.md, and the settings that parse but reach nothing under [Reload](docs/reference/configuration.md#reload).
 
 `pipelines/filebeat/` ships a legacy pure-VRL port of the DFE 2.1 filebeat templates (Cisco Meraki, IOS, Umbrella) with its `timezones.csv` table, kept for DFE/XDR 2.0 and 2.1 filebeat feeds. Opt in by pointing `transforms.dir` and `enrichment_tables` at it. Any other feed uses dfe-transform-elastic, which has the same sources as compiled Rust.
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md): what the service is, who owns the loop, the delivery contract and the two config authorities.
-- [docs/internals.md](docs/internals.md): data flow, VRL integration, memory budget, configuration, reload, operating notes.
+- [docs/architecture.md](docs/architecture.md): the parts, how data flows, the delivery contract and why it is built this way.
+- [docs/internals.md](docs/internals.md): the process closure, VRL integration and the memory budget.
+- [docs/reference/configuration.md](docs/reference/configuration.md): env overrides, Kafka TLS, reload and the chart.
 - [pipelines/filebeat/README.md](pipelines/filebeat/README.md): wiring and limits of the filebeat bundle.
 - [tests/TESTING.md](tests/TESTING.md): the test tiers.
 

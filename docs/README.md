@@ -3,7 +3,8 @@
 The architecture and design of dfe-transform-vrl.
 
 - [Architecture](architecture.md)
-- [Internals](internals.md)
+- [Process closure](internals.md)
+- [Configuration](reference/configuration.md)
 - [config-schema.yaml](config-schema.yaml) -- the configuration as a JSON Schema (YAML)
 - [config-schema.json](config-schema.json) -- the configuration as a JSON Schema (JSON)
 - [capability-catalog.yaml](capability-catalog.yaml) -- what the app can do, as a catalogue (YAML)
