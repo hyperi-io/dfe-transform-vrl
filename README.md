@@ -82,8 +82,8 @@ filebeat-compat templates (Cisco Meraki / IOS / Umbrella) plus its
 capability: opt in by pointing `transforms.dir` and `enrichment_tables` at
 those files, exactly like any user-supplied transform.
 
-**INTERIM:** elastic compatibility is being replaced by
-`dfe-transform-elastic` (Rust-native, in beta). See
+It keeps DFE 2.0 and 2.1 filebeat feeds working, and any other feed uses
+`dfe-transform-elastic`. See
 [pipelines/filebeat/README.md](https://github.com/hyperi-io/dfe-transform-vrl/blob/main/pipelines/filebeat/README.md) for wiring,
 routing behaviour, and known limitations.
 
