@@ -3,6 +3,17 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.49](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.48...v1.1.49) (2026-11-19)
+
+### Bug Fixes
+
+* **config:** warn on memory config and feed gate on direct mode ([#153](https://github.com/hyperi-io/dfe-transform-vrl/issues/153)) ([eb87c9b](https://github.com/hyperi-io/dfe-transform-vrl/commit/eb87c9b7eb137012f7c80c700e54aa8d89c587cb))
+* **deps:** update Rust dependencies ([c11ce6d](https://github.com/hyperi-io/dfe-transform-vrl/commit/c11ce6df6ddec849e732b437635e8f1149d4234c))
+* **scalo:** rebuild on 2.14.32 ([e0a0fea](https://github.com/hyperi-io/dfe-transform-vrl/commit/e0a0fea1acce8d363d1d26fffe1488a87f4774ea)), closes [#142](https://github.com/hyperi-io/dfe-transform-vrl/issues/142)
+* **security:** bump libz-sys to 1.1.33 ([72d325b](https://github.com/hyperi-io/dfe-transform-vrl/commit/72d325b1031445c997bd3a268d6197a94ace5d54))
+* **tests:** add a Cisco Meraki ip_flow_end filebeat case ([#154](https://github.com/hyperi-io/dfe-transform-vrl/issues/154)) ([01945ce](https://github.com/hyperi-io/dfe-transform-vrl/commit/01945cebd5dcc98c9bed9dc139acfedb6532d8ec))
+* **tests:** replace the filebeat test archive with synthetic cases ([#152](https://github.com/hyperi-io/dfe-transform-vrl/issues/152)) ([afe22c7](https://github.com/hyperi-io/dfe-transform-vrl/commit/afe22c728e6a2fd12469b5f76bead0e5fbfc1d56))
+
 ## [1.1.48](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.47...v1.1.48) (2026-11-15)
 
 ### Bug Fixes
