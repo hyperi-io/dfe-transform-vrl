@@ -46,8 +46,8 @@ use crate::common::{self, KafkaTestConfig, ports};
 /// The topic both transforms produce to.
 const SINK_TOPIC: &str = "held_acks_load";
 
-/// The Push sender's deadline. The transform holds a Push for at most 18 s
-/// inside it, which leaves the broker pause below room to recover.
+/// The Push sender's deadline. The transform holds a Push for less than this,
+/// which leaves the broker pause below room to recover.
 const PUSH_DEADLINE_MS: u64 = 30_000;
 
 /// How long the broker stays frozen while the held Push is watched.

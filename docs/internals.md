@@ -162,7 +162,7 @@ Those buffers, the compiled program and the enrichment tables share the pod's li
 
 Compilation is the one startup cost that scales with the data. `engine::budget` reads the container limit before compiling and refuses a start below the floor, naming the program size, the limit and the floor. Without it the kernel kills the process mid-compile, an exit-137 loop with nothing in the log.
 
-A Push is answered once its records are delivered. A recoverable send failure is retried for at most 18 s, then answered `UNAVAILABLE`. The next hop gets at most 15 s of that. `source.acknowledgements.enabled: false` answers at receipt, and a crash then loses what was answered.
+A Push is answered once its records are delivered. A recoverable send failure is retried for at most this stage's hold on scalo's hold ladder, then answered `UNAVAILABLE`. The next hop gets at most the ladder's next-hop deadline of that. `source.acknowledgements.enabled: false` answers at receipt, and a crash then loses what was answered.
 
 ## Key metrics
 
