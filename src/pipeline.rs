@@ -65,7 +65,7 @@ use scalo::transport::{
 };
 use scalo::worker::AdaptiveWorkerPool;
 use scalo::worker::BatchEngine;
-use scalo::worker::engine::{BlockPieces, EngineError};
+use scalo::worker::engine::{BlockPieces, EngineError, Refusals};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -77,14 +77,32 @@ use tracing::{debug, info, trace, warn};
 /// the loader's 5s flush-tick push cadence.
 const SCALING_SIGNAL_INTERVAL_SECS: u64 = 5;
 
-/// Longest a Push is held for delivery: inside the stage in front's 20 s send
-/// deadline, so it is answered before that sender gives up.
-pub const PUSH_MAX_HOLD: Duration = Duration::from_secs(18);
+/// This stage's depth on the hold ladder: the stage in front is depth 0 and
+/// pushes to this one.
+const HOLD_DEPTH: usize = 1;
+
+/// This stage's rung of the default hold ladder.
+fn hold_rung() -> scalo::transport::hold::Rung {
+    let Some(rung) = scalo::transport::hold::HoldLadder::DEFAULT.rung(HOLD_DEPTH) else {
+        unreachable!("invariant: the default hold ladder has a rung at depth {HOLD_DEPTH}")
+    };
+    rung
+}
+
+/// Longest a Push is held for delivery, so it is answered before the stage in
+/// front gives up.
+#[must_use]
+pub fn push_max_hold() -> Duration {
+    hold_rung().hold
+}
 
 /// Send deadline to the next hop -- a Push listener, or a Kafka delivery
-/// report while a Push is held: inside this stage's own [`PUSH_MAX_HOLD`], so
-/// a slow hop is retried before the hold runs out.
-pub const NEXT_HOP_SEND_TIMEOUT_MS: u64 = 15_000;
+/// report while a Push is held: inside [`push_max_hold`], so a slow hop is
+/// retried before the hold runs out.
+#[must_use]
+pub fn next_hop_send_timeout_ms() -> u64 {
+    u64::try_from(hold_rung().next_hop_deadline.as_millis()).unwrap_or(u64::MAX)
+}
 
 // Per-site log spam guards
 static DESER_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -297,7 +315,7 @@ pub async fn start_push_listener(
     let builder = GrpcTransport::builder(&grpc)
         .acknowledgements(config.source.acknowledgements)
         .armed(true)
-        .max_hold(PUSH_MAX_HOLD)
+        .max_hold(push_max_hold())
         .memory_guard(Arc::clone(memory_guard));
     let builder = match governor {
         Some(governor) => builder.pressure(governor.pressure()),
@@ -320,7 +338,7 @@ pub async fn start_push_listener(
 pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
     if config.sink.transport.is_direct() {
         let mut grpc = GrpcConfig::client(&config.sink.endpoint);
-        grpc.send_timeout_ms = NEXT_HOP_SEND_TIMEOUT_MS;
+        grpc.send_timeout_ms = next_hop_send_timeout_ms();
         let transport = GrpcTransport::new(&grpc)
             .await
             .map_err(|e| crate::Error::Kafka(format!("failed to create gRPC sink: {e}")))?;
@@ -339,7 +357,7 @@ pub async fn build_sender(config: &Config) -> crate::Result<AnySender> {
 /// While a direct source holds its acknowledgements, a delivery report that
 /// comes after the hold is spent is a duplicate in waiting: the sender was
 /// already told to retry. So `message.timeout.ms` is capped at
-/// [`NEXT_HOP_SEND_TIMEOUT_MS`], unless `sink.librdkafka_options` sets it.
+/// [`next_hop_send_timeout_ms`], unless `sink.librdkafka_options` sets it.
 fn producer_config(config: &Config) -> KafkaConfig {
     let mut producer = kafka::build_producer_config(&config.sink, &config.pipeline.name);
     let holds = config.source.transport.is_direct() && config.source.acknowledgements.enabled;
@@ -349,7 +367,7 @@ fn producer_config(config: &Config) -> KafkaConfig {
             .librdkafka_options
             .contains_key("message.timeout.ms")
     {
-        let capped = u64::from(config.sink.message_timeout_ms).min(NEXT_HOP_SEND_TIMEOUT_MS);
+        let capped = u64::from(config.sink.message_timeout_ms).min(next_hop_send_timeout_ms());
         producer
             .librdkafka_overrides
             .insert("message.timeout.ms".to_string(), capped.to_string());
@@ -450,23 +468,25 @@ where
                 // Records `process` removed: the block releases `Dropped`.
                 pieces.piece().report(DeliveryStatus::Dropped);
             }
-            // A piece per attempt, so a block the sender filtered out rather
-            // than sent is released `Dropped`, never `Delivered`.
-            let filtered = (!records.is_empty()).then(|| pieces.piece());
+            // A piece per attempt, so the block's source is released only once
+            // the send has been settled.
+            let piece = (!records.is_empty()).then(|| pieces.piece());
+            let refusals = pieces.refusals();
             async move {
-                let Some(filtered) = filtered else {
+                let Some(piece) = piece else {
                     return Ok(());
                 };
                 let start = Instant::now();
-                let result = sender.send_batch(&records).await;
+                let (result, dead_letters) = send_resolving(sender, &records, &refusals).await;
                 settle_send(
                     result,
                     records.len() as u64,
+                    dead_letters,
                     start.elapsed().as_secs_f64(),
                     sink_backend,
                     &transform_metrics,
                     &circuit_open,
-                    filtered,
+                    piece,
                 )
             }
         }
@@ -493,6 +513,47 @@ where
     run_result.map_err(|e| crate::Error::Kafka(format!("pipeline engine error: {e}")))
 }
 
+/// What the loop is told about a record the sink transport dead-lettered.
+const SINK_DEAD_LETTER_REASON: &str = "the sink transport dead-lettered the record";
+
+/// Send `records`, resolving a `FilteredDlq` answer.
+///
+/// A block answered `FilteredDlq` sent every record it could and dead-lettered
+/// at least one, without saying which. Its records are sent again one at a
+/// time, and the one answered `FilteredDlq` goes back to the pipeline through
+/// `refusals`, which writes it to the DLQ before the source is released. The
+/// records already sent go out a second time: a duplicate, never a loss.
+///
+/// Returns the verdict for the block, and how many records were handed back.
+/// A `FilteredDlq` never comes back as the verdict.
+async fn send_resolving<S: TransportSender>(
+    sender: &S,
+    records: &[Record],
+    refusals: &Refusals,
+) -> (SendResult, u64) {
+    match sender.send_batch(records).await {
+        SendResult::FilteredDlq if records.len() == 1 => {
+            refusals.dead_letter(&records[0], SINK_DEAD_LETTER_REASON);
+            (SendResult::Ok, 1)
+        }
+        SendResult::FilteredDlq => {
+            let mut dead_letters = 0;
+            for record in records {
+                match sender.send_batch(std::slice::from_ref(record)).await {
+                    SendResult::Ok => {}
+                    SendResult::FilteredDlq => {
+                        refusals.dead_letter(record, SINK_DEAD_LETTER_REASON);
+                        dead_letters += 1;
+                    }
+                    refused => return (refused, dead_letters),
+                }
+            }
+            (SendResult::Ok, dead_letters)
+        }
+        other => (other, 0),
+    }
+}
+
 /// Meter one sink call and turn its [`SendResult`] into the loop's verdict.
 ///
 /// A failure the sender calls recoverable is returned transient, so the loop
@@ -500,57 +561,54 @@ where
 /// source, answers `UNAVAILABLE` at the hold deadline so the sender retries.
 /// Only a permanent failure stops the loop.
 ///
-/// `filtered` reports `Dropped` when the sender filtered the block out
-/// instead of sending it, which releases the source without calling the
-/// records delivered. Otherwise it reports `Delivered`, the floor of the
-/// merge, and leaves the block's status to the loop's own piece.
+/// `piece` reports `Delivered`, the floor of the merge, and leaves the block's
+/// status to the loop's own piece. `dead_letters` of the `record_count`
+/// records went back through the refusals, and count filtered, not delivered.
+#[allow(clippy::too_many_arguments)]
 fn settle_send(
     result: SendResult,
     record_count: u64,
+    dead_letters: u64,
     elapsed_secs: f64,
     sink_backend: &'static str,
     transform_metrics: &TransformMetrics,
     circuit_open: &AtomicBool,
-    filtered: PieceFinalizer,
+    piece: PieceFinalizer,
 ) -> Result<(), EngineError> {
-    filtered.report(if matches!(result, SendResult::FilteredDlq) {
-        DeliveryStatus::Dropped
-    } else {
-        DeliveryStatus::Delivered
-    });
+    piece.report(DeliveryStatus::Delivered);
     match result {
         SendResult::Ok => {
             // Sink reachable -> clear the outbound circuit latch (the scaling
             // ticker reads it for `set_circuit_open`).
             circuit_open.store(false, Ordering::Release);
+            let delivered = record_count.saturating_sub(dead_letters);
             if let Some(ref dfe) = transform_metrics.dfe {
-                dfe.records_delivered(record_count);
+                dfe.records_delivered(delivered);
+                if dead_letters > 0 {
+                    dfe.records_filtered(dead_letters);
+                }
             }
             if let Some(ref app) = transform_metrics.app {
-                app.record_processed(record_count);
+                app.record_processed(delivered);
             }
             if let Some(ref sm) = transform_metrics.sink {
                 sm.record_duration(sink_backend, elapsed_secs);
             }
-            trace!(records = record_count, "produced batch");
-            Ok(())
-        }
-        SendResult::FilteredDlq => {
-            // Records the screen should have taken out of the block: the same
-            // bytes are refused on every retry, so they are dropped, not sent.
-            if log_sampled(&FILTERED_BLOCKS, 100) {
+            if dead_letters > 0 && log_sampled(&FILTERED_BLOCKS, 100) {
                 warn!(
-                    records = record_count,
+                    dead_letters,
                     backend = sink_backend,
                     total = FILTERED_BLOCKS.load(Ordering::Relaxed),
-                    "the sink filtered out a whole block instead of sending it; its \
-                     records are dropped (sampled 1/100)"
+                    "the sink dead-lettered records the screen let through; they go to \
+                     the DLQ (sampled 1/100)"
                 );
             }
-            if let Some(ref dfe) = transform_metrics.dfe {
-                dfe.records_filtered(record_count);
-            }
+            trace!(records = delivered, dead_letters, "produced batch");
             Ok(())
+        }
+        // `send_resolving` answers a `FilteredDlq` itself.
+        SendResult::FilteredDlq => {
+            unreachable!("invariant: a FilteredDlq is resolved before the send is settled")
         }
         SendResult::Backpressured => {
             if let Some(ref bp) = transform_metrics.backpressure {
@@ -960,7 +1018,7 @@ mod tests {
         let circuit_open = AtomicBool::new(false);
         let settle = |result| {
             let (piece, _merged) = one_piece();
-            settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece)
+            settle_send(result, 3, 0, 0.1, "grpc", &metrics, &circuit_open, piece)
         };
 
         for verdict in [
@@ -992,6 +1050,7 @@ mod tests {
             let verdict = settle_send(
                 SendResult::Fatal(permanent),
                 3,
+                0,
                 0.1,
                 "kafka",
                 &metrics,
@@ -1006,6 +1065,7 @@ mod tests {
         let delivered = settle_send(
             SendResult::Ok,
             3,
+            0,
             0.1,
             "kafka",
             &metrics,
@@ -1031,32 +1091,153 @@ mod tests {
         (piece, merged)
     }
 
-    /// A block the sender filtered out still releases its source, so it is not
-    /// sent again, but as dropped: none of its records was delivered.
-    #[test]
-    fn a_filtered_block_is_released_dropped_not_delivered() {
+    /// A sender scripted to answer `FilteredDlq` for the record `{"i":1}`, and
+    /// for any block holding it.
+    struct Scripted {
+        attempts: std::sync::atomic::AtomicUsize,
+        every_record: bool,
+    }
+
+    impl Scripted {
+        fn new(every_record: bool) -> Self {
+            Self {
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+                every_record,
+            }
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::Relaxed)
+        }
+    }
+
+    impl scalo::transport::TransportBase for Scripted {
+        fn close(
+            &self,
+        ) -> impl std::future::Future<Output = scalo::transport::TransportResult<()>> + Send
+        {
+            std::future::ready(Ok(()))
+        }
+        fn is_healthy(&self) -> bool {
+            true
+        }
+        fn name(&self) -> &'static str {
+            "scripted"
+        }
+    }
+
+    impl TransportSender for Scripted {
+        fn send(
+            &self,
+            _destination: &str,
+            _payload: Bytes,
+        ) -> impl std::future::Future<Output = SendResult> + Send {
+            std::future::ready(SendResult::Ok)
+        }
+
+        fn send_batch(
+            &self,
+            records: &[Record],
+        ) -> impl std::future::Future<Output = SendResult> + Send {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            let dead =
+                self.every_record || records.iter().any(|r| r.payload.as_ref() == br#"{"i":1}"#);
+            std::future::ready(if dead {
+                SendResult::FilteredDlq
+            } else {
+                SendResult::Ok
+            })
+        }
+    }
+
+    /// `count` records addressed at the sink topic.
+    fn numbered(count: usize) -> Vec<Record> {
+        let topic: Arc<str> = Arc::from("out");
+        (0..count)
+            .map(|i| Record {
+                payload: Bytes::from(format!("{{\"i\":{i}}}")),
+                key: Some(Arc::clone(&topic)),
+                headers: Vec::new(),
+                metadata: RecordMeta {
+                    timestamp_ms: None,
+                    format: PayloadFormat::Json,
+                },
+            })
+            .collect()
+    }
+
+    /// How many records `refusals` holds: its `Debug` is the only reader.
+    fn handed_back(refusals: &Refusals) -> usize {
+        let shown = format!("{refusals:?}");
+        let (_, count) = shown
+            .split_once("records: ")
+            .expect("Refusals shows its count");
+        count
+            .trim_end_matches(" }")
+            .parse()
+            .expect("the count is a number")
+    }
+
+    /// A block answered `FilteredDlq` names no record, so its records are sent
+    /// one at a time and only the dead letter goes back to the pipeline.
+    #[tokio::test]
+    async fn a_partly_sent_block_hands_back_only_its_dead_letter() {
+        let sender = Scripted::new(false);
+        let refusals = Refusals::default();
+
+        let (result, dead_letters) = send_resolving(&sender, &numbered(3), &refusals).await;
+
+        assert!(matches!(result, SendResult::Ok), "{result:?}");
+        assert_eq!(sender.attempts(), 4, "the block, then each of its records");
+        assert_eq!(dead_letters, 1);
+        assert_eq!(handed_back(&refusals), 1);
+    }
+
+    /// A block of one names its record: it is the dead letter, and no resend
+    /// is needed.
+    #[tokio::test]
+    async fn a_block_of_one_answered_filtered_is_its_own_dead_letter() {
+        let sender = Scripted::new(true);
+        let refusals = Refusals::default();
+
+        let (result, dead_letters) = send_resolving(&sender, &numbered(1), &refusals).await;
+
+        assert!(matches!(result, SendResult::Ok), "{result:?}");
+        assert_eq!(sender.attempts(), 1);
+        assert_eq!((dead_letters, handed_back(&refusals)), (1, 1));
+    }
+
+    /// A block with dead letters still releases its source, as delivered: the
+    /// dead letters went to the DLQ through the refusals, and the rest was sent.
+    #[tokio::test]
+    async fn a_block_with_a_dead_letter_is_released_delivered() {
         let metrics = TransformMetrics::default();
         let circuit_open = AtomicBool::new(false);
-        let released = |result| {
+        let released = |result: SendResult, dead_letters| {
             let (piece, merged) = one_piece();
-            let verdict = settle_send(result, 3, 0.1, "grpc", &metrics, &circuit_open, piece);
+            let verdict = settle_send(
+                result,
+                3,
+                dead_letters,
+                0.1,
+                "grpc",
+                &metrics,
+                &circuit_open,
+                piece,
+            );
             (verdict, merged.try_recv().expect("the piece reported"))
         };
 
-        let (verdict, status) = released(SendResult::FilteredDlq);
-        assert!(
-            verdict.is_ok(),
-            "a filtered block is not retried: {verdict:?}"
-        );
-        assert_eq!(status, DeliveryStatus::Dropped);
+        let (verdict, status) = released(SendResult::Ok, 1);
+        assert!(verdict.is_ok(), "{verdict:?}");
+        assert_eq!(status, DeliveryStatus::Delivered);
 
         // Any other result leaves the block's status to the loop's own piece.
         for result in [
-            SendResult::Ok,
             SendResult::Backpressured,
             SendResult::Fatal(scalo::TransportError::Closed),
         ] {
-            let (_, status) = released(result);
+            let (_, status) = released(result, 0);
             assert_eq!(status, DeliveryStatus::Delivered);
         }
     }
@@ -1082,8 +1263,11 @@ mod tests {
         );
 
         config.source.transport = crate::config::Transport::Direct;
-        assert_eq!(delivery_timeout(&config).as_deref(), Some("15000"));
-        assert!(u128::from(NEXT_HOP_SEND_TIMEOUT_MS) < PUSH_MAX_HOLD.as_millis());
+        assert_eq!(
+            delivery_timeout(&config),
+            Some(next_hop_send_timeout_ms().to_string())
+        );
+        assert!(u128::from(next_hop_send_timeout_ms()) < push_max_hold().as_millis());
 
         config.sink.message_timeout_ms = 5_000;
         assert_eq!(
