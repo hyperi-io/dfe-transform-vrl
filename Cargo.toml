@@ -43,7 +43,7 @@ bytes = ">=1.12.1, <2"
 
 # Enable only the scalo features src/ and tests/ use. The floor moves with
 # `release.helm.library` in .hyperi-ci.yaml.
-scalo = { version = ">=2.14.33, <3", features = [
+scalo = { version = ">=2.14.34, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -114,7 +114,7 @@ rusqlite = { version = ">=0.43.0, <0.44", features = ["bundled"], optional = tru
 tikv-jemallocator = { version = ">=0.7.0, <0.8", optional = true }
 
 # Direct rdkafka for the pgo-driver bin only. The wrapper uses scalo's Kafka transport.
-rdkafka = { version = ">=0.39, <0.40", features = ["tokio", "cmake-build"], optional = true }
+rdkafka = { version = ">=0.40.0, <0.41", features = ["tokio", "cmake-build"], optional = true }
 
 [features]
 default = []
@@ -127,7 +127,7 @@ enrichment-sqlite = ["dep:rusqlite"]
 tempfile = ">=3.27.0, <4"
 # A dev-dependency, not a crate feature, so CI's `features: default` still builds
 # the broker-free pipeline tests.
-scalo = { version = ">=2.14.33, <3", features = [
+scalo = { version = ">=2.14.34, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
