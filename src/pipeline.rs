@@ -267,6 +267,7 @@ pub async fn run(
         circuit_open,
     )
     .await;
+    drop(producer);
 
     if let Some(task) = signal_task {
         task.abort();
@@ -516,33 +517,35 @@ where
 /// What the loop is told about a record the sink transport dead-lettered.
 const SINK_DEAD_LETTER_REASON: &str = "the sink transport dead-lettered the record";
 
-/// Send `records`, resolving a `FilteredDlq` answer.
+/// Send `records`, resolving a `FilteredDlq` or `Reject` answer.
 ///
 /// A block answered `FilteredDlq` sent every record it could and dead-lettered
-/// at least one, without saying which. Its records are sent again one at a
-/// time, and the one answered `FilteredDlq` goes back to the pipeline through
-/// `refusals`, which writes it to the DLQ before the source is released. The
-/// records already sent go out a second time: a duplicate, never a loss.
+/// at least one, without saying which, and a block answered `Reject` was
+/// refused for good without naming a record. Its records are sent again one at
+/// a time, and each one answered `FilteredDlq` or `Reject` goes back to the
+/// pipeline through `refusals`, which writes it to the DLQ before the source
+/// is released. The records already sent go out a second time: a duplicate,
+/// never a loss.
 ///
 /// Returns the verdict for the block, and how many records were handed back.
-/// A `FilteredDlq` never comes back as the verdict.
+/// A `FilteredDlq` or `Reject` never comes back as the verdict.
 async fn send_resolving<S: TransportSender>(
     sender: &S,
     records: &[Record],
     refusals: &Refusals,
 ) -> (SendResult, u64) {
     match sender.send_batch(records).await {
-        SendResult::FilteredDlq if records.len() == 1 => {
-            refusals.dead_letter(&records[0], SINK_DEAD_LETTER_REASON);
+        answer @ (SendResult::FilteredDlq | SendResult::Reject(_)) if records.len() == 1 => {
+            refusals.dead_letter(&records[0], dead_letter_reason(&answer));
             (SendResult::Ok, 1)
         }
-        SendResult::FilteredDlq => {
+        SendResult::FilteredDlq | SendResult::Reject(_) => {
             let mut dead_letters = 0;
             for record in records {
                 match sender.send_batch(std::slice::from_ref(record)).await {
                     SendResult::Ok => {}
-                    SendResult::FilteredDlq => {
-                        refusals.dead_letter(record, SINK_DEAD_LETTER_REASON);
+                    answer @ (SendResult::FilteredDlq | SendResult::Reject(_)) => {
+                        refusals.dead_letter(record, dead_letter_reason(&answer));
                         dead_letters += 1;
                     }
                     refused => return (refused, dead_letters),
@@ -551,6 +554,14 @@ async fn send_resolving<S: TransportSender>(
             (SendResult::Ok, dead_letters)
         }
         other => (other, 0),
+    }
+}
+
+/// The DLQ reason for a record the sink dead-lettered or refused for good.
+fn dead_letter_reason(answer: &SendResult) -> String {
+    match answer {
+        SendResult::Reject(e) => format!("the sink refused the record for good: {e}"),
+        _ => SINK_DEAD_LETTER_REASON.to_string(),
     }
 }
 
@@ -606,11 +617,13 @@ fn settle_send(
             trace!(records = delivered, dead_letters, "produced batch");
             Ok(())
         }
-        // `send_resolving` answers a `FilteredDlq` itself.
-        SendResult::FilteredDlq => {
-            unreachable!("invariant: a FilteredDlq is resolved before the send is settled")
+        // `send_resolving` answers a `FilteredDlq` and a `Reject` itself.
+        SendResult::FilteredDlq | SendResult::Reject(_) => {
+            unreachable!(
+                "invariant: a FilteredDlq or Reject is resolved before the send is settled"
+            )
         }
-        SendResult::Backpressured => {
+        SendResult::Backpressured | SendResult::RetryAfter(_) => {
             if let Some(ref bp) = transform_metrics.backpressure {
                 bp.record_event();
             }
@@ -1091,11 +1104,12 @@ mod tests {
         (piece, merged)
     }
 
-    /// A sender scripted to answer `FilteredDlq` for the record `{"i":1}`, and
-    /// for any block holding it.
+    /// A sender scripted to answer `FilteredDlq`, or `Reject` when `rejects`,
+    /// for the record `{"i":1}`, and for any block holding it.
     struct Scripted {
         attempts: std::sync::atomic::AtomicUsize,
         every_record: bool,
+        rejects: bool,
     }
 
     impl Scripted {
@@ -1103,6 +1117,14 @@ mod tests {
             Self {
                 attempts: std::sync::atomic::AtomicUsize::new(0),
                 every_record,
+                rejects: false,
+            }
+        }
+
+        fn rejecting(every_record: bool) -> Self {
+            Self {
+                rejects: true,
+                ..Self::new(every_record)
             }
         }
 
@@ -1124,6 +1146,9 @@ mod tests {
         fn name(&self) -> &'static str {
             "scripted"
         }
+        fn delivery_guarantee(&self) -> scalo::transport::DeliveryGuarantee {
+            scalo::transport::DeliveryGuarantee::Acknowledged
+        }
     }
 
     impl TransportSender for Scripted {
@@ -1142,10 +1167,10 @@ mod tests {
             self.attempts.fetch_add(1, Ordering::Relaxed);
             let dead =
                 self.every_record || records.iter().any(|r| r.payload.as_ref() == br#"{"i":1}"#);
-            std::future::ready(if dead {
-                SendResult::FilteredDlq
-            } else {
-                SendResult::Ok
+            std::future::ready(match (dead, self.rejects) {
+                (false, _) => SendResult::Ok,
+                (true, false) => SendResult::FilteredDlq,
+                (true, true) => SendResult::Reject(scalo::TransportError::Send("refused".into())),
             })
         }
     }
@@ -1182,29 +1207,31 @@ mod tests {
     /// one at a time and only the dead letter goes back to the pipeline.
     #[tokio::test]
     async fn a_partly_sent_block_hands_back_only_its_dead_letter() {
-        let sender = Scripted::new(false);
-        let refusals = Refusals::default();
+        for sender in [Scripted::new(false), Scripted::rejecting(false)] {
+            let refusals = Refusals::default();
 
-        let (result, dead_letters) = send_resolving(&sender, &numbered(3), &refusals).await;
+            let (result, dead_letters) = send_resolving(&sender, &numbered(3), &refusals).await;
 
-        assert!(matches!(result, SendResult::Ok), "{result:?}");
-        assert_eq!(sender.attempts(), 4, "the block, then each of its records");
-        assert_eq!(dead_letters, 1);
-        assert_eq!(handed_back(&refusals), 1);
+            assert!(matches!(result, SendResult::Ok), "{result:?}");
+            assert_eq!(sender.attempts(), 4, "the block, then each of its records");
+            assert_eq!(dead_letters, 1);
+            assert_eq!(handed_back(&refusals), 1);
+        }
     }
 
     /// A block of one names its record: it is the dead letter, and no resend
     /// is needed.
     #[tokio::test]
     async fn a_block_of_one_answered_filtered_is_its_own_dead_letter() {
-        let sender = Scripted::new(true);
-        let refusals = Refusals::default();
+        for sender in [Scripted::new(true), Scripted::rejecting(true)] {
+            let refusals = Refusals::default();
 
-        let (result, dead_letters) = send_resolving(&sender, &numbered(1), &refusals).await;
+            let (result, dead_letters) = send_resolving(&sender, &numbered(1), &refusals).await;
 
-        assert!(matches!(result, SendResult::Ok), "{result:?}");
-        assert_eq!(sender.attempts(), 1);
-        assert_eq!((dead_letters, handed_back(&refusals)), (1, 1));
+            assert!(matches!(result, SendResult::Ok), "{result:?}");
+            assert_eq!(sender.attempts(), 1);
+            assert_eq!((dead_letters, handed_back(&refusals)), (1, 1));
+        }
     }
 
     /// A block with dead letters still releases its source, as delivered: the
@@ -1606,6 +1633,8 @@ mod tests {
                         .expect("sink client"),
                 );
                 deliver_three(&manager, &capture, &sink).await;
+                // The listener has to outlive the sends it answers.
+                drop(downstream);
             });
         });
 

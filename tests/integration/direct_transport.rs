@@ -259,6 +259,7 @@ async fn a_batch_pushed_over_grpc_comes_out_the_grpc_sink_transformed() {
             .await;
         assert!(result.is_ok(), "push {id} failed: {result:?}");
     }
+    drop(pusher);
 
     // Collect what reached the downstream listener.
     let (received, _) = take_from(&loader, 3, Duration::from_secs(10)).await;
@@ -559,6 +560,7 @@ async fn a_record_that_panics_vrl_leaves_the_binary_running() {
 
         let _ = pusher.send("in", Bytes::from(poison.to_string())).await;
         let sent = pusher.send("in", Bytes::from(next.to_string())).await;
+        drop(pusher);
         let (received, _) = take_from(&loader, 1, Duration::from_secs(30)).await;
 
         let exited = running.child.try_wait().ok().flatten();
