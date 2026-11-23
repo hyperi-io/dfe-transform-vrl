@@ -3,6 +3,13 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.50](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.49...v1.1.50) (2026-11-23)
+
+### What's Changed
+* fix(ci): default main releases to candidates by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vrl/pull/163
+* fix: rebuild on scalo 2.14.33 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vrl/pull/164
+* fix(deps): url 2.5.9 for RUSTSEC-2026-0592 by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vrl/pull/165
+
 ## [1.1.49](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.48...v1.1.49) (2026-11-19)
 
 ### Bug Fixes
