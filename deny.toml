@@ -42,6 +42,8 @@ allow = [
     "Unlicense",
     "MIT-0",
     "0BSD",
+    # webpki-roots, via scalo's client TLS. A permissive data licence on the root list.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 exceptions = []

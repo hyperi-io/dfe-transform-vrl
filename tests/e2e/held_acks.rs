@@ -209,6 +209,10 @@ async fn ids_on(
 }
 
 #[tokio::test]
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "both transforms are moved into stop() at the end, which the lint does not see"
+)]
 async fn a_push_is_answered_only_after_kafka_confirms_its_delivery() {
     let Some(env) =
         common::KafkaTestEnv::hermetic_on_low_port("push-held-until-kafka-delivers").await
