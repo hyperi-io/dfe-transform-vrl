@@ -66,7 +66,8 @@ pipeline:
 #     # turns this on for source and sink. No value turns it off.
 #     # A private broker CA, as a path in the pod. The chart mounts no file, so
 #     # in Kubernetes put the PEM text in librdkafka_options ssl.ca.pem instead.
-#     # ca_cert_file: "/etc/ssl/certs/kafka-ca.pem"
+#     # trust: bundle
+#     # ca_paths: ["/etc/ssl/certs/kafka-ca.pem"]
 #   # librdkafka overrides -- production defaults baked in, override here
 #   # librdkafka_options:
 #   #   fetch.max.bytes: "10485760"

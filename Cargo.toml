@@ -15,7 +15,7 @@ authors = ["HyperI <dev@hyperi.com.au>"]
 description = "Runs your VRL transforms over a DFE deployment's event stream, in-process."
 license = "BUSL-1.1"
 repository = "https://github.com/hyperi-io/dfe-transform-vrl"
-rust-version = "1.95"
+rust-version = "1.100"
 exclude = [".github/", "docs/", ".tmp/"]
 
 [lib]
@@ -43,7 +43,7 @@ bytes = ">=1.12.1, <2"
 
 # Enable only the scalo features src/ and tests/ use. The floor moves with
 # `release.helm.library` in .hyperi-ci.yaml.
-scalo = { version = ">=2.14.34, <3", features = [
+scalo = { version = ">=2.14.40, <3", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -127,7 +127,7 @@ enrichment-sqlite = ["dep:rusqlite"]
 tempfile = ">=3.27.0, <4"
 # A dev-dependency, not a crate feature, so CI's `features: default` still builds
 # the broker-free pipeline tests.
-scalo = { version = ">=2.14.34, <3", features = [
+scalo = { version = ">=2.14.40, <3", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
