@@ -38,7 +38,7 @@ The chart mounts the Kafka Secret's `username` and `password` into both endpoint
 
 Either half turns SASL on, an enabled block still missing one once the env layer has run stops startup, and the password is redacted on every output path (`x-scalo-secret` + `writeOnly` in the emitted schema).
 
-For Kafka over TLS with a private CA: `tls.ca_cert_file` is a path, and the chart mounts no certificate file. Put the CA's PEM text in the rendered config instead:
+For Kafka over TLS with a private CA: `tls.ca_paths` takes paths, and the chart mounts no certificate file. Put the CA's PEM text in the rendered config instead:
 
 ```yaml
 config:

@@ -85,15 +85,17 @@ impl SaslMechanism {
     }
 }
 
-/// TLS configuration for Kafka.
+/// TLS configuration for Kafka: `enabled` and `skip_verify` beside scalo's
+/// client `tls` section (`profile`, `trust`, `ca_paths`, `client_cert_path`,
+/// `client_key_path`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct TlsConfig {
     pub enabled: bool,
-    pub ca_cert_file: Option<String>,
-    pub cert_file: Option<String>,
-    pub key_file: Option<String>,
     pub skip_verify: bool,
+    /// The client TLS section. A private CA is `trust: bundle` with `ca_paths`.
+    #[serde(flatten)]
+    pub client: scalo::tls_config::ClientTlsConfig,
 }
 
 /// Main configuration.
@@ -730,10 +732,10 @@ impl Normalize for Config {
             self.sink.sasl.enabled = true;
         }
         // TLS cert present → enable TLS
-        if self.source.tls.ca_cert_file.is_some() {
+        if !self.source.tls.client.ca_paths.is_empty() {
             self.source.tls.enabled = true;
         }
-        if self.sink.tls.ca_cert_file.is_some() {
+        if !self.sink.tls.client.ca_paths.is_empty() {
             self.sink.tls.enabled = true;
         }
     }
@@ -1065,7 +1067,7 @@ sink:
         let mut config = Config::default();
         assert!(!config.source.tls.enabled);
 
-        config.source.tls.ca_cert_file = Some("/etc/ssl/ca.crt".to_string());
+        config.source.tls.client.ca_paths = vec!["/etc/ssl/ca.crt".into()];
         config.normalize();
 
         assert!(config.source.tls.enabled);
@@ -1113,7 +1115,7 @@ sink:
     fn tls_config_defaults() {
         let tls = TlsConfig::default();
         assert!(!tls.enabled);
-        assert!(tls.ca_cert_file.is_none());
+        assert_eq!(tls.client.ca_paths, Vec::<std::path::PathBuf>::new());
     }
 
     #[test]
@@ -1696,15 +1698,19 @@ source:
 
     /// Every property whose name reads as a secret carries the secret marker in
     /// the emitted schema, so the next credential field fails here instead of
-    /// shipping as plain config. `*_env` and `*_file` hold the name of a
-    /// variable or a path, not the value, and the exceptions below are columns
-    /// and field paths that happen to say `key`.
+    /// shipping as plain config. `*_env`, `*_file` and `*_path` hold the name
+    /// of a variable or a path, not the value, and the exceptions below are
+    /// columns, field paths and a TLS setting that happen to say `key`.
     #[test]
     fn a_secret_named_property_in_the_schema_is_marked_secret() {
-        const NOT_A_VALUE: [&str; 2] = ["key_field", "key_columns"];
+        const NOT_A_VALUE: [&str; 3] = ["key_field", "key_columns", "key_share"];
 
         fn reads_as_secret(name: &str) -> bool {
-            if name.ends_with("_env") || name.ends_with("_file") || NOT_A_VALUE.contains(&name) {
+            if name.ends_with("_env")
+                || name.ends_with("_file")
+                || name.ends_with("_path")
+                || NOT_A_VALUE.contains(&name)
+            {
                 return false;
             }
             name.split('_')

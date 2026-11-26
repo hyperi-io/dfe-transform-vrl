@@ -183,11 +183,7 @@ fn apply_sasl_tls(
     }
 
     if tls.enabled {
-        kafka_config.ssl_ca_location.clone_from(&tls.ca_cert_file);
-        kafka_config
-            .ssl_certificate_location
-            .clone_from(&tls.cert_file);
-        kafka_config.ssl_key_location.clone_from(&tls.key_file);
+        kafka_config.tls.clone_from(&tls.client);
         kafka_config.ssl_skip_verify = tls.skip_verify;
     }
 }
@@ -265,16 +261,18 @@ mod tests {
         let mut source = default_source();
         source.tls = TlsConfig {
             enabled: true,
-            ca_cert_file: Some("/ca.pem".into()),
-            cert_file: Some("/cert.pem".into()),
-            key_file: Some("/key.pem".into()),
             skip_verify: true,
+            client: scalo::tls_config::ClientTlsConfig {
+                trust: scalo::tls_config::TrustChoice::Bundle,
+                ca_paths: vec!["/ca.pem".into()],
+                client_cert_path: Some("/cert.pem".into()),
+                client_key_path: Some("/key.pem".into()),
+                ..Default::default()
+            },
         };
         let config = build_consumer_config(&source);
         assert_eq!(config.security_protocol, "ssl");
-        assert_eq!(config.ssl_ca_location, Some("/ca.pem".into()));
-        assert_eq!(config.ssl_certificate_location, Some("/cert.pem".into()));
-        assert_eq!(config.ssl_key_location, Some("/key.pem".into()));
+        assert_eq!(config.tls, source.tls.client);
         assert!(config.ssl_skip_verify);
     }
 
@@ -404,7 +402,7 @@ mod tests {
             .insert("ssl.ca.pem".into(), PEM.into());
         let consumer = build_consumer_config(&source);
         assert_eq!(consumer.security_protocol, "sasl_ssl");
-        assert_eq!(consumer.ssl_ca_location, None);
+        assert_eq!(consumer.tls.ca_paths, Vec::<std::path::PathBuf>::new());
         assert_eq!(
             consumer
                 .librdkafka_overrides

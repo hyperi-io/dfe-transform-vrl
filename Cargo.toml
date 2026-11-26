@@ -43,7 +43,8 @@ bytes = ">=1.12.1, <2"
 
 # Enable only the scalo features src/ and tests/ use. The floor moves with
 # `release.helm.library` in .hyperi-ci.yaml.
-scalo = { version = ">=2.14.34, <3", features = [
+# 2.14.40: the git tree carries version 0.0.0 until the release stamps it.
+scalo = { version = "0.0.0", git = "https://github.com/hyperi-io/scalo-rs", rev = "e8a3c79aeacf", features = [
     "cli-service",
     "config",
     "config-reload",
@@ -127,7 +128,8 @@ enrichment-sqlite = ["dep:rusqlite"]
 tempfile = ">=3.27.0, <4"
 # A dev-dependency, not a crate feature, so CI's `features: default` still builds
 # the broker-free pipeline tests.
-scalo = { version = ">=2.14.34, <3", features = [
+# 2.14.40: the git tree carries version 0.0.0 until the release stamps it.
+scalo = { version = "0.0.0", git = "https://github.com/hyperi-io/scalo-rs", rev = "e8a3c79aeacf", features = [
     "transport-memory",
     "transport-kafka-test-support",
 ] }
