@@ -159,7 +159,7 @@ pub fn diff_expected(
             }
         }
         serde_json::Value::Array(items) if path == "tags" => {
-            let have = ours.as_array().map(Vec::as_slice).unwrap_or_default();
+            let have = ours.as_array().map_or_default(Vec::as_slice);
             for item in items {
                 if !have.contains(item) {
                     problems.push(format!("tags: missing {item}"));
