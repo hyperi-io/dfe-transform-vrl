@@ -269,6 +269,7 @@ mod tests {
                 client_key_path: Some("/key.pem".into()),
                 ..Default::default()
             },
+            ..TlsConfig::default()
         };
         let config = build_consumer_config(&source);
         assert_eq!(config.security_protocol, "ssl");

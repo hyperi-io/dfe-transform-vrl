@@ -96,6 +96,49 @@ pub struct TlsConfig {
     /// The client TLS section. A private CA is `trust: bundle` with `ca_paths`.
     #[serde(flatten)]
     pub client: scalo::tls_config::ClientTlsConfig,
+
+    /// Removed: `ca_paths` with `trust: bundle`.
+    #[doc(hidden)]
+    #[serde(skip_serializing, deserialize_with = "removed_ca_cert_file")]
+    #[schemars(skip)]
+    pub ca_cert_file: scalo::tls_config::Removed,
+
+    /// Removed: `client_cert_path`.
+    #[doc(hidden)]
+    #[serde(skip_serializing, deserialize_with = "removed_cert_file")]
+    #[schemars(skip)]
+    pub cert_file: scalo::tls_config::Removed,
+
+    /// Removed: `client_key_path`.
+    #[doc(hidden)]
+    #[serde(skip_serializing, deserialize_with = "removed_key_file")]
+    #[schemars(skip)]
+    pub key_file: scalo::tls_config::Removed,
+}
+
+/// The error for a TLS key the `tls` section replaced. Any value for it fails
+/// the load, so a config written for the old shape can't run with its CA or
+/// client certificate dropped.
+fn removed<E: serde::de::Error>(old: &str, new: &str) -> E {
+    E::custom(format!("`{old}` is removed: set {new}"))
+}
+
+fn removed_ca_cert_file<'de, D: serde::Deserializer<'de>>(
+    _: D,
+) -> std::result::Result<scalo::tls_config::Removed, D::Error> {
+    Err(removed("ca_cert_file", "ca_paths with trust: bundle"))
+}
+
+fn removed_cert_file<'de, D: serde::Deserializer<'de>>(
+    _: D,
+) -> std::result::Result<scalo::tls_config::Removed, D::Error> {
+    Err(removed("cert_file", "client_cert_path"))
+}
+
+fn removed_key_file<'de, D: serde::Deserializer<'de>>(
+    _: D,
+) -> std::result::Result<scalo::tls_config::Removed, D::Error> {
+    Err(removed("key_file", "client_key_path"))
 }
 
 /// Main configuration.
@@ -1109,6 +1152,33 @@ sink:
         assert_eq!(sasl.mechanism, "scram_sha_512");
         assert_eq!(sasl.username, "");
         assert!(sasl.password.is_empty());
+    }
+
+    /// Every TLS key the `tls` section replaced fails the load on the source and
+    /// the sink, naming the key to set, so an old config never runs with its CA
+    /// or client certificate dropped.
+    #[test]
+    fn a_removed_tls_key_fails_the_load_naming_its_replacement() {
+        for endpoint in ["source", "sink"] {
+            for (key, replacement) in [
+                ("ca_cert_file: /ca.pem", "ca_paths with trust: bundle"),
+                ("cert_file: /c.pem", "client_cert_path"),
+                ("key_file: /k.pem", "client_key_path"),
+                ("ca_cert_file: null", "ca_paths with trust: bundle"),
+                ("ca_path: /ca.pem", "ca_paths"),
+            ] {
+                let yaml = format!("{endpoint}:\n  tls:\n    {key}\n");
+                let error = scalo::yaml::from_str::<Config>(
+                    &yaml,
+                    "config.yaml",
+                    scalo::yaml::Profile::Config,
+                )
+                .err()
+                .unwrap_or_else(|| panic!("loaded without error: {yaml}"))
+                .to_string();
+                assert!(error.contains(replacement), "{yaml}: {error}");
+            }
+        }
     }
 
     #[test]
