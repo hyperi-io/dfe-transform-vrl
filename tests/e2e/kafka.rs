@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      tests/e2e/kafka.rs
-// Purpose:   Kafka end-to-end tests — real produce/consume through VRL transforms
+// Purpose:   Kafka end-to-end tests -- real produce/consume through VRL transforms
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -84,7 +84,7 @@ fn default_hot_config() -> SharedConfig<HotConfig> {
 /// A stand-alone batch engine with no byte budget wired, so the pipeline loop
 /// sends each block whole.
 ///
-/// Pool built with an EXPLICIT 1-thread config (valid on any core count); the
+/// Pool built with an EXPLICIT 1-thread config (valid on any core count). The
 /// `BatchEngine::new` default derives bounds from `available_parallelism` and
 /// panics on a 1-core CI sandbox.
 fn default_engine() -> Arc<BatchEngine> {
@@ -214,7 +214,7 @@ async fn round_trip(
 #[tokio::test]
 #[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
+    NEVER run by default in CI -- that's the silent-internal-broker-touch bug."]
 async fn test_produce_consume_json_transform() {
     let env = ensure_kafka_or_skip!("produce-consume-json-transform");
     let kf = env.config();
@@ -249,7 +249,7 @@ async fn test_produce_consume_json_transform() {
 #[tokio::test]
 #[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
+    NEVER run by default in CI -- that's the silent-internal-broker-touch bug."]
 async fn test_vrl_abort_drops_events() {
     let env = ensure_kafka_or_skip!("vrl-abort-drops-events");
     let kf = env.config();

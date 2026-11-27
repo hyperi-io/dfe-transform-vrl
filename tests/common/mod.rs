@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      tests/common/mod.rs
-// Purpose:   Shared test infrastructure — dual-mode (remote/docker) config helpers
+// Purpose:   Shared test infrastructure -- dual-mode (remote/docker) config helpers
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -9,8 +9,8 @@
 //! Shared test helpers for integration and e2e tests.
 //!
 //! Supports two test backends via `TEST_MODE` in `.env`:
-//! - `remote` (default) — remote cluster endpoints from env vars
-//! - `docker` — dfe-docker infra profile on localhost (no auth, no TLS)
+//! - `remote` (default) -- remote cluster endpoints from env vars
+//! - `docker` -- dfe-docker infra profile on localhost (no auth, no TLS)
 
 use std::env;
 

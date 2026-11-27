@@ -8,9 +8,6 @@
 
 //! Deployment contract for Dockerfile and compose fragment generation, and
 //! for the thin chart the release assembles.
-//!
-//! Unlike dfe-transform-vector, this service does NOT need the Vector binary
-//! in its container image. The container is just the Rust binary.
 
 use crate::config::ENV_PREFIX;
 use scalo::deployment::{
@@ -23,9 +20,8 @@ use scalo::deployment::{
 /// `Transport::Direct` serialises to, and the alias dfe-engine renders.
 const PUSH_TRANSPORTS: [&str; 2] = ["direct", "grpc"];
 
-/// The chart description and the OCI image description, kept as one string so
-/// the two cannot drift.
-const DESCRIPTION: &str = "Embedded VRL transform engine -- Kafka-to-Kafka pipelines";
+/// The chart and OCI image description: the package's, so the three cannot drift.
+const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
 /// Build the deployment contract for dfe-transform-vrl.
 #[must_use]
@@ -453,7 +449,7 @@ mod tests {
         let c = contract();
         assert_eq!(
             c.config_mount_path, "/etc/dfe-transform-vrl/config.yaml",
-            "config mount path must be /etc/<component>/config.yaml — matches \
+            "config mount path must be /etc/<component>/config.yaml -- matches \
              loader/receiver/fetcher/archiver convention"
         );
         // The wrapper's --config arg must point at the same path.

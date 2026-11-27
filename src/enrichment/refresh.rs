@@ -1,10 +1,10 @@
-//! Project:   dfe-transform-vrl
-//! File:      src/enrichment/refresh.rs
-//! Purpose:   Background refresh for enrichment tables with periodic reload
-//! Language:  Rust
-//!
-//! License:   BUSL-1.1
-//! Copyright: (c) 2026 HYPERI PTY LIMITED
+// Project:   dfe-transform-vrl
+// File:      src/enrichment/refresh.rs
+// Purpose:   Background refresh for enrichment tables with periodic reload
+// Language:  Rust
+//
+// License:   BUSL-1.1
+// Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Spawns per-table tokio tasks that periodically reload enrichment data
 //! and atomically swap the inner `FxHashMap` via `ArcSwap`.
@@ -233,7 +233,7 @@ mod tests {
         let reg_arc = registry.into_arc();
         let metrics = make_metrics();
 
-        // Mmdb source path — reload_table should fail gracefully and NOT
+        // Mmdb source path -- reload_table should fail gracefully and NOT
         // swap the existing data.
         let mmdb_source = EnrichmentSourceConfig::Mmdb {
             path: "/nonexistent/geo.mmdb".to_string(),
@@ -262,7 +262,7 @@ mod tests {
         let reg_arc = registry.into_arc();
         let metrics = make_metrics();
 
-        // Reload from a source that doesn't exist — fail-safe should
+        // Reload from a source that doesn't exist -- fail-safe should
         // keep the old row.
         let bad_source = EnrichmentSourceConfig::File {
             path: "/nonexistent/path/data.csv".to_string(),

@@ -247,7 +247,7 @@ impl MmdbBuilder {
 
 /// The ASN-shaped fixture the enrichment tests share.
 ///
-/// `1.128.0.0/16` and `12.81.92.0/24` carry records; anything else misses.
+/// `1.128.0.0/16` and `12.81.92.0/24` carry records. Anything else misses.
 pub fn asn_fixture(dir: &Path) -> PathBuf {
     let mut builder = MmdbBuilder::new("DFE-Test-ASN");
     builder

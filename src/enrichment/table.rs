@@ -1,10 +1,10 @@
-//! Project:   dfe-transform-vrl
-//! File:      src/enrichment/table.rs
-//! Purpose:   High-performance enrichment table backed by `FxHashMap` + `ArcSwap`
-//! Language:  Rust
-//!
-//! License:   BUSL-1.1
-//! Copyright: (c) 2026 HYPERI PTY LIMITED
+// Project:   dfe-transform-vrl
+// File:      src/enrichment/table.rs
+// Purpose:   High-performance enrichment table backed by `FxHashMap` + `ArcSwap`
+// Language:  Rust
+//
+// License:   BUSL-1.1
+// Copyright: (c) 2026 HYPERI PTY LIMITED
 
 use arc_swap::ArcSwap;
 use chrono::{DateTime, Utc};
@@ -29,7 +29,7 @@ pub type RowMap = FxHashMap<CompactKey, Vec<Arc<ObjectMap>>>;
 ///
 /// Mirrors Vector's `enrichment::Condition`: a condition object entry whose
 /// value is `{"from": t'...'}`, `{"to": t'...'}` or both becomes a date
-/// comparison; everything else is an equality test.
+/// comparison. Everything else is an equality test.
 #[derive(Debug, Clone)]
 pub enum Condition {
     /// The field must equal `value` (or the wildcard, when one is supplied).
@@ -77,7 +77,7 @@ impl Condition {
 
     /// The compared value when this is an equality test, else `None`.
     ///
-    /// Only equality conditions can use the `CompactKey` index; a date range
+    /// Only equality conditions can use the `CompactKey` index. A date range
     /// has to be evaluated against every candidate row.
     pub const fn equality_value(&self) -> Option<&Value> {
         match self {
@@ -95,7 +95,7 @@ impl Condition {
 ///
 /// Column values are joined with a `\x00` null-byte separator so that
 /// multi-column keys remain unambiguous. `Value::Bytes(b)` contributes its
-/// raw bytes; all other `Value` variants contribute `format!("{v}")`.
+/// raw bytes. All other `Value` variants contribute `format!("{v}")`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CompactKey(Box<[u8]>);
 
@@ -155,7 +155,7 @@ impl CompactKey {
                     None => buf.extend_from_slice(format!("{value}").as_bytes()),
                 }
             }
-            // Missing column → contributes empty bytes (separator still written)
+            // Missing column -> contributes empty bytes (separator still written)
         }
 
         Self(buf.into_boxed_slice())
@@ -205,7 +205,7 @@ impl TableData {
     ///
     /// `case_sensitive` applies to string comparison only. `wildcard`, when
     /// set, additionally matches a row whose cell equals the wildcard value.
-    /// `select` restricts the returned fields; a selected field the row does
+    /// `select` restricts the returned fields. A selected field the row does
     /// not carry is silently omitted, matching Vector. Only the selected
     /// fields of a match are cloned.
     ///
@@ -243,7 +243,7 @@ impl TableData {
                     .then(|| CompactKey::from_conditions(conditions, key_columns))
                     .flatten();
 
-                // The index narrows to one bucket; the bucket's rows still go
+                // The index narrows to one bucket. The bucket's rows still go
                 // through the full condition test, because a condition outside
                 // the key columns is not encoded in the key.
                 Ok(indexed.map_or_else(
@@ -345,8 +345,8 @@ impl EnrichmentTable {
             source_config,
             refresh_config,
             schema: Arc::default(),
-            // A geo database has no column list to check a condition against;
-            // arity is enforced instead, in `mmdb_find_rows`.
+            // A geo database has no column list to check a condition against.
+            // Arity is enforced instead, in `mmdb_find_rows`.
             columns: Arc::from(Vec::new()),
             max_bytes: None,
         }
@@ -483,7 +483,7 @@ impl EnrichmentTable {
     /// Atomically replace the inner hash-map.
     ///
     /// Readers holding a `load()` guard continue to see the old map until
-    /// they drop it; all subsequent loads see the new map.
+    /// they drop it. All subsequent loads see the new map.
     ///
     /// Returns `Err` if this table is not hash-map-backed.
     ///
@@ -531,7 +531,7 @@ impl std::fmt::Debug for EnrichmentTable {
 /// A condition naming a field this row does not carry never matches. That is
 /// a per-row test, not the dataset check: a condition on a column the *table*
 /// does not have is rejected at compile time (see
-/// `EnrichmentTable::validate_condition_fields`), so reaching here with an
+/// [`EnrichmentTable::missing_columns`]), so reaching here with an
 /// unknown field means the column exists but this row omits it, which is
 /// possible for JSON and STIX sources whose rows need not agree.
 fn row_matches(
@@ -559,7 +559,7 @@ fn row_matches(
 
 /// Compare a table cell against a condition value.
 ///
-/// Case insensitivity applies to UTF-8 byte strings only; every other pair of
+/// Case insensitivity applies to UTF-8 byte strings only. Every other pair of
 /// `Value` variants is compared for exact equality either way.
 fn values_equal(cell: &Value, expected: &Value, case_sensitive: bool) -> bool {
     if case_sensitive {
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn table_len_counts_rows_not_keys() {
-        // Two rows share a key value; both are kept, so len is 2.
+        // Two rows share a key value. Both are kept, so len is 2.
         let rows = vec![
             make_row(&[
                 ("abbr", bytes_value("CST")),
@@ -956,7 +956,7 @@ mod tests {
     fn find_rows_missing_key_column_falls_back_to_scan() {
         let row = make_row(&[("country", bytes_value("AU"))]);
         let table = make_hashmap_table("t", vec!["country".to_string()], vec![row]);
-        // Reached only when the row omits a column the table declares; the
+        // Reached only when the row omits a column the table declares. The
         // VRL path rejects an undeclared column at compile time instead.
         assert_eq!(
             find(&table, &eq(&[("city", bytes_value("Brisbane"))])),

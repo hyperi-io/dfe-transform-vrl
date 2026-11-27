@@ -28,7 +28,8 @@ fn test_compile_fails_on_unknown_function() {
     assert!(compile_vrl(".x = this_function_does_not_exist()", None).is_err());
 }
 
-/// A transform reaches no host: its environment, its name, the network and DNS
+/// A transform reaches no host and no file it names: its environment, its name,
+/// the network, DNS, a descriptor or schema file and an unbounded decompression
 /// are refused at compile time, while the parsers stay.
 #[test]
 #[expect(
@@ -45,6 +46,23 @@ fn a_program_that_reaches_the_host_does_not_compile() {
         ),
         ("dns_lookup", r#".v = dns_lookup("localhost") ?? null"#),
         ("reverse_dns", r#".v = reverse_dns("127.0.0.1") ?? null"#),
+        (
+            "parse_proto",
+            r#".v = parse_proto(.raw, "/dev/zero", "m.M") ?? null"#,
+        ),
+        (
+            "encode_proto",
+            r#".v = encode_proto(.raw, "/dev/zero", "m.M") ?? null"#,
+        ),
+        (
+            "validate_json_schema",
+            r#".v = validate_json_schema(.raw, "/dev/zero") ?? null"#,
+        ),
+        ("decode_gzip", r".v = decode_gzip(.raw) ?? null"),
+        ("decode_zlib", r".v = decode_zlib(.raw) ?? null"),
+        ("decode_zstd", r".v = decode_zstd(.raw) ?? null"),
+        ("decode_lz4", r".v = decode_lz4(.raw) ?? null"),
+        ("decode_snappy", r".v = decode_snappy(.raw) ?? null"),
     ];
     for (function, source) in refused {
         let err = compile_vrl(source, None)
@@ -57,11 +75,32 @@ fn a_program_that_reaches_the_host_does_not_compile() {
         );
     }
 
+    // A file argument is refused, and the functions that take one stay.
+    for (argument, source) in [
+        ("psl", r#".v = parse_etld(.d, psl: "/dev/zero") ?? null"#),
+        (
+            "alias_sources",
+            r#".v = parse_groks(.d, patterns: ["%{WORD:w}"], alias_sources: ["/dev/zero"]) ?? null"#,
+        ),
+    ] {
+        let err = compile_vrl(source, None)
+            .err()
+            .unwrap_or_else(|| panic!("{argument}: a program naming a file compiled"));
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!(r#"invalid argument "{argument}""#)),
+            "{argument}: {message}"
+        );
+    }
+
     let program = compile(
         r#".parsed = parse_json!(.raw)
-.groked = parse_groks!(.line, patterns: ["%{WORD:verb} %{INT:code}"])"#,
+.groked = parse_groks!(.line, patterns: ["%{WORD:verb} %{INT:code}"])
+.etld = parse_etld!(.domain, plus_parts: 1).etld_plus"#,
     );
-    let mut value = Value::from(serde_json::json!({"raw": r#"{"a":1}"#, "line": "GET 200"}));
+    let mut value = Value::from(
+        serde_json::json!({"raw": r#"{"a":1}"#, "line": "GET 200", "domain": "www.example.com"}),
+    );
     run_vrl(&program, &mut value).unwrap();
     let obj = value.as_object().unwrap();
     assert_eq!(
@@ -74,6 +113,7 @@ fn a_program_that_reaches_the_host_does_not_compile() {
             serde_json::json!({"verb": "GET", "code": "200"})
         ))
     );
+    assert_eq!(obj.get("etld"), Some(&Value::from("example.com")));
 }
 
 #[test]
@@ -461,7 +501,7 @@ fn test_infallible_function_aborts_on_error() {
 }
 
 // =========================================================================
-// Idempotency — running same transform twice
+// Idempotency -- running same transform twice
 // =========================================================================
 
 #[test]

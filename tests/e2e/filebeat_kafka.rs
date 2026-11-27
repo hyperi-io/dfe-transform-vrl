@@ -87,7 +87,7 @@ fn kafka_config(kf: &KafkaTestConfig, topics: &[&str], group: &str) -> KafkaConf
     }
 }
 
-/// A port the OS has just confirmed free. Racy in principle; the window
+/// A port the OS has just confirmed free. Racy in principle. The window
 /// between the probe and the app's bind is microseconds on a test host.
 fn free_port() -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");

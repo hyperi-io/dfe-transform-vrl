@@ -22,7 +22,7 @@ use super::common;
 #[tokio::test]
 #[ignore = "requires live Kafka broker (KAFKA_BROKERS env). \
     Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
+    NEVER run by default in CI -- that's the silent-internal-broker-touch bug."]
 async fn test_live_kafka_connectivity_smoke() {
     let kf = common::kafka_test_config();
 
@@ -69,7 +69,7 @@ async fn test_live_kafka_connectivity_smoke() {
             panic!("KafkaTransport::new failed (probably bad creds): {e}");
         }
         Err(_) => {
-            panic!("KafkaTransport::new TIMED OUT after 20s — likely SASL/TLS handshake hung");
+            panic!("KafkaTransport::new TIMED OUT after 20s -- likely SASL/TLS handshake hung");
         }
     }
 }

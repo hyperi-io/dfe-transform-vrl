@@ -1,12 +1,12 @@
 // Project:   dfe-transform-vrl
 // File:      src/enrichment/registry.rs
-// Purpose:   Enrichment table registry — multi-source loading and dispatch
+// Purpose:   Enrichment table registry -- multi-source loading and dispatch
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Enrichment table registry — loads tables from multiple source types into
+//! Enrichment table registry -- loads tables from multiple source types into
 //! `FxHashMap`-backed `EnrichmentTable` instances for O(1) lookups.
 
 use std::sync::Arc;
@@ -417,7 +417,7 @@ mod tests {
             name: "big".into(),
             path,
             key_columns: vec!["id".into()],
-            max_bytes: Some(1), // 1 byte — will always exceed
+            max_bytes: Some(1), // 1 byte -- will always exceed
             ..Default::default()
         }];
 

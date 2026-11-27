@@ -13,7 +13,7 @@
 //! support, so they are implemented here against the same contract Vector
 //! exposes, verified against `vector 0.58.0`.
 //!
-//! Two properties are load-bearing:
+//! Two properties hold:
 //!
 //! - The table name is a compile-time literal validated against the registry,
 //!   so a typo fails at startup rather than on the millionth event, and VRL
@@ -159,7 +159,7 @@ fn compile_args(
 /// Mirrors the filter in Vector's `add_index`: an object literal carrying
 /// `from` and/or `to` is a date comparison, and is excluded from the dataset
 /// column check because it is not indexed. The test is on the *expression*,
-/// so it happens at compile time; `evaluate_condition` makes the same
+/// so it happens at compile time. `evaluate_condition` makes the same
 /// decision at run time on the resolved value.
 fn is_date_range(value: &expression::Expr) -> bool {
     matches!(
@@ -173,7 +173,7 @@ fn is_date_range(value: &expression::Expr) -> bool {
 /// Turn one resolved condition entry into a matching rule.
 ///
 /// A value carrying `from` and/or `to` is a date comparison, exactly as in
-/// Vector's `evaluate_condition`; anything else is an equality test.
+/// Vector's `evaluate_condition`. Anything else is an equality test.
 fn evaluate_condition(field: &KeyString, value: Value) -> Result<Condition, ExpressionError> {
     let Value::Object(map) = &value else {
         return Ok(Condition::Equals {

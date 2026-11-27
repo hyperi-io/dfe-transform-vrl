@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      tests/integration/vrl_deep.rs
-// Purpose:   Deep VRL execution tests — complex programs, error paths, fuzz
+// Purpose:   Deep VRL execution tests -- complex programs, error paths, fuzz
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -14,7 +14,7 @@
 //! - Nested object traversal, array manipulation
 //! - Runtime errors (divide by zero, bad regex, etc.)
 //! - Batch execution with mixed success/failure
-//! - Randomised fuzz inputs — programs must fail safely, never panic
+//! - Randomised fuzz inputs -- programs must fail safely, never panic
 
 use dfe_transform_vrl::engine::compiler::compile_vrl;
 use dfe_transform_vrl::engine::runner::{run_vrl, run_vrl_batch};
@@ -28,7 +28,7 @@ fn compile(source: &str) -> Program {
 }
 
 // ==========================================================================
-// String manipulation — upcase / downcase / contains / split / replace
+// String manipulation -- upcase / downcase / contains / split / replace
 // ==========================================================================
 
 #[test]
@@ -98,7 +98,7 @@ fn vrl_length_on_string_and_array() {
 }
 
 // ==========================================================================
-// Type coercion — to_int / to_float / to_bool / to_string
+// Type coercion -- to_int / to_float / to_bool / to_string
 // ==========================================================================
 
 #[test]
@@ -296,7 +296,7 @@ fn vrl_array_map_transforms_each() {
 }
 
 // ==========================================================================
-// Parse functions — parse_json, parse_syslog, parse_key_value
+// Parse functions -- parse_json, parse_syslog, parse_key_value
 // ==========================================================================
 
 #[test]
@@ -549,7 +549,7 @@ fn vrl_encode_json_and_parse_back() {
 }
 
 // ==========================================================================
-// Batch execution — mixed success/failure/abort semantics
+// Batch execution -- mixed success/failure/abort semantics
 // ==========================================================================
 
 #[test]
@@ -641,7 +641,7 @@ fn vrl_empty_string_operations() {
 }
 
 // ==========================================================================
-// Random / fuzz-like inputs — must not panic
+// Random / fuzz-like inputs -- must not panic
 // ==========================================================================
 
 /// A deterministic xorshift PRNG so tests are reproducible.
@@ -675,7 +675,7 @@ fn fuzz_event(seed: &mut u64) -> Value {
 
 #[test]
 fn vrl_fuzz_runtime_never_panics_with_fallible_program() {
-    // Program touches many fields — most will fail with bang ops,
+    // Program touches many fields -- most will fail with bang ops,
     // so we use ?? fallbacks everywhere to ensure we exercise both
     // success and failure paths without aborting.
     let p = compile(
@@ -839,7 +839,7 @@ fn vrl_metric_extraction_pipeline() {
 
 #[test]
 fn vrl_pii_masking_pipeline() {
-    // Mask email addresses; replace card with last-4 notation
+    // Mask email addresses. Replace card with last-4 notation
     let p = compile(
         r#"
         if exists(.email) {
@@ -948,7 +948,7 @@ fn vrl_compile_fails_for_bad_assignment() {
 }
 
 // ==========================================================================
-// Scale — large event, large batch
+// Scale -- large event, large batch
 // ==========================================================================
 
 #[test]

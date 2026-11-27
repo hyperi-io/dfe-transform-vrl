@@ -11,11 +11,41 @@
 //! Runs compiled VRL programs against event Values in-process.
 //! Each event is wrapped in a `TargetValueRef` and passed to the VRL runtime.
 
+use std::cell::Cell;
+use std::sync::Once;
+use std::sync::atomic::AtomicU64;
+
+use scalo::logger::log_debounced;
 use vrl::compiler::{Context, ExpressionError, Program, TargetValueRef, TimeZone};
 use vrl::prelude::state::RuntimeState;
 use vrl::value::{Secrets, Value};
 
 use crate::Result;
+
+thread_local! {
+    /// Set while this thread resolves a program, whose panic `run_vrl` catches.
+    static RESOLVING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Shortest gap between two warnings that the program panicked.
+const PANIC_WARN_INTERVAL_MS: u64 = 10_000;
+
+/// When the last panic warning was written, in epoch milliseconds.
+static LAST_PANIC_WARN_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Keep the default panic hook off stderr for a panic `run_vrl` catches, which
+/// is counted and logged as a transform error, so bad records cannot flood it.
+fn quiet_caught_panics() {
+    static HOOK: Once = Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !RESOLVING.get() {
+                previous(info);
+            }
+        }));
+    });
+}
 
 /// Run a compiled VRL program against a single event value.
 ///
@@ -44,11 +74,20 @@ pub fn run_vrl(program: &Program, value: &mut Value) -> Result<Value> {
     let mut ctx = Context::new(&mut target, &mut state, &timezone);
 
     // vrl's grok and arithmetic panic on record data, so a panic fails this record, not the process.
-    let resolved =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| program.resolve(&mut ctx)))
-            .map_err(|payload| {
-                crate::Error::VrlRuntime(format!("VRL panicked: {}", panic_message(&*payload)))
-            })?;
+    quiet_caught_panics();
+    RESOLVING.set(true);
+    let caught =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| program.resolve(&mut ctx)));
+    RESOLVING.set(false);
+    let resolved = caught.map_err(|payload| {
+        // The panic message can quote the record, so it stays in the error.
+        if log_debounced(&LAST_PANIC_WARN_MS, PANIC_WARN_INTERVAL_MS) {
+            tracing::warn!(
+                "the VRL program panicked on a record, which fails as a transform error"
+            );
+        }
+        crate::Error::VrlRuntime(format!("VRL panicked: {}", panic_message(&*payload)))
+    })?;
 
     resolved.map_err(|e| match e {
         ExpressionError::Abort { message, .. } => {
@@ -70,7 +109,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 /// Transform a batch of events through a compiled VRL program.
 ///
 /// Returns a vec of (index, result) pairs. Failed events are collected
-/// as errors rather than stopping the batch — the caller decides whether
+/// as errors rather than stopping the batch -- the caller decides whether
 /// to skip, DLQ, or abort.
 pub fn run_vrl_batch(
     program: &Program,

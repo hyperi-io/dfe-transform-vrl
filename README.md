@@ -11,7 +11,7 @@ Runs your VRL transforms over a DFE deployment's event stream, in-process.
 - Kafka in and out, or a direct gRPC push on a deployment with no broker. The transform you write is the same on both.
 - At-least-once by default: the source is acknowledged after the sink has the transformed records. `source.acknowledgements.enabled: false` acknowledges at receipt instead.
 - Enrichment tables from CSV, JSON, YAML and STIX, read from VRL, plus MMDB and SQLite with the `enrichment-mmdb` and `enrichment-sqlite` build features. A table with a `refresh` setting reloads as the service runs. MMDB loads once at start.
-- The host and network functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`) do not compile, so a transform cannot read the host's environment or reach the network.
+- The host, network, file and decompression functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`, `parse_proto`, `encode_proto`, `validate_json_schema`, `decode_gzip`, `decode_zlib`, `decode_zstd`, `decode_lz4`, `decode_snappy`) and the file arguments `parse_etld`'s `psl` and `parse_groks`' `alias_sources` do not compile, so a transform cannot read the host's environment or files, reach the network, or inflate a record without a bound.
 - Built on [scalo](https://github.com/hyperi-io/scalo-rs), so config, logs, metrics, health probes and scaling signals work the way they do in every DFE Rust service.
 
 JSON is the one payload format. A record that is not JSON is dropped, counted in `records_error_total{stage="deserialise"}`, and not redelivered. For Vector's transforms beyond `remap`, use [dfe-transform-vector](https://github.com/hyperi-io/dfe-transform-vector).

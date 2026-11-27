@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      src/engine/mod.rs
-// Purpose:   VRL transform engine — compilation and execution
+// Purpose:   VRL transform engine -- compilation and execution
 // Language:  Rust
 //
 // License:   BUSL-1.1

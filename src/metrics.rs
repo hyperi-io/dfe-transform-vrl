@@ -84,13 +84,10 @@ pub struct TransformMetrics {
     pub execute_duration: metrics::Histogram,
     pub deserialise_duration: metrics::Histogram,
     pub serialise_duration: metrics::Histogram,
-    pub batch_duration: metrics::Histogram,
     pub records_format: metrics::Counter,
-    pub programs_loaded: metrics::Gauge,
     pub abort_total: metrics::Counter,
     pub batch_size: metrics::Histogram,
     pub enrichment_table_rows: metrics::Gauge,
-    pub events_per_second: metrics::Gauge,
     pub enrichment_reload_total: metrics::Counter,
     pub enrichment_reload_duration: metrics::Histogram,
     pub enrichment_last_reload_timestamp: metrics::Gauge,
@@ -113,7 +110,7 @@ const fn vrl_failed_log() -> RejectionLog {
 impl TransformMetrics {
     /// Create all metrics via the scalo `MetricsManager`.
     ///
-    /// Every name registered here is bare; the prefix layer prepends a set
+    /// Every name registered here is bare. The prefix layer prepends a set
     /// `metrics.namespace` once, and by default there is none.
     pub fn new(manager: &MetricsManager, version: &str, commit: &str) -> Self {
         let dfe = ServiceMetrics::register(manager);
@@ -142,20 +139,11 @@ impl TransformMetrics {
             ),
             serialise_duration: manager
                 .histogram("serialise_duration_seconds", "Serialisation time per batch"),
-            batch_duration: manager.histogram(
-                "batch_duration_seconds",
-                "End-to-end batch latency (consume to commit)",
-            ),
             records_format: manager.counter("records_format_total", "Records received by format"),
-            programs_loaded: manager.gauge("programs_loaded", "Active VRL program count"),
             abort_total: manager.counter("abort_total", "Events dropped by VRL abort"),
             batch_size: manager.histogram("batch_size", "Events per transform batch"),
             enrichment_table_rows: manager
                 .gauge("enrichment_table_rows", "Rows loaded per enrichment table"),
-            events_per_second: manager.gauge(
-                "events_per_second",
-                "Instantaneous throughput (produced events / batch duration)",
-            ),
             enrichment_reload_total: manager.counter(
                 "enrichment_reload_total",
                 "Enrichment table reload attempts",
@@ -323,13 +311,10 @@ impl Default for TransformMetrics {
             execute_duration: metrics::histogram!("execute_duration_seconds"),
             deserialise_duration: metrics::histogram!("deserialise_duration_seconds"),
             serialise_duration: metrics::histogram!("serialise_duration_seconds"),
-            batch_duration: metrics::histogram!("batch_duration_seconds"),
             records_format: metrics::counter!("records_format_total"),
-            programs_loaded: metrics::gauge!("programs_loaded"),
             abort_total: metrics::counter!("abort_total"),
             batch_size: metrics::histogram!("batch_size"),
             enrichment_table_rows: metrics::gauge!("enrichment_table_rows"),
-            events_per_second: metrics::gauge!("events_per_second"),
             enrichment_reload_total: metrics::counter!("enrichment_reload_total"),
             enrichment_reload_duration: metrics::histogram!("enrichment_reload_duration_seconds"),
             enrichment_last_reload_timestamp: metrics::gauge!(
@@ -558,7 +543,7 @@ mod tests {
         let shutdown = CancellationToken::new();
         let task = spawn_memory_feed_task(Arc::new(m), None, Arc::new(guard), shutdown.clone());
 
-        // The interval's first tick fires at once; allow a loaded host 5s.
+        // The interval's first tick fires at once. Allow a loaded host 5s.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while capture.gauge("memory_used_bytes") != Some(123_456_789.0) {
             assert!(
@@ -605,7 +590,7 @@ mod tests {
             shutdown.clone(),
         );
 
-        // The interval's first tick fires at once; allow a loaded host 5s.
+        // The interval's first tick fires at once. Allow a loaded host 5s.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if scaling.calculate() >= 100.0 {
@@ -628,7 +613,7 @@ mod tests {
     #[test]
     fn default_does_not_panic() {
         // Verifies TransformMetrics::default() works without a global recorder.
-        // This is the test code path — no MetricsManager installed.
+        // This is the test code path -- no MetricsManager installed.
         let m = TransformMetrics::default();
         assert!(m.dfe.is_none());
         assert!(m.app.is_none());
@@ -675,16 +660,13 @@ mod tests {
         m.execute_duration.record(0.001);
         m.deserialise_duration.record(0.0005);
         m.serialise_duration.record(0.0003);
-        m.batch_duration.record(0.05);
         m.batch_size.record(500.0);
-        m.programs_loaded.set(3.0);
         m.abort_total.increment(1);
-        m.events_per_second.set(12345.0);
     }
 
     #[test]
     fn new_wires_layer1_and_layer2_groups() {
-        // Construct a MetricsManager — exercises the full registration path
+        // Construct a MetricsManager -- exercises the full registration path
         // through Layer 1 (ServiceMetrics), Layer 2 groups, and Layer 3 histograms.
         let manager = MetricsManager::new("test_dfe_transform_vrl");
         let m = TransformMetrics::new(&manager, "0.1.0", "abc1234");
@@ -700,11 +682,8 @@ mod tests {
         m.execute_duration.record(0.01);
         m.deserialise_duration.record(0.005);
         m.serialise_duration.record(0.003);
-        m.batch_duration.record(0.1);
         m.batch_size.record(1000.0);
-        m.programs_loaded.set(1.0);
         m.abort_total.increment(1);
-        m.events_per_second.set(42_000.0);
         m.enrichment_table_rows.set(500.0);
         m.enrichment_reload_total.increment(1);
         m.enrichment_reload_duration.record(0.5);

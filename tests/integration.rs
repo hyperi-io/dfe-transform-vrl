@@ -24,7 +24,7 @@
     clippy::missing_const_for_fn
 )]
 
-//! Integration tests — single binary with submodules.
+//! Integration tests -- single binary with submodules.
 //!
 //! Consolidates all integration tests into one compilation unit for ~3x
 //! faster link times vs separate `tests/*.rs` files.

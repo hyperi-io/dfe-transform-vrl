@@ -91,7 +91,7 @@ pipeline:
 #     - "localhost:9092"
 #   topic: "enriched_events_land"
 #   # NOT APPLIED: the producer's key argument carries the destination topic,
-#   # not a partition key, so nothing is derived from the event (scalo-rs#37).
+#   # not a partition key, so nothing is derived from the event (scalo-rs#78).
 #   key_field: ".org_id"
 #   compression: "zstd"                # none, gzip, lz4, snappy, zstd
 #   max_buffer_bytes: 67108864         # 64 MiB producer buffer
@@ -154,7 +154,8 @@ pipeline:
 # schema coerces text columns, which is what makes a numeric comparison or a
 # date range able to match. Accepted: asis, bytes, string, int, integer,
 # float, bool, boolean, date, date|<format>, timestamp, timestamp|<format>.
-# asis, bytes and string all leave the cell as text.
+# asis, bytes and string all leave the cell as text. A date or timestamp cell
+# with no zone reads as UTC.
 #
 # A condition naming a column the table does not have is a compile error, so
 # a typo fails at startup rather than never matching.

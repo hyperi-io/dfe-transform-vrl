@@ -6,14 +6,12 @@
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! Binary entry point — parse args, dispatch to CLI module.
+//! Binary entry point -- parse args, dispatch to CLI module.
 
 use clap::Parser;
 use dfe_transform_vrl::cli::{App, handle_emit_command};
 
-// jemalloc at every channel per 2026-04-17 DFE allocator policy.
-// hyperi-ci enables --features jemalloc on alpha/beta/release builds.
-// Local dev (no feature) uses the system allocator so cargo build stays fast.
+// hyperi-ci builds every release with `--features jemalloc`, and a local build keeps the system allocator.
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
