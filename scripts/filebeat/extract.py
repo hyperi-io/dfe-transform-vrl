@@ -170,7 +170,7 @@ def remove_empty_ifs(body: list[str], name: str) -> list[str]:
     """Remove `if <cond> { }` blocks emptied by geoip stripping.
 
     Only handles the single-line-condition form the templates use around
-    geoip enrichment; repeats until stable in case of nesting.
+    geoip enrichment, and repeats until stable in case of nesting.
     """
     removed = 0
     changed = True
@@ -206,7 +206,7 @@ def patch_ios_named_tz(body: list[str]) -> list[str]:
     The generated 2.1 date blocks resolve `.event.timezone` via the
     abbreviation CSV only, so a mapped name like "Australia/Sydney" never
     resolves and the event aborts. Patches the four
-    `external_timezone`-driven blocks in the ios body; DST stays correct
+    `external_timezone`-driven blocks in the ios body, so DST stays correct
     because the tz database, not a fixed offset, does the conversion.
     """
     out: list[str] = []

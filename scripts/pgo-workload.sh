@@ -80,7 +80,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PIPELINE_DIR="$PROJECT_ROOT/pipelines/filebeat"
 TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 
-# Locate pgo-driver binary; build on demand if missing.
+# Locate the pgo-driver binary, and build it if missing.
 # CI builds it first in .hyperi-ci.yaml's pgo.workload_setup_cmd, before the
 # workload timeout starts. The build below is the local fallback.
 PGO_DRIVER_PATH="${PGO_DRIVER_PATH:-}"
@@ -160,7 +160,7 @@ echo "pgo-workload: starting Redpanda ($KAFKA_IMAGE)"
 # heap starves the PGO-instrumented binary on 4GB CI runners (arm64 ARC + the
 # free OSS runners we target post-OSS). dev-container mode bundles
 # --overprovisioned, --reserve-memory 0M, --check=false, --unsafe-bypass-fsync
-# and auto-creates topics; the explicit --memory cap leaves headroom for the
+# and auto-creates topics. The explicit --memory cap leaves headroom for the
 # instrumented binary + load driver. Same Kafka wire protocol.
 KAFKA_CID=$(docker run -d --rm \
     -p "$KAFKA_PORT:9092" \
@@ -266,7 +266,7 @@ for attempt in $(seq 1 180); do
         tail -100 "$WORK_DIR/wrapper.log" >&2
         exit 1
     fi
-    # The probes are served by the metrics server; there is no separate
+    # The probes are served by the metrics server, with no separate
     # health listener.
     if curl -sf -o /dev/null --max-time 1 "http://127.0.0.1:$METRICS_PORT/readyz"; then
         echo "pgo-workload: wrapper ready (attempt $attempt)"

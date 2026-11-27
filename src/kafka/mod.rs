@@ -140,7 +140,7 @@ pub fn derive_dfe_source(source: &config::SourceConfig) -> Option<KafkaSource> {
 /// falling back to the explicit `group_id` from config. The explicit
 /// config always takes precedence (it may be set by dfe-engine).
 pub fn derive_consumer_group(source: &config::SourceConfig, pipeline_name: &str) -> String {
-    // Explicit config wins — dfe-engine sets this via env var
+    // Explicit config wins -- dfe-engine sets this via env var
     if !source.group_id.is_empty() {
         return source.group_id.clone();
     }

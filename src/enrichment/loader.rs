@@ -1,10 +1,10 @@
-//! Project:   dfe-transform-vrl
-//! File:      src/enrichment/loader.rs
-//! Purpose:   Enrichment table loaders for all source types
-//! Language:  Rust
-//!
-//! License:   BUSL-1.1
-//! Copyright: (c) 2026 HYPERI PTY LIMITED
+// Project:   dfe-transform-vrl
+// File:      src/enrichment/loader.rs
+// Purpose:   Enrichment table loaders for all source types
+// Language:  Rust
+//
+// License:   BUSL-1.1
+// Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Load enrichment data from various sources into `FxHashMap<CompactKey, Arc<ObjectMap>>`.
 //!
@@ -67,13 +67,16 @@ impl ColumnSchema {
             let column_type = match (parts.next(), parts.next()) {
                 (Some("date"), None) => ColumnType::Date("%Y-%m-%d".to_string()),
                 (Some("date"), Some(format)) => ColumnType::Date(format.to_string()),
-                _ => {
-                    ColumnType::Vrl(Conversion::parse(type_name, TimeZone::Local).map_err(|e| {
-                        crate::Error::Enrichment(format!(
-                            "table '{table_name}': column '{column}': {e}"
-                        ))
-                    })?)
-                }
+                // UTC, as the program runs, so a zone-less cell reads the same on every node.
+                _ => ColumnType::Vrl(
+                    Conversion::parse(type_name, TimeZone::Named(chrono_tz::Tz::UTC)).map_err(
+                        |e| {
+                            crate::Error::Enrichment(format!(
+                                "table '{table_name}': column '{column}': {e}"
+                            ))
+                        },
+                    )?,
+                ),
             };
             columns.insert(column.clone(), column_type);
         }
@@ -190,7 +193,7 @@ pub fn load_from_source(
                 FileFormat::Auto => {
                     let ext_format = detect_format(path);
                     if ext_format == FileFormat::Auto {
-                        // Unknown extension — try JSON first, then CSV
+                        // Unknown extension -- try JSON first, then CSV
                         load_json(Path::new(path), table_name, key_columns, schema)
                             .or_else(|_| load_csv(Path::new(path), table_name, key_columns, schema))
                     } else {
@@ -219,7 +222,7 @@ pub fn load_from_source(
             crate::enrichment::stix::load_stix(path, table_name, key_columns)
         }
         EnrichmentSourceConfig::Mmdb { .. } => Err(crate::Error::Enrichment(
-            "MMDB uses TableData::Mmdb, not HashMap — handled by registry directly".into(),
+            "MMDB uses TableData::Mmdb, not HashMap -- handled by registry directly".into(),
         )),
     }
 }
@@ -917,7 +920,7 @@ mod tests {
     #[test]
     fn load_from_source_explicit_format_overrides_extension() {
         let dir = tempfile::tempdir().unwrap();
-        // File is CSV content but named .json — explicit format CSV should win.
+        // File is CSV content but named .json -- explicit format CSV should win.
         let path = dir.path().join("tricky.json");
         std::fs::write(&path, "k,v\nx,1\n").unwrap();
         let src = EnrichmentSourceConfig::File {

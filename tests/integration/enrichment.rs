@@ -71,7 +71,7 @@ fn test_csv_lookup_hit() {
 
 #[test]
 fn test_csv_lookup_miss_errors() {
-    // Vector errors "No rows found" on a miss; it does not return null. The
+    // Vector errors "No rows found" on a miss. It does not return null. The
     // old assertion here locked in the divergence -- see issue #38.
     let dir = tempfile::tempdir().unwrap();
     let csv_path = write_file(
@@ -494,7 +494,7 @@ fn test_max_bytes_enforcement() {
         name: "big".into(),
         path: csv_path,
         key_columns: vec!["id".into()],
-        max_bytes: Some(1), // 1 byte — will always exceed
+        max_bytes: Some(1), // 1 byte -- will always exceed
         ..Default::default()
     }]);
 

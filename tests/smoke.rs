@@ -78,7 +78,7 @@ fn config_check_with_checked_in_fixture_exits_zero() {
     // Use the checked-in minimal fixture so this test doubles as drift
     // detection: if the loader schema changes and breaks minimal.yaml,
     // both this smoke test AND every other test using the fixture fail
-    // together — one consistent signal instead of inline-drift.
+    // together -- one consistent signal instead of inline-drift.
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/configs/minimal.yaml");
 
@@ -205,7 +205,7 @@ fn scalo_sections_in_the_config_file_reach_the_runtime() {
 /// program on disk, and return its path.
 fn write_scaling_probe(dir: &std::path::Path) -> std::path::PathBuf {
     // A program on disk takes the run past scalo's idle gate, which sits
-    // before the startup warnings (scalo-rs #69); the broker is never there.
+    // before the startup warnings (scalo-rs #69). The broker is never there.
     let transforms = dir.join("transforms");
     std::fs::create_dir(&transforms).unwrap();
     std::fs::write(transforms.join("100_probe.vrl"), ".marked = true\n").unwrap();
@@ -450,7 +450,7 @@ fn binary_helper_switches_telemetry_off() {
 fn example_config_yaml_parses_as_yaml() {
     // The example config users will copy MUST at minimum be valid YAML.
     // Most of it is intentionally commented out (users uncomment + fill in),
-    // so we can't run config-check against it — but a YAML syntax check
+    // so we can't run config-check against it -- but a YAML syntax check
     // catches the most likely regression: someone breaks the example while
     // editing it.
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.yaml");
@@ -465,8 +465,8 @@ fn example_config_yaml_parses_as_yaml() {
 /// Spawn the actual binary, give it time to clear the metrics-server
 /// bind path, and assert it doesn't die with that error before we
 /// terminate it. Uses minimal.yaml whose `transforms.dir` doesn't
-/// exist on disk; the wrapper crashes downstream on Kafka connect or
-/// transforms-load — but the metrics server step happens *before*
+/// exist on disk. The wrapper crashes downstream on Kafka connect or
+/// transforms-load -- but the metrics server step happens *before*
 /// either, so EADDRINUSE would surface here.
 #[test]
 fn service_startup_does_not_crash_with_eaddrinuse() {
@@ -479,7 +479,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
 
     // Bind to random unused ports so we don't conflict with anything on
     // the host running the test suite (the scalo metrics server uses
-    // METRICS_ADDR; we set both health/metrics via env to ephemeral high
+    // METRICS_ADDR. We set both health/metrics via env to ephemeral high
     // ports).
     let mut child = binary()
         .arg("--config")
@@ -498,7 +498,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         if let Ok(Some(_)) = child.try_wait() {
-            // Process exited before 2s — collect stderr and assert it
+            // Process exited before 2s -- collect stderr and assert it
             // wasn't EADDRINUSE.
             let mut stderr = String::new();
             if let Some(mut s) = child.stderr.take() {
@@ -508,7 +508,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
                 !stderr.contains("Address already in use"),
                 "GH#11 regressed: wrapper crashed with EADDRINUSE on startup.\nstderr:\n{stderr}"
             );
-            // Any other early exit is fine for this test's scope — minimal.yaml
+            // Any other early exit is fine for this test's scope -- minimal.yaml
             // fails on transforms-load (`/etc/dfe-transform-vrl/transforms`
             // doesn't exist) which we accept.
             return;
@@ -516,7 +516,7 @@ fn service_startup_does_not_crash_with_eaddrinuse() {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    // Still running after 2s — startup succeeded past the metrics bind.
+    // Still running after 2s -- startup succeeded past the metrics bind.
     // Terminate cleanly.
     let _ = child.kill();
     let _ = child.wait();
@@ -602,7 +602,7 @@ fn emit_contract_outputs_json() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Contract is JSON — should parse
+    // Contract is JSON -- should parse
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
     assert!(
         parsed.is_ok(),

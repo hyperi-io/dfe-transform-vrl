@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      src/pipeline.rs
-// Purpose:   Event processing pipeline — consume, transform, produce
+// Purpose:   Event processing pipeline -- consume, transform, produce
 // Language:  Rust
 //
 // License:   BUSL-1.1
@@ -26,7 +26,7 @@
 //!    compiled VRL program in parallel on the worker pool, and serialises the
 //!    surviving events back to JSON. Records that are not JSON, or that a VRL
 //!    `abort` or a transform error drops, are removed from the block, which
-//!    then releases `Dropped`; the block's `commit_tokens`
+//!    then releases `Dropped`. The block's `commit_tokens`
 //!    (the source acks) flow through untouched, so a fan-in NEVER under-acks
 //!    the source.
 //! 3. The loop sends the whole out-batch via the sender's
@@ -189,9 +189,9 @@ pub async fn run(
     let consumer_config = kafka::build_consumer_config(&config.source);
 
     // Consumer: attach the self-regulation inbound gate so intake pauses the
-    // ASSIGNED partitions under memory pressure (member stays in the group,
-    // consumer lag rises, KEDA scales up). When the governor is off the plain
-    // consumer is used (byte-identical to the pre-governor data path).
+    // assigned partitions under memory pressure (member stays in the group,
+    // consumer lag rises, KEDA scales up). With the governor off the consumer
+    // is ungated.
     let consumer = KafkaTransport::receiver(&consumer_config)
         .await
         .map_err(|e| crate::Error::Kafka(format!("failed to create consumer: {e}")))?
@@ -206,24 +206,19 @@ pub async fn run(
     let consumer = Arc::new(consumer);
 
     // Outbound circuit latch. The sink closure opens it on a fatal produce
-    // failure and closes it on the next successful send; the scaling-signal
+    // failure and closes it on the next successful send. The scaling-signal
     // ticker reads it and pushes `set_circuit_open`. A dead sink gates the
     // composite pressure to 0 (more pods cannot relieve an unreachable broker).
     let circuit_open = Arc::new(AtomicBool::new(false));
 
-    // Per-pod scaling-signal ticker. The batch
-    // engine owns the recv loop, so there is no app-side poll tick to piggy-back
-    // on; a lightweight background task feeds the runtime's shared
-    // `ScalingPressure` -- the engine served at `/scaling/pressure` to KEDA --
-    // on a fixed cadence. It pushes:
-    //   - the `kafka_lag` component (the assigned-partition lag, the primary
-    //     KEDA driver, registered via `ServiceApp::scaling_components`);
+    // Per-pod scaling-signal ticker. The batch engine owns the recv loop, so a
+    // background task feeds the runtime's shared `ScalingPressure` (served at
+    // `/scaling/pressure`) on a fixed cadence, until shutdown. It pushes:
+    //   - the `kafka_lag` component (the assigned-partition lag, registered
+    //     via `ServiceApp::scaling_components`).
     //   - the outbound circuit latch (open -> pressure gated to 0: more pods
     //     cannot relieve a dead broker).
-    // The memory HARD gate (usage past memory_gate_threshold forces pressure
-    // to 100 -> immediate scale-up) is fed by `metrics::spawn_memory_feed_task`.
-    // These replace the old per-pod `ScalingSignalsCell` push, which fed the
-    // SAME source values into a now-removed second engine. Stops on shutdown.
+    // The memory gate is fed by `metrics::spawn_memory_feed_task`.
     // The runtime builds the engine whenever scalo's `scaling` feature is
     // compiled, even with `scaling.enabled = false`, so this is `None` only in
     // a build without that feature.
@@ -379,7 +374,7 @@ fn producer_config(config: &Config) -> KafkaConfig {
 /// Drive the mid-tier transform through [`BatchEngine::pipeline`].
 ///
 /// `receiver` is the source (the optionally gated Kafka consumer, or the Push
-/// listener); `sender` is the sink. The VRL transform is the `process` closure
+/// listener). `sender` is the sink. The VRL transform is the `process` closure
 /// and the produce is the `sink` closure. The loop owns batching, streaming
 /// sub-blocks under pressure, and holding each block's source acknowledgement
 /// until the sink has delivered it. Records `sender` would dead-letter rather
@@ -414,17 +409,16 @@ where
     if let Some(ref dfe) = transform_metrics.dfe {
         dfe.pipeline_ready(true);
     }
-    info!("pipeline ready — entering governed event loop");
+    info!("pipeline ready -- entering governed event loop");
 
     // ---- process: bytes -> VRL Value -> bytes, in parallel on the pool -------
     //
     // Runs the compiled VRL program across the block. Records dropped by a VRL
     // `abort` or a transform/(de)serialise error are removed from the block and
-    // counted in a marker record the sink takes back out; the commit_tokens flow
+    // counted in a marker record the sink takes back out. The commit_tokens flow
     // through untouched via `map_records`, so a fan-in never under-acks the
     // source offsets (at-least-once on the surviving set).
-    // `hot_config` is retained for its other live fields (validated + reloaded)
-    // even though the partition-key path is dormant until scalo #37 lands.
+    // Every `hot_config` field is on `INERT_SETTINGS`, so nothing here reads it.
     let _ = &hot_config;
     let process = {
         let program = Arc::clone(&program);
@@ -448,7 +442,7 @@ where
     //
     // `send_batch` routes each record to its `key` (the Kafka destination topic
     // -- set to the configured sink topic in `transform_records`). The loop
-    // releases the block's source only on `Ok`; see `settle_send` for how every
+    // releases the block's source only on `Ok`. See `settle_send` for how every
     // other result holds it.
     //
     // The sender counts its own `transport_*` series under its own transport
@@ -638,7 +632,7 @@ fn settle_send(
         SendResult::Fatal(e) => {
             // Sink unreachable -> open the outbound circuit latch so the
             // scaling composite gates to 0 (more pods cannot relieve a dead
-            // broker; the circuit is the gate).
+            // broker. The circuit is the gate).
             circuit_open.store(true, Ordering::Release);
             transform_metrics.record_produce_error();
             Err(EngineError::Sink(format!("produce failed: {e}")))
@@ -704,11 +698,11 @@ fn split_dropped(records: &[Record]) -> (Vec<Record>, u64) {
 /// Transform a block of [`Record`]s through the VRL program.
 ///
 /// JSON parse -> VRL eval (parallel on the worker pool when available) ->
-/// JSON serialise. Returns ONLY the surviving records; a record that is not
+/// JSON serialise. Returns ONLY the surviving records. A record that is not
 /// JSON, or that a VRL `abort`, a transform error or a serialise error drops,
-/// is removed (and metered). Each surviving record's `key` is set to the sink topic so the
-/// Kafka producer routes it correctly (scalo #37: `send`'s key arg IS the
-/// destination topic).
+/// is removed (and metered). Each surviving record's `key` is set to the sink
+/// topic, because the sender reads `key` as the destination topic
+/// (scalo-rs#78).
 #[allow(
     clippy::too_many_lines,
     clippy::cast_precision_loss,
@@ -819,11 +813,8 @@ fn transform_records(
         .record(vrl_start.elapsed().as_secs_f64());
 
     // Phase 3: serialise the surviving events back to JSON and build the
-    // output records. The Kafka producer routes each record to its
-    // `key` (= the sink topic). Partition keying via the routing field is NOT
-    // settable through the sender trait (scalo #37: `send`'s key arg IS the
-    // destination topic, so there is no slot for a partition key); the routing
-    // field stays a config surface only until #37 lands.
+    // output records, each keyed by the sink topic. The sender has no slot for
+    // a partition key (scalo-rs#78), so `sink.key_field` is not applied.
     let ser_start = Instant::now();
     // Each event is dropped as soon as its bytes are built.
     let mut out_records: Vec<Record> = Vec::with_capacity(transformed.len());
@@ -871,12 +862,6 @@ fn deserialize_event(payload: &[u8]) -> crate::Result<Value> {
 fn serialize_event(value: &Value) -> crate::Result<Vec<u8>> {
     sonic_rs::to_vec(value).map_err(|e| crate::Error::Serialisation(format!("JSON serialise: {e}")))
 }
-
-// NB: the dot-path partition-key extractor (`extract_key`) was removed in the
-// WorkBatch migration. scalo #37 means the Kafka sender's `key` arg IS the
-// destination topic (no slot for a partition key via `send`/`send_batch`), so
-// the produce path keys on the sink topic and there is nothing for an extractor
-// to feed. Re-introduce a per-record partition key once #37 lands.
 
 // The integration and e2e tests' port picker, so a listener here also binds below 10240.
 #[cfg(test)]
@@ -986,7 +971,7 @@ mod tests {
         }
     }
 
-    /// A deserialise failure drops the bad record but keeps the good ones; the
+    /// A deserialise failure drops the bad record but keeps the good ones. The
     /// run never aborts the whole block on one bad payload.
     #[test]
     fn test_transform_records_drops_unparseable() {

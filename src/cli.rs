@@ -90,7 +90,7 @@ impl ServiceApp for App {
         // default, and no env var moves it. `to_config_options` hands it the `--config` file as
         // its settings layer. Must run before the logger and the ServiceRuntime.
         if let Err(e) = scalo::config::setup(self.common.to_config_options(self.env_prefix())) {
-            // The cascade is a OnceLock; a second load keeps the first seed.
+            // The cascade is a OnceLock. A second load keeps the first seed.
             debug!(error = %e, "scalo config cascade already seeded");
         }
 
@@ -131,12 +131,12 @@ impl ServiceApp for App {
     fn scaling_components(&self, _config: &Config) -> Vec<ScalingComponent> {
         // Register this app's weighted KEDA components on the runtime's unified
         // `ScalingPressure` (the engine served at `/scaling/pressure`). The
-        // pipeline's per-pod ticker drives `kafka_lag`; the worker-pool scaler
+        // pipeline's per-pod ticker drives `kafka_lag`. The worker-pool scaler
         // drives `worker_pool_saturation` (set_component is a no-op for an
         // unregistered name, so both MUST be registered here to count).
         // `memory` is the never-OOM HARD gate, fed via `set_memory` by
         // `metrics::spawn_memory_feed_task` on both transports. The lag
-        // term is the dominant KEDA driver (consumer-group lag); the pool
+        // term is the dominant KEDA driver (consumer-group lag). The pool
         // saturation term reflects CPU-bound transform pressure.
         vec![
             ScalingComponent::new("kafka_lag", 0.70, 100_000.0),
@@ -222,10 +222,7 @@ async fn run_transform_service(
         "starting dfe-transform-vrl"
     );
 
-    // Log derived DFE topology — operators rely on this to confirm the
-    // wrapper joined the right consumer group and resolves the right
-    // source name from the topic naming convention. Pattern matches
-    // dfe-transform-wasm; useful when debugging consumer-group surprises.
+    // The consumer group and the source name the topic naming resolves to.
     let derived_source = crate::kafka::derive_dfe_source(&config.source);
     let consumer_group = crate::kafka::derive_consumer_group(&config.source, &config.pipeline.name);
     info!(
@@ -253,8 +250,7 @@ async fn run_transform_service(
         "startup config"
     );
 
-    // Compile VRL programs (fail-fast before any async work)
-    // Compile VRL programs and load enrichment tables
+    // Load the enrichment tables and compile the program before any async work.
     let vrl_source = compiler::load_vrl_source(&config.transforms)
         .map_err(|e| anyhow::anyhow!("VRL source loading failed: {e}"))?;
 
@@ -293,12 +289,6 @@ async fn run_transform_service(
             .map_err(|e| anyhow::anyhow!("VRL compilation failed: {e}"))?;
         Arc::new(compilation.program)
     };
-    // VRL compiles all source files into a single program; log program count (always 1)
-    debug!(
-        source_bytes = vrl_source.len(),
-        programs_loaded = 1,
-        "VRL program compiled"
-    );
     budget::log_compiled(vrl_source.len() as u64);
 
     // Shutdown coordination. The runtime installs the signal handler and
@@ -316,7 +306,7 @@ async fn run_transform_service(
         });
     }
 
-    // Memory guard — the runtime's shared, cgroup-aware guard. It is the SAME
+    // Memory guard -- the runtime's shared, cgroup-aware guard. It is the SAME
     // guard that feeds the self-regulation governor (the inbound pause-partitions
     // brake) and the worker pool, so accounting is unified. No stand-alone guard.
     let memory_guard = Arc::clone(&runtime.memory_guard);
@@ -326,17 +316,12 @@ async fn run_transform_service(
     );
 
     // Readiness flag. The probes are served by the runtime's metrics server on
-    // the metrics port, which is what the chart probes; this service starts no
+    // the metrics port, which is what the chart probes. This service starts no
     // second HTTP listener for them.
     let ready_flag = Arc::new(AtomicBool::new(false));
 
-    // Metrics: reuse the MetricsManager that scalo's ServiceApp framework has
-    // already constructed and started for us (`runtime.metrics`). NEVER
-    // construct a new MetricsManager here — that creates a second server on
-    // the same port and the wrapper crashes with EADDRINUSE on startup (GH
-    // issue #11). The framework already exposes everything we register on
-    // the global recorder; we just wire our app-specific metrics + readiness
-    // into the running manager.
+    // The runtime's MetricsManager, never a second one: that would bind the
+    // metrics port again and fail with EADDRINUSE.
     //
     // The listener is already bound by then, on the address `load_config` fed
     // the cascade: `--metrics-addr`/`METRICS_ADDR` first, else `metrics.address`
@@ -365,7 +350,7 @@ async fn run_transform_service(
         "reloadable config subset initialised"
     );
 
-    // Config reloader: file polling + SIGHUP → reload hot-config subset
+    // Config reloader: file polling + SIGHUP -> reload hot-config subset
     let resolved_config_path = config_path
         .map(PathBuf::from)
         .or_else(|| crate::config::working_dir_config_file().map(PathBuf::from));
@@ -449,7 +434,7 @@ async fn run_transform_service(
     // reports zero pressure.
     let scaling = runtime.scaling.clone();
 
-    // Stops on `shutdown_token`; aborted below as well, for a pipeline that
+    // Stops on `shutdown_token`. Aborted below as well, for a pipeline that
     // fails without a shutdown.
     let memory_feed_task = metrics::spawn_memory_feed_task(
         Arc::clone(&transform_metrics),
@@ -460,7 +445,7 @@ async fn run_transform_service(
 
     // Pipeline -- runs the governed engine driver until `shutdown_token` is
     // cancelled (the driver returns cleanly on cancel). `run_service` is awaited
-    // by `run_app`, so this blocks here for the process lifetime; no separate
+    // by `run_app`, so this blocks here for the process lifetime. No separate
     // spawn + signal-wait is needed (the runtime owns signal handling).
     let result = pipeline::run(
         &config,
@@ -572,7 +557,6 @@ mod tests {
     #[test]
     fn dfe_app_common_args_accessible() {
         let app = parse(&["run"]);
-        // Just verifies the accessor compiles and returns a reference.
         let _args = app.common_args();
     }
 
@@ -607,10 +591,7 @@ mod tests {
 
     #[test]
     fn command_maps_standard_variants() {
-        // After the StandardCommand flatten, every standard subcommand
-        // (run, version, config-check, generate-artefacts, metrics-manifest)
-        // returns Some via the trait. Only emit-* / non-standard variants
-        // return None.
+        // A standard subcommand maps to `Some`, an emit-* one to `None`.
         let version_app = parse(&["version"]);
         assert!(version_app.command().is_some());
         let config_check_app = parse(&["config-check"]);
@@ -641,7 +622,7 @@ mod tests {
             "error must include the actual missing path, got: {msg}"
         );
         // Must NOT fall through to validation errors like "sink.topic must
-        // not be empty" — those mislead operators into thinking the config
+        // not be empty" -- those mislead operators into thinking the config
         // is loaded but partially wrong.
         assert!(
             !msg.contains("sink.topic"),
@@ -692,8 +673,6 @@ transforms:
     #[test]
     fn handle_emit_command_dockerfile_returns_some() {
         let app = parse(&["emit-dockerfile"]);
-        // Note: this prints to stdout, but that's fine for tests.
-        // We just verify the code path executes and returns Some(()).
         let result = handle_emit_command(&app);
         assert_eq!(result, Some(()));
     }

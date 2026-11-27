@@ -533,15 +533,18 @@ async fn a_record_that_panics_vrl_leaves_the_binary_running() {
                  192.168.100.197 -> 224.0.0.22, 1 packet",
                 Some(&ios_conf),
             ),
+            false,
         ),
         (
             "a string repeated more times than memory can hold",
             "transforms:\n  dir: \"./vrl\"\n".to_string(),
             serde_json::json!({ "count": i64::MAX }),
             serde_json::json!({ "count": 1 }),
+            true,
         ),
     ];
-    for (case, transforms, mut poison, mut next) in cases {
+    // The last field: the runner catches the panic, where grok catches its own.
+    for (case, transforms, mut poison, mut next, runner_catches) in cases {
         // The filebeat program keeps a root field, so `id` marks each record.
         poison["id"] = "poison".into();
         next["id"] = "next".into();
@@ -563,11 +566,29 @@ async fn a_record_that_panics_vrl_leaves_the_binary_running() {
         drop(pusher);
         let (received, _) = take_from(&loader, 1, Duration::from_secs(30)).await;
 
+        // The warning is written after the panic hook runs, so once it is read
+        // anything the hook wrote has been read too.
+        let warned = "the VRL program panicked on a record";
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while runner_catches
+            && Instant::now() < deadline
+            && !running.stderr.lock().unwrap().contains(warned)
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let exited = running.child.try_wait().ok().flatten();
         let stderr = running.stderr.lock().unwrap().clone();
         assert!(
             exited.is_none(),
             "{case}: the binary exited ({exited:?}) on the record\n{stderr}"
+        );
+        assert!(
+            !runner_catches || stderr.contains(warned),
+            "{case}: no warning that the program panicked\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked at"),
+            "{case}: the panic hook wrote the caught panic to stderr\n{stderr}"
         );
         assert!(matches!(sent, SendResult::Ok), "{case}: {sent:?}\n{stderr}");
         assert_eq!(

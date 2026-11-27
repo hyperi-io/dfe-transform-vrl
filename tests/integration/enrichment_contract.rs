@@ -564,23 +564,41 @@ fn date_range_conditions_select_by_timestamp() {
     assert_eq!(names("to"), vec![r#""Alice""#]);
 }
 
+/// A zone-less cell reads as UTC whatever the node's zone, as the program does.
 #[test]
-fn a_date_column_parses_at_midnight_utc() {
-    let dir = tempfile::tempdir().unwrap();
-    let registry = registry_for(EnrichmentTableConfig {
-        name: "people".into(),
-        path: write_file(dir.path(), "people.csv", "id,dob\n1,1985-06-15\n"),
-        key_columns: vec!["id".into()],
-        schema: schema_of(&[("dob", "date")]),
-        ..Default::default()
-    });
+fn a_zone_less_date_or_timestamp_cell_reads_as_utc() {
+    let cases = [
+        ("date", "1985-06-15"),
+        ("timestamp|%Y-%m-%d %H:%M:%S", "1985-06-15 00:00:00"),
+    ];
+    temp_env::with_var("TZ", Some("AEST-10"), || {
+        assert_eq!(
+            chrono::Local::now().offset().local_minus_utc(),
+            36_000,
+            "the node zone must be off UTC for this test to mean anything"
+        );
+        for (column_type, cell) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let registry = registry_for(EnrichmentTableConfig {
+                name: "people".into(),
+                path: write_file(dir.path(), "people.csv", &format!("id,dob\n1,{cell}\n")),
+                key_columns: vec!["id".into()],
+                schema: schema_of(&[("dob", column_type)]),
+                ..Default::default()
+            });
 
-    let event = run(
-        r#".rows = find_enrichment_table_records!("people", {"dob": {"from": t'1985-06-15T00:00:00Z', "to": t'1985-06-15T00:00:00Z'}})"#,
-        registry,
-    )
-    .unwrap();
-    assert_eq!(field(&event, "rows").unwrap().as_array().unwrap().len(), 1);
+            let event = run(
+                r#".rows = find_enrichment_table_records!("people", {"dob": {"from": t'1985-06-15T00:00:00Z', "to": t'1985-06-15T00:00:00Z'}})"#,
+                registry,
+            )
+            .unwrap();
+            assert_eq!(
+                field(&event, "rows").unwrap().as_array().unwrap().len(),
+                1,
+                "{column_type}: {cell} did not read as 1985-06-15T00:00:00Z"
+            );
+        }
+    });
 }
 
 // =========================================================================

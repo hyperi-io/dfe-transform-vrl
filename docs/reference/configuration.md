@@ -87,7 +87,7 @@ A single underscore (`DFE_TRANSFORM_VRL_METRICS_ADDRESS`) produces a flat key th
 |-------|----------------------|-------|
 | `pipeline.batch_size` | Events per transform chunk | not applied -- the chunk size is `batch_processing.max_chunk_size`, a scalo section |
 | `pipeline.batch_timeout_ms` | Max wait before flushing partial batch | not applied -- no such timer |
-| `sink.key_field` | Kafka partition key path | not applied -- scalo-rs#37 |
+| `sink.key_field` | Kafka partition key path | not applied -- scalo-rs#78 |
 
 `config::INERT_SETTINGS` lists those three and `source.commit_interval_ms`, which the production Kafka profile leaves unread because librdkafka auto-commit is off and the engine commits after each sink ack. The wrapper warns at startup for each one a deployment has moved off its default.
 

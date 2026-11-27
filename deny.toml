@@ -21,7 +21,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, not vulnerable, and no patched release exists. dfe-transform-vrl uses it directly, and scalo, vrl, file-rotate and syslog_loose depend on it too. Drop when the lock no longer resolves chrono." },
     { id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained, not vulnerable, and no patched release exists. dfe-transform-vrl uses it directly, and vrl depends on it too. Drop when the lock no longer resolves chrono-tz." },
-    # unsafe-libyaml arrives through the vrl crate's serde_yaml_ng, a normal and a build dependency of it; revisit when vrl moves off serde_yaml_ng.
+    # unsafe-libyaml arrives through the vrl crate's serde_yaml_ng, a normal and a build dependency of it. Revisit when vrl moves off serde_yaml_ng.
     { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained, with no known CVE (RUSTSEC-2023-0075 was fixed in 0.2.10). Only operator-written VRL reaches it on event data: the stdlib's parse_yaml hands libyaml what the event carries, and ingested data cannot add that call. Config YAML parses through scalo's serde-saphyr. Drop when the vrl crate moves off serde_yaml_ng." },
 ]
 

@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      src/bin/pgo-driver.rs
-// Purpose:   PGO workload driver — Kafka producer for VRL hot-path instrumentation
+// Purpose:   PGO workload driver -- Kafka producer for VRL hot-path instrumentation
 // Language:  Rust
 //
 // License:   BUSL-1.1

@@ -28,18 +28,8 @@ impl Config {
                 "pipeline.batch_size must be > 0".into(),
             ));
         }
-        // Floor of 10ms — anything lower spins the consumer recv loop into a
-        // busy-poll burning CPU without meaningfully reducing batch latency.
-        if self.pipeline.batch_timeout_ms < 10 {
-            return Err(crate::Error::Validation(format!(
-                "pipeline.batch_timeout_ms must be >= 10 (got {}); shorter \
-                 timeouts produce a busy-poll loop without meaningful latency \
-                 reduction",
-                self.pipeline.batch_timeout_ms
-            )));
-        }
 
-        // Source. Structural problems refuse; a valid config with no topics is
+        // Source. Structural problems refuse. A valid config with no topics is
         // a transform whose source has not been written yet, which idles
         // instead (see `work_state`).
         if self.source.transport.is_direct() {
@@ -97,7 +87,7 @@ impl Config {
     ///
     /// Two ways to have none, and both are the same answer: start, stay Ready,
     /// hold no consumer group, and pick up the first config that gives the app
-    /// work. On the bus a transform with no topics has nothing to consume; on
+    /// work. On the bus a transform with no topics has nothing to consume. On
     /// the direct transport the listener IS the work. Either way a transform
     /// with no program can only pass records through, which is not what the
     /// source that named it asked for -- and the program arrives after the
@@ -429,27 +419,6 @@ mod tests {
         let mut config = minimal_config();
         config.pipeline.batch_size = 0;
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_batch_timeout_below_floor_rejected() {
-        for too_small in [0_u64, 1, 5, 9] {
-            let mut config = minimal_config();
-            config.pipeline.batch_timeout_ms = too_small;
-            let err = config.validate().unwrap_err();
-            let msg = err.to_string();
-            assert!(
-                msg.contains("batch_timeout_ms"),
-                "expected batch_timeout_ms in error for value {too_small}, got: {msg}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_batch_timeout_at_floor_accepted() {
-        let mut config = minimal_config();
-        config.pipeline.batch_timeout_ms = 10;
-        assert!(config.validate().is_ok());
     }
 
     /// A config with topics and one program on disk, which is a working transform.

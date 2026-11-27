@@ -10,28 +10,22 @@
 //!
 //! Compiling is the one startup step whose cost scales with the deployment's
 //! own data: a per-source transform instance gets whatever VRL its source
-//! implies, and the bundled filebeat pipeline is 212 KB of it. Below a certain
-//! container limit the kernel kills the process mid-compile, which surfaces as
-//! an exit-137 restart loop with nothing in the log to say what was too small.
+//! implies. Below a certain container limit the kernel kills the process
+//! mid-compile, which surfaces as an exit-137 restart loop with nothing in the
+//! log to say what was too small.
 //! Reading the limit first turns that into one refusal that names the numbers.
 
 use tracing::info;
 
 use crate::Result;
 
-/// Resident bytes the compiler needs per byte of VRL source.
-///
-/// Measured on the shipped image (2 CPUs, jemalloc) against the bundled
-/// filebeat pipeline: 212,218 bytes compiles under a 40 MiB container limit
-/// and is OOM-killed under 32 MiB; the same file concatenated twice (424,438
-/// bytes) compiles under 56 MiB and is killed under 48 MiB. That is 79 bytes
-/// per source byte between the two points, rounded up for headroom.
+/// Resident bytes the compiler needs per byte of VRL source, with headroom over
+/// the slope between two compile-peak measurements of the bundled filebeat
+/// program on the shipped image, once and concatenated twice.
 const COMPILE_BYTES_PER_SOURCE_BYTE: u64 = 96;
 
-/// Resident bytes the process holds before compiling anything.
-///
-/// The same measurement with a 30-byte program compiles under a 16 MiB limit.
-/// 24 MiB is the intercept the two filebeat points extrapolate to.
+/// Resident bytes the process holds before compiling anything: the intercept
+/// those two measurements extrapolate to.
 const RUNTIME_RESERVE_BYTES: u64 = 24 * 1024 * 1024;
 
 /// Smallest container memory limit that can compile `program_bytes` of VRL.
@@ -82,7 +76,7 @@ pub fn log_compiled(program_bytes: u64) {
     );
 }
 
-/// Page size the `statm` counts are in; the only targets are Linux x86-64 and
+/// Page size the `statm` counts are in. The only targets are Linux x86-64 and
 /// aarch64, both 4 KiB.
 const PAGE_BYTES: u64 = 4096;
 

@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      tests/integration/config.rs
-// Purpose:   Integration tests — config loading and cascade
+// Purpose:   Integration tests -- config loading and cascade
 // Language:  Rust
 //
 // License:   BUSL-1.1

@@ -1,22 +1,15 @@
 // Project:   dfe-transform-vrl
 // File:      src/lib.rs
-// Purpose:   Library root — module declarations and public API
+// Purpose:   Library root -- module declarations and public API
 // Language:  Rust
 //
 // License:   BUSL-1.1
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
-//! dfe-transform-vrl: Embedded VRL transform engine for Kafka-to-Kafka pipelines.
+//! dfe-transform-vrl: in-process VRL transforms over JSON records, between a
+//! Kafka or direct gRPC source and sink.
 //!
-//! Wrapper-controlled Kafka source/sink with in-process VRL transforms over
-//! JSON records, and bounded memory.
-//!
-//! Lints (`forbid(unsafe_code)`, `warn(clippy::pedantic)`, `warn(missing_docs)`,
-//! `warn(rustdoc::*)`, `deny(clippy::unwrap_used/expect_used/panic/dbg_macro)`)
-//! are configured in `Cargo.toml` `[lints]` — the modern Cargo 1.74+ canonical
-//! form, applies to both lib and bin from one place. Don't duplicate them here
-//! as `#![...]` attributes: that's the two-file-source-of-truth footgun (one
-//! copy will rot).
+//! Lints live in `Cargo.toml` `[lints]`, which covers the lib and the bins.
 
 pub mod cli;
 pub mod config;

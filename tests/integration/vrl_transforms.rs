@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      tests/integration/vrl_transforms.rs
-// Purpose:   Integration tests — VRL transforms against fixture files
+// Purpose:   Integration tests -- VRL transforms against fixture files
 // Language:  Rust
 //
 // License:   BUSL-1.1

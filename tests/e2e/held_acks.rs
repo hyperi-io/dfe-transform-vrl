@@ -243,7 +243,7 @@ async fn a_push_is_answered_only_after_kafka_confirms_its_delivery() {
 
     env.pause().await.expect("pause the broker");
 
-    // Observed while frozen; asserted only after the broker is resumed, so a
+    // Observed while frozen. Asserted only after the broker is resumed, so a
     // failure never leaves a paused container behind.
     let control_while_paused =
         tokio::time::timeout(Duration::from_secs(5), control.push("paused-control")).await;

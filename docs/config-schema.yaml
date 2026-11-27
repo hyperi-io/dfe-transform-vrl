@@ -18,16 +18,16 @@ description: |-
 
   ## Requires pod restart (bound at startup)
 
-  - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
-  - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
-  - `sink.brokers` — rdkafka producer connection established at startup
-  - `sink.topic` — output topic (changing mid-stream risks data loss)
-  - `sink.compression` — rdkafka `compression.type` set at producer creation
-  - `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation
-  - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
-  - `sink.librdkafka_options` — passed to `ClientConfig` at creation
-  - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
-  - `dlq.*` — the dead-letter queue is spawned at startup
+  - `pipeline.name` -- the producer's `client.id` and the log fields
+  - `source.*` -- rdkafka consumer: connection, subscription, auth, TLS, buffers
+  - `sink.brokers` -- rdkafka producer connection established at startup
+  - `sink.topic` -- output topic (changing mid-stream risks data loss)
+  - `sink.compression` -- rdkafka `compression.type` set at producer creation
+  - `sink.sasl.*` / `sink.tls.*` -- security protocol set at producer creation
+  - `sink.max_buffer_bytes` -- rdkafka `queue.buffering.max.kbytes` at creation
+  - `sink.librdkafka_options` -- passed to `ClientConfig` at creation
+  - `transforms.*` -- VRL programs compiled at startup, immutable for process lifetime
+  - `dlq.*` -- the dead-letter queue is spawned at startup
 
   ## Accepted but not applied
 
@@ -147,7 +147,7 @@ $defs:
     type: object
     properties:
       name:
-        description: Pipeline name (used in metrics labels, Kafka `group_id`, logging).
+        description: Pipeline name, used in the producer's `client.id` and the log fields.
         type: string
         default: default
       batch_size:
@@ -169,7 +169,7 @@ $defs:
     type: object
     properties:
       transport:
-        description: "`bus` consumes `topics`; `direct` accepts pushes on `listen`."
+        description: "`bus` consumes `topics`. `direct` accepts pushes on `listen`."
         $ref: "#/$defs/Transport"
         default: bus
       listen:
@@ -455,7 +455,7 @@ $defs:
     type: object
     properties:
       transport:
-        description: "`bus` produces to `topic`; `direct` pushes to `endpoint`."
+        description: "`bus` produces to `topic`. `direct` pushes to `endpoint`."
         $ref: "#/$defs/Transport"
         default: bus
       endpoint:
@@ -551,7 +551,7 @@ $defs:
         type: string
         default: ""
       path:
-        description: Path to enrichment data file (legacy flat format — kept for backwards compat).
+        description: Path to enrichment data file (legacy flat format -- kept for backwards compat).
         type: string
         default: ""
       key_columns:
@@ -575,7 +575,8 @@ $defs:
           range able to match at all. Accepted values: `asis`, `bytes`,
           `string`, `int`, `integer`, `float`, `bool`, `boolean`, `date`,
           `date|<format>`, `timestamp`, `timestamp|<format>`. `asis` and
-          `bytes` leave the cell alone.
+          `bytes` leave the cell alone. A `date` or `timestamp` cell with no zone
+          reads as UTC on every node.
         type: object
         additionalProperties:
           type: string

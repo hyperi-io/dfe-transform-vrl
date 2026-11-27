@@ -1,10 +1,10 @@
-//! Project:   dfe-transform-vrl
-//! File:      src/enrichment/stix.rs
-//! Purpose:   STIX 2.1 indicator parsing and materialisation into `FxHashMap`
-//! Language:  Rust
-//!
-//! License:   BUSL-1.1
-//! Copyright: (c) 2026 HYPERI PTY LIMITED
+// Project:   dfe-transform-vrl
+// File:      src/enrichment/stix.rs
+// Purpose:   STIX 2.1 indicator parsing and materialisation into `FxHashMap`
+// Language:  Rust
+//
+// License:   BUSL-1.1
+// Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Parse STIX 2.1 bundles from a file and materialise indicators into
 //! `FxHashMap<CompactKey, Arc<ObjectMap>>` for O(1) enrichment lookups.
@@ -22,7 +22,7 @@ use crate::enrichment::loader::LoadedTable;
 use crate::enrichment::table::{CompactKey, RowMap};
 
 // ---------------------------------------------------------------------------
-// STIX 2.1 model (minimal — just what we need for indicator extraction)
+// STIX 2.1 model (minimal -- just what we need for indicator extraction)
 // ---------------------------------------------------------------------------
 
 /// STIX 2.1 bundle envelope.
@@ -157,7 +157,7 @@ pub fn materialise_stix(
             row.insert(KeyString::from("labels"), Value::Array(label_values));
         }
 
-        // Extract TLP from marking refs (simplified — looks for TLP marking IDs)
+        // Extract TLP from marking refs (simplified -- looks for TLP marking IDs)
         if let Some(ref markings) = obj.object_marking_refs
             && let Some(tlp) = extract_tlp_from_markings(markings)
         {

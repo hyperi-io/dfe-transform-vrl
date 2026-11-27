@@ -158,16 +158,16 @@ fn removed_key_file<'de, D: serde::Deserializer<'de>>(
 ///
 /// ## Requires pod restart (bound at startup)
 ///
-/// - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
-/// - `source.*` — rdkafka consumer: connection, subscription, auth, TLS, buffers
-/// - `sink.brokers` — rdkafka producer connection established at startup
-/// - `sink.topic` — output topic (changing mid-stream risks data loss)
-/// - `sink.compression` — rdkafka `compression.type` set at producer creation
-/// - `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation
-/// - `sink.max_buffer_bytes` — rdkafka `queue.buffering.max.kbytes` at creation
-/// - `sink.librdkafka_options` — passed to `ClientConfig` at creation
-/// - `transforms.*` — VRL programs compiled at startup, immutable for process lifetime
-/// - `dlq.*` — the dead-letter queue is spawned at startup
+/// - `pipeline.name` -- the producer's `client.id` and the log fields
+/// - `source.*` -- rdkafka consumer: connection, subscription, auth, TLS, buffers
+/// - `sink.brokers` -- rdkafka producer connection established at startup
+/// - `sink.topic` -- output topic (changing mid-stream risks data loss)
+/// - `sink.compression` -- rdkafka `compression.type` set at producer creation
+/// - `sink.sasl.*` / `sink.tls.*` -- security protocol set at producer creation
+/// - `sink.max_buffer_bytes` -- rdkafka `queue.buffering.max.kbytes` at creation
+/// - `sink.librdkafka_options` -- passed to `ClientConfig` at creation
+/// - `transforms.*` -- VRL programs compiled at startup, immutable for process lifetime
+/// - `dlq.*` -- the dead-letter queue is spawned at startup
 ///
 /// ## Accepted but not applied
 ///
@@ -201,7 +201,7 @@ pub struct Config {
 pub struct EnrichmentTableConfig {
     /// Table name used in VRL: `get_enrichment_table_record("name", ...)`.
     pub name: String,
-    /// Path to enrichment data file (legacy flat format — kept for backwards compat).
+    /// Path to enrichment data file (legacy flat format -- kept for backwards compat).
     #[serde(default)]
     pub path: String,
     /// Lookup key column(s). Multiple columns are concatenated with `\x00`.
@@ -217,7 +217,8 @@ pub struct EnrichmentTableConfig {
     /// range able to match at all. Accepted values: `asis`, `bytes`,
     /// `string`, `int`, `integer`, `float`, `bool`, `boolean`, `date`,
     /// `date|<format>`, `timestamp`, `timestamp|<format>`. `asis` and
-    /// `bytes` leave the cell alone.
+    /// `bytes` leave the cell alone. A `date` or `timestamp` cell with no zone
+    /// reads as UTC on every node.
     #[serde(default)]
     pub schema: BTreeMap<String, String>,
     /// Optional periodic refresh.
@@ -299,7 +300,7 @@ pub struct RefreshConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct PipelineConfig {
-    /// Pipeline name (used in metrics labels, Kafka `group_id`, logging).
+    /// Pipeline name, used in the producer's `client.id` and the log fields.
     pub name: String,
     /// Events per transform batch.
     pub batch_size: usize,
@@ -375,7 +376,7 @@ impl Transport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SourceConfig {
-    /// `bus` consumes `topics`; `direct` accepts pushes on `listen`.
+    /// `bus` consumes `topics`. `direct` accepts pushes on `listen`.
     pub transport: Transport,
     /// Address the Push listener binds on the direct transport.
     pub listen: String,
@@ -431,7 +432,7 @@ impl Default for SourceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct SinkConfig {
-    /// `bus` produces to `topic`; `direct` pushes to `endpoint`.
+    /// `bus` produces to `topic`. `direct` pushes to `endpoint`.
     pub transport: Transport,
     /// Downstream Push listener on the direct transport, e.g. the loader.
     pub endpoint: String,
@@ -624,7 +625,7 @@ pub const INERT_SETTINGS: &[InertSetting] = &[
     InertSetting {
         key: "sink.key_field",
         why: "the producer's key argument carries the destination topic, not a \
-              partition key, so no key is derived from the event (scalo-rs#37)",
+              partition key, so no key is derived from the event (scalo-rs#78)",
         instead: None,
     },
     InertSetting {
@@ -636,7 +637,7 @@ pub const INERT_SETTINGS: &[InertSetting] = &[
 ];
 
 // =============================================================================
-// Config loading cascade — uses scalo flat_env helpers
+// Config loading cascade -- uses scalo flat_env helpers
 // =============================================================================
 
 use scalo::config::flat_env::{
@@ -774,7 +775,7 @@ impl Normalize for Config {
         if !self.sink.sasl.username.is_empty() || !self.sink.sasl.password.is_empty() {
             self.sink.sasl.enabled = true;
         }
-        // TLS cert present → enable TLS
+        // TLS cert present -> enable TLS
         if !self.source.tls.client.ca_paths.is_empty() {
             self.source.tls.enabled = true;
         }
@@ -851,7 +852,7 @@ impl Config {
 
     /// The [`INERT_SETTINGS`] this config has actually moved off their defaults.
     ///
-    /// A deployment that leaves one alone is not told about it; one that has
+    /// A deployment that leaves one alone is not told about it. One that has
     /// turned the dial is.
     #[must_use]
     pub fn inert_settings(&self) -> Vec<InertSetting> {
@@ -1078,7 +1079,7 @@ sink:
 
     #[test]
     fn load_no_path_with_no_cwd_config_returns_defaults() {
-        // No --config arg AND no config.yaml/.yml in CWD → defaults.
+        // No --config arg AND no config.yaml/.yml in CWD -> defaults.
         // This path stays lenient (only explicit --config requires
         // existence per GH#9).
         let tmp = tempfile::tempdir().unwrap();
@@ -1634,7 +1635,7 @@ enrichment_tables:
     }
 
     /// The config registry serialises the whole section into a process-global
-    /// and redacts on the way out by field name; the type must redact instead.
+    /// and redacts on the way out by field name. The type must redact instead.
     #[test]
     fn a_serialised_sasl_section_never_carries_the_password() {
         let sasl = SaslConfig {

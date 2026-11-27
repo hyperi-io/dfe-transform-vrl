@@ -1,6 +1,6 @@
 // Project:   dfe-transform-vrl
 // File:      src/config/mod.rs
-// Purpose:   Configuration module — loading and validation
+// Purpose:   Configuration module -- loading and validation
 // Language:  Rust
 //
 // License:   BUSL-1.1

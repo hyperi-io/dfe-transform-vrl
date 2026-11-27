@@ -14,9 +14,9 @@
 //!
 //! ## Carried here
 //!
-//! - `batch_size` — events per transform batch
-//! - `batch_timeout_ms` — max wait for a full batch before flushing partial
-//! - `key_field` — sink partition key path (e.g. `.org_id`, `.host.name`)
+//! - `batch_size` -- events per transform batch
+//! - `batch_timeout_ms` -- max wait for a full batch before flushing partial
+//! - `key_field` -- sink partition key path (e.g. `.org_id`, `.host.name`)
 //!
 //! All three are on [`crate::config::INERT_SETTINGS`]: the pipeline holds this
 //! struct but reads none of them, so a reload re-validates the file
@@ -25,18 +25,18 @@
 //!
 //! ## Requires pod restart (bound at startup)
 //!
-//! - `pipeline.name` — baked into Kafka `group_id`, metrics labels, tracing spans
-//! - `source.*` — rdkafka consumer connection, subscription, auth, TLS, buffer sizes
-//! - `sink.brokers` — rdkafka producer connection, auth, TLS
-//! - `sink.topic` — output topic (changing mid-stream risks data loss)
-//! - `sink.compression` — rdkafka compression.type set at producer creation
-//! - `sink.sasl.*` / `sink.tls.*` — security protocol set at producer creation
-//! - `sink.max_buffer_bytes` — rdkafka queue.buffering.max.kbytes at creation
-//! - `sink.librdkafka_options` — passed to `ClientConfig` at creation
-//! - `transforms.*` — VRL programs compiled at startup (immutable for process lifetime)
-//! - `metrics.address` — scalo binds the metrics server, which also serves the
+//! - `pipeline.name` -- the producer's `client.id` and the log fields
+//! - `source.*` -- rdkafka consumer connection, subscription, auth, TLS, buffer sizes
+//! - `sink.brokers` -- rdkafka producer connection, auth, TLS
+//! - `sink.topic` -- output topic (changing mid-stream risks data loss)
+//! - `sink.compression` -- rdkafka compression.type set at producer creation
+//! - `sink.sasl.*` / `sink.tls.*` -- security protocol set at producer creation
+//! - `sink.max_buffer_bytes` -- rdkafka queue.buffering.max.kbytes at creation
+//! - `sink.librdkafka_options` -- passed to `ClientConfig` at creation
+//! - `transforms.*` -- VRL programs compiled at startup (immutable for process lifetime)
+//! - `metrics.address` -- scalo binds the metrics server, which also serves the
 //!   probes, before `run_service`
-//! - `logger.*` — tracing subscriber built once, before the runtime
+//! - `logger.*` -- tracing subscriber built once, before the runtime
 
 use serde::{Deserialize, Serialize};
 
@@ -44,8 +44,8 @@ use super::loader::Config;
 
 /// Configuration fields that are safe to change at runtime.
 ///
-/// Read via `SharedConfig<HotConfig>` by the pipeline on each batch iteration.
 /// Updated by `ConfigReloader` when the config file changes (or on SIGHUP).
+/// The pipeline holds the `SharedConfig<HotConfig>` and reads none of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HotConfig {
     /// Events per transform batch.

@@ -559,14 +559,14 @@ fn test_all_realworld_fixtures_compile_individually() {
 }
 
 // =========================================================================
-// Multi-file chaining — verify transform ordering matters
+// Multi-file chaining -- verify transform ordering matters
 // =========================================================================
 
 #[test]
 fn test_transform_order_matters() {
     // File A: set .level = downcase(.level)
-    // File B: check .level == "error" → add tag
-    // Order A then B should work; B without A might not (if level is uppercase)
+    // File B: check .level == "error" -> add tag
+    // Order A then B should work. B without A might not (if level is uppercase)
     let program_ab = compile_vrl(
         r#"
         .level = downcase!(string!(.level))

@@ -15,7 +15,7 @@
 //! subset of fields its case names.
 //!
 //! This runs the pipeline IN PROCESS. `tests/e2e/filebeat_kafka.rs` runs the
-//! same cases through the app binary and a real broker; both grade with the
+//! same cases through the app binary and a real broker. Both grade with the
 //! shared comparison in `tests/common/filebeat.rs`.
 
 use std::sync::OnceLock;
@@ -31,7 +31,7 @@ use crate::filebeat_cases as fb;
 
 /// Compile the bundled pipeline with the bundled timezones table.
 ///
-/// Compiled once per process (the 5.5K-line program takes ~1min in debug)
+/// Compiled once per process, because a debug build compiles it slowly,
 /// and shared by every test in this module.
 fn compile_filebeat() -> &'static Program {
     static PROGRAM: OnceLock<Program> = OnceLock::new();

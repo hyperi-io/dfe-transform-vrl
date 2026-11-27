@@ -14,14 +14,19 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tracing::{debug, info};
-use vrl::compiler::{CompilationResult, CompileConfig, compile_with_external, state};
+use vrl::compiler::function::{
+    self, ArgumentList, Compiled, Example, FunctionCompileContext, Parameter,
+};
+use vrl::compiler::{CompilationResult, CompileConfig, Function, compile_with_external, state};
+use vrl::stdlib::{ParseEtld, ParseGroks};
+use vrl::value::Value;
 
 use crate::Result;
 use crate::config::TransformConfig;
 use crate::enrichment::EnrichmentRegistry;
 use crate::enrichment::vrl_functions;
 
-/// How many VRL programs this configuration currently names on disk.
+/// How many VRL programs this configuration names on disk.
 ///
 /// A config can legitimately name a directory that is empty, or not there yet:
 /// the deployment writes the program after the instance exists, so a transform
@@ -108,13 +113,6 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
     }
 
     let combined = sources.join("\n\n");
-    // programs_loaded is always 1 — VRL concatenates all files into a single program
-    debug!(
-        file_count = sources.len(),
-        total_bytes = combined.len(),
-        programs_loaded = 1,
-        "VRL source loaded, ready for compilation"
-    );
     info!(
         file_count = sources.len(),
         total_bytes = combined.len(),
@@ -124,14 +122,97 @@ pub fn load_vrl_source(config: &TransformConfig) -> Result<String> {
 }
 
 /// vrl functions a transform may not call, though the stdlib features we build
-/// still carry them. `get_hostname` comes with the `parse_etld` the filebeat
-/// program needs.
-const REFUSED_FUNCTIONS: &[&str] = &["get_hostname"];
+/// still carry them: they read the host's name or a file the program names, or
+/// decompress a record with no bound on the output.
+const REFUSED_FUNCTIONS: &[&str] = &[
+    "get_hostname",
+    "parse_proto",
+    "encode_proto",
+    "validate_json_schema",
+    "decode_gzip",
+    "decode_zlib",
+    "decode_zstd",
+    "decode_lz4",
+    "decode_snappy",
+];
+
+/// A vrl function that refuses its file argument, a path the program names and
+/// the pod reads when the program compiles: `parse_etld`'s `psl` and
+/// `parse_groks`' `alias_sources`. The rest of the function is unchanged.
+#[derive(Clone, Copy, Debug)]
+struct WithoutFileArgument<F> {
+    inner: F,
+    file_argument: &'static str,
+}
+
+/// The stdlib functions that take a file argument, each without it.
+const WITHOUT_FILE_ARGUMENT: [WithoutFileArgument<&'static dyn Function>; 2] = [
+    WithoutFileArgument {
+        inner: &ParseEtld,
+        file_argument: "psl",
+    },
+    WithoutFileArgument {
+        inner: &ParseGroks,
+        file_argument: "alias_sources",
+    },
+];
+
+impl Function for WithoutFileArgument<&'static dyn Function> {
+    fn identifier(&self) -> &'static str {
+        self.inner.identifier()
+    }
+
+    fn summary(&self) -> &'static str {
+        self.inner.summary()
+    }
+
+    fn usage(&self) -> &'static str {
+        self.inner.usage()
+    }
+
+    fn category(&self) -> &'static str {
+        self.inner.category()
+    }
+
+    fn internal_failure_reasons(&self) -> &'static [&'static str] {
+        self.inner.internal_failure_reasons()
+    }
+
+    fn return_kind(&self) -> u16 {
+        self.inner.return_kind()
+    }
+
+    fn examples(&self) -> &'static [Example] {
+        &[]
+    }
+
+    fn compile(
+        &self,
+        state: &state::TypeState,
+        ctx: &mut FunctionCompileContext,
+        arguments: ArgumentList,
+    ) -> Compiled {
+        if arguments.optional(self.file_argument).is_some() {
+            return Err(function::Error::InvalidArgument {
+                keyword: self.file_argument,
+                value: Value::Null,
+                error: "a transform may not name a file for the pod to read",
+            }
+            .into());
+        }
+        self.inner.compile(state, ctx, arguments)
+    }
+
+    fn parameters(&self) -> &'static [Parameter] {
+        self.inner.parameters()
+    }
+}
 
 /// Compile VRL source code into an executable program.
 ///
-/// Uses the VRL stdlib, less any function that reaches the host, plus custom
-/// enrichment functions. A refused function is an undefined one.
+/// Uses the VRL stdlib, less any function that reads the host, a file the
+/// program names, or decompresses without a bound, plus custom enrichment
+/// functions. A refused function is an undefined one.
 ///
 /// The `EnrichmentRegistry` is injected into the compile config, and the
 /// enrichment functions use it to resolve the table named in each call. The
@@ -141,7 +222,7 @@ const REFUSED_FUNCTIONS: &[&str] = &["get_hostname"];
 /// `get_enrichment_table_record` or `find_enrichment_table_records` a
 /// compile error.
 ///
-/// The compiled `Program` is reused for every event — zero per-event
+/// The compiled `Program` is reused for every event -- zero per-event
 /// compilation cost.
 ///
 /// # Errors
@@ -152,7 +233,17 @@ pub fn compile_vrl(
     registry: Option<Arc<EnrichmentRegistry>>,
 ) -> Result<CompilationResult> {
     let mut fns = vrl::stdlib::all();
-    fns.retain(|f| !REFUSED_FUNCTIONS.contains(&f.identifier()));
+    fns.retain(|f| {
+        !REFUSED_FUNCTIONS.contains(&f.identifier())
+            && !WITHOUT_FILE_ARGUMENT
+                .iter()
+                .any(|w| w.identifier() == f.identifier())
+    });
+    fns.extend(
+        WITHOUT_FILE_ARGUMENT
+            .iter()
+            .map(|w| Box::new(*w) as Box<dyn Function>),
+    );
     fns.extend(vrl_functions::enrichment_functions());
 
     let mut config = CompileConfig::default();
@@ -270,6 +361,23 @@ mod tests {
     fn test_compile_invalid_vrl() {
         let result = compile_vrl("this is not valid VRL !!!{{{", None);
         assert!(result.is_err());
+    }
+
+    /// A vrl release that renames a file argument would let it through, so each
+    /// name must still be one its function takes.
+    #[test]
+    fn each_refused_file_argument_is_one_the_function_takes() {
+        for wrapper in WITHOUT_FILE_ARGUMENT {
+            assert!(
+                wrapper
+                    .parameters()
+                    .iter()
+                    .any(|p| p.keyword == wrapper.file_argument),
+                "{} has no `{}` argument",
+                wrapper.identifier(),
+                wrapper.file_argument
+            );
+        }
     }
 
     #[test]

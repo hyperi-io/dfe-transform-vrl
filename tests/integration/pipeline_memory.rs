@@ -81,7 +81,7 @@ impl Harness {
         );
     }
 
-    /// Drain pending records from the sink — returns up to `max` payloads.
+    /// Drain pending records from the sink -- returns up to `max` payloads.
     async fn drain_sink(&self, max: usize) -> Vec<Vec<u8>> {
         let batch = self.sink.recv(max).await.unwrap_or_else(|_| {
             scalo::transport::WorkBatch::<<MemoryTransport as TransportReceiver>::Token>::empty()
@@ -131,7 +131,7 @@ async fn test_pipeline_passes_json_through_identity_vrl() {
     h.send_json(r#"{"id": "evt-1", "value": 42}"#).await;
     h.send_json(r#"{"id": "evt-2", "value": 100}"#).await;
 
-    // Identity VRL — no mutation
+    // Identity VRL -- no mutation
     let prog = compile_program(".");
 
     // Run the pipeline in the background
@@ -320,7 +320,7 @@ async fn test_pipeline_skips_malformed_json_but_continues() {
     h.shutdown();
     pipeline.await.unwrap().unwrap();
 
-    // The malformed event should be filtered; both good events pass through
+    // The malformed event should be filtered. Both good events pass through
     assert_eq!(out.len(), 2, "malformed JSON should be skipped");
     let all = out
         .iter()
@@ -339,7 +339,7 @@ async fn test_pipeline_vrl_runtime_error_skips_event() {
     h.send_json(r#"{"id": "s2", "name": 42}"#).await;
     h.send_json(r#"{"id": "s3", "name": "bob"}"#).await;
 
-    // Infallible coercion — fails for numeric input
+    // Infallible coercion -- fails for numeric input
     let prog = compile_program(".name = upcase!(string!(.name))");
 
     let source = Arc::clone(&h.source);
@@ -371,7 +371,7 @@ async fn test_pipeline_vrl_runtime_error_skips_event() {
     h.shutdown();
     pipeline.await.unwrap().unwrap();
 
-    // s1 and s3 should pass; s2 fails and is filtered
+    // s1 and s3 should pass, and s2 fails and is filtered
     assert_eq!(out.len(), 2, "VRL runtime error should skip event");
     let all = out
         .iter()
@@ -437,7 +437,7 @@ async fn test_pipeline_large_batch_of_mixed_events() {
 
     // 100 events, 25 aborted (drop=true), 25 runtime errors (name=42)
     // => 50 should land. Allow slack since error path also drops the bad
-    // event; only well-formed events end up in out.
+    // event. Only well-formed events end up in out.
     assert!(
         out.len() >= 40 && out.len() <= 60,
         "expected ~50 events, got {}",
@@ -558,7 +558,7 @@ async fn test_pipeline_shutdown_stops_loop_promptly() {
         .await
     });
 
-    // Start with no events — pipeline should idle, then shut down quickly
+    // Start with no events -- pipeline should idle, then shut down quickly
     tokio::time::sleep(Duration::from_millis(50)).await;
     h.shutdown();
 
@@ -630,10 +630,8 @@ async fn test_pipeline_hot_reload_batch_size_picked_up() {
 
 #[tokio::test]
 async fn test_pipeline_routes_to_sink_topic() {
-    // Under scalo #37 the sender's `key` arg is the destination TOPIC, so
-    // every output record routes on the configured sink topic ("out"), NOT a
-    // per-record partition key. (The dot-path partition-key extractor was
-    // removed in the WorkBatch migration; re-introduce once #37 lands.)
+    // The sender's `key` is the destination topic (scalo-rs#78), so every
+    // record routes on the sink topic, never on `key_field`.
     let h = Harness::new(5, 50, ".org_id");
     h.send_json(r#"{"id":"e1","org_id":"tenant-a","x":1}"#)
         .await;
@@ -720,7 +718,7 @@ async fn test_pipeline_empty_source_idles_quietly() {
         .await
     });
 
-    // No events — should loop quietly, then shut down cleanly
+    // No events -- should loop quietly, then shut down cleanly
     tokio::time::sleep(Duration::from_millis(200)).await;
     let out = h.drain_sink(10).await;
     h.shutdown();
@@ -860,7 +858,7 @@ async fn test_pipeline_with_worker_pool_parallel_processing() {
         50,
         "all events should be processed by worker pool"
     );
-    // Verify VRL ran — doubled field present
+    // Verify VRL ran -- doubled field present
     let first = String::from_utf8_lossy(&out[0]).to_string();
     assert!(first.contains("doubled"));
     assert!(first.contains("label"));

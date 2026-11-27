@@ -118,7 +118,7 @@ flowchart TB
 
 A record that doesn't parse is counted in `records_error_total{stage="deserialise"}`, logged at debug (sampled) and reported to the security log by reason, with nothing from the record. Its block releases as dropped, so it is not redelivered.
 
-The compiler runs once at startup, against VRL's stdlib less `get_hostname`, plus the two enrichment functions. The `.vrl` files in `transforms.dir` load in filename order, then `transforms.files` in the order given, and concatenate into one program, as Vector's `remap` does. A compile error quotes the failing line and stops startup.
+The compiler runs once at startup, against VRL's stdlib less the functions [Interfaces](#interfaces) lists, plus the two enrichment functions. The `.vrl` files in `transforms.dir` load in filename order, then `transforms.files` in the order given, and concatenate into one program, as Vector's `remap` does. A compile error quotes the failing line and stops startup.
 
 `abort` drops a record and counts it in `abort_total`. Any other runtime error drops it and counts it in `records_error_total{stage="transform"}`. A panic inside VRL, which grok and arithmetic functions can raise on record data, fails that record, not the process, because the release profile unwinds. A zone-less `parse_timestamp` reads UTC on every node.
 
@@ -141,7 +141,7 @@ del(.message)
 .processed_at = now()
 ```
 
-`get_env_var`, `get_hostname`, `http_request`, `dns_lookup` and `reverse_dns` fail to compile as undefined functions. `parse_proto` and `encode_proto` read their descriptor file at compile time. `validate_json_schema` reads its schema when the first record reaches the call, and a bad schema then fails each such record as a transform error.
+`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`, `parse_proto`, `encode_proto`, `validate_json_schema`, `decode_gzip`, `decode_zlib`, `decode_zstd`, `decode_lz4` and `decode_snappy` fail to compile as undefined functions. They read the host or a file the program names, or decompress with no bound on the output. `parse_etld` keeps its built-in suffix list and `parse_groks` its inline aliases, and their file arguments, `psl` and `alias_sources`, fail to compile.
 
 Enrichment tables are read with `get_enrichment_table_record` and `find_enrichment_table_records`. File, STIX and SQLite tables load into a hash map on their key columns and swap atomically, so a case-sensitive equality lookup on the key reads one bucket and any other lookup scans the rows. MMDB tables use their reader. A table with a `refresh` block reloads in the background, no more than once every 60 s. A table can't appear after startup, because the program checks its lookups against the tables when it compiles.
 

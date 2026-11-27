@@ -7,7 +7,7 @@
 // Copyright: (c) 2026 HYPERI PTY LIMITED
 
 //! Drives the full `pipeline::run` path with a real Kafka broker.
-//! Live broker via `.env` (KAFKA_BROKERS) is preferred; falls back to
+//! Live broker via `.env` (KAFKA_BROKERS) is preferred. Falls back to
 //! the run's shared Kafka container if no live broker is reachable.
 //!
 //! This test is the only thing that exercises `pipeline::run` (which
@@ -103,7 +103,7 @@ fn seed_producer_config(kf: &common::KafkaTestConfig, topic: &str) -> KafkaConfi
 #[tokio::test]
 #[ignore = "requires a live Kafka broker or Docker. \
     Run explicitly with `cargo nextest run -- --ignored`. \
-    NEVER run by default in CI — that's the silent-internal-broker-touch bug."]
+    NEVER run by default in CI -- that's the silent-internal-broker-touch bug."]
 async fn test_pipeline_run_end_to_end_with_live_kafka() {
     let env = ensure_kafka_or_skip!("pipeline-run-end-to-end");
     let kf = env.config();
@@ -156,9 +156,9 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
             .program,
     );
 
-    // 3. Drive pipeline::run() — exercises full Kafka init, the governed engine
+    // 3. Drive pipeline::run() -- exercises full Kafka init, the governed engine
     //    driver, metrics. Governor is None (self-regulation off) -> whole-batch
-    //    loop; engine carries no byte budget.
+    //    loop. Engine carries no byte budget.
     let metrics = Arc::new(TransformMetrics::default());
     let hot_config = SharedConfig::new(HotConfig::from_config(&config));
     let ready_flag = Arc::new(AtomicBool::new(false));
@@ -198,7 +198,7 @@ async fn test_pipeline_run_end_to_end_with_live_kafka() {
 
     // 4. Read the sink topic until every seeded event has come through
     let verify_cfg = seed_producer_config(kf, &sink_topic);
-    // Use a consumer config (for recv); reuse the helper but change group
+    // Use a consumer config (for recv). Reuse the helper but change group
     let verify_kafka = KafkaConfig {
         group: format!("dfe-cli-verify-{sink_topic}"),
         topics: vec![sink_topic.clone()],

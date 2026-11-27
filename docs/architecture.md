@@ -141,7 +141,7 @@ The Push port opens when `config.source.transport` is `direct` or `grpc`. A prog
 
 ## Design considerations
 
-**Security.** The host and network functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`) don't compile. A transform can't read the host's environment or reach the network.
+**Security.** The host, network, file and decompression functions (`get_env_var`, `get_hostname`, `http_request`, `dns_lookup`, `reverse_dns`, `parse_proto`, `encode_proto`, `validate_json_schema`, `decode_gzip`, `decode_zlib`, `decode_zstd`, `decode_lz4`, `decode_snappy`) don't compile, and nor do the file arguments `parse_etld`'s `psl` and `parse_groks`' `alias_sources`. A transform can't read the host's environment or files, reach the network, or inflate a record without a bound.
 
 **Reliability.** Delivery is at least once, per batch. A crash between send and release delivers the whole block again, so VRL programs must be idempotent. A record VRL drops still releases its offset, so a filtering transform never stalls its source. Self-regulation brakes intake alone. Braking the sink too would deadlock the loop.
 
