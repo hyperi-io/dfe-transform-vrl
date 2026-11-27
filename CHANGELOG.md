@@ -3,6 +3,11 @@
 Rendered by CI and committed back at the end of a release -- do not edit by
 hand. Release notes also appear on the GitHub Releases page, one per tag.
 
+## [1.1.51](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.50...v1.1.51) (2026-11-27)
+
+### What's Changed
+* fix: reject VRL file and inflate functions by @catinspace-au in https://github.com/hyperi-io/dfe-transform-vrl/pull/173
+
 ## [1.1.50](https://github.com/hyperi-io/dfe-transform-vrl/compare/v1.1.49...v1.1.50) (2026-11-23)
 
 ### What's Changed
